@@ -1,5 +1,5 @@
 {
- "spec": "docs/dev/gentle-rate-controller/SPEC.md revision 1",
+ "spec": "docs/dev/gentle-rate-controller/SPEC.md revision 2",
  "frame": {
   "E0": 1795000000,
   "NOW0": 1000000,
@@ -1581,6 +1581,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -1674,6 +1675,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -1760,6 +1762,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -1873,6 +1876,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -1973,6 +1977,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -2142,7 +2147,7 @@
   },
   {
    "id": "V56",
-   "title": "the owner ceiling wins over the step cap (a larger step, downward only)",
+   "title": "the owner ceiling is approached by at most one 2000 W step per change",
    "base_plan": {
     "ceiling_w": 5000
    },
@@ -2165,8 +2170,85 @@
       "start": true
      },
      "expect": {
+      "state": "ADJUSTING",
       "action": "WRITE",
-      "value": 5000
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 5000,
+      "changes": 2
      }
     }
    ]
@@ -2309,6 +2391,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3132,6 +3215,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3262,6 +3346,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3366,6 +3451,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3464,6 +3550,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3616,6 +3703,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3721,6 +3809,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3834,6 +3923,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -3949,6 +4039,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4064,6 +4155,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4171,6 +4263,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4286,6 +4379,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4401,6 +4495,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4516,6 +4611,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4629,6 +4725,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4744,6 +4841,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4859,6 +4957,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -4974,6 +5073,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5089,6 +5189,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5204,6 +5305,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5319,6 +5421,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5434,6 +5537,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5552,6 +5656,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5726,6 +5831,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5829,6 +5935,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -5949,6 +6056,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -6052,6 +6160,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -6440,6 +6549,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -6557,6 +6667,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -6674,6 +6785,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -6792,6 +6904,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -6908,6 +7021,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -6994,6 +7108,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -7123,6 +7238,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -7218,6 +7334,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -7510,6 +7627,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -7664,6 +7782,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -7839,6 +7958,7 @@
       "state": "ADJUSTING",
       "action": "WRITE",
       "value": 6000,
+      "seq": 1,
       "disarm": true,
       "commit": true,
       "event": "R_LEASE_STARTED",
@@ -7982,6 +8102,5143 @@
      }
     }
    ]
+  },
+  {
+   "id": "V120",
+   "title": "an unanswered restore uses no attempt: retried after the backoff for as long as it takes, then restored",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 2,
+      "event": "R_END",
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "NO_ANSWER"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "event": "R_RESTORE_UNANSWERED",
+      "restore_attempts": 0,
+      "writes_night": 1,
+      "commit": true
+     }
+    },
+    {
+     "dt": 29999,
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 3,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "NO_ANSWER"
+     },
+     "expect": {
+      "event": "R_RESTORE_UNANSWERED",
+      "restore_attempts": 0,
+      "state": "RESTORING"
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 4,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "NO_ANSWER"
+     },
+     "expect": {
+      "event": "R_RESTORE_UNANSWERED",
+      "restore_attempts": 0,
+      "state": "RESTORING"
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 5,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "NO_ANSWER"
+     },
+     "expect": {
+      "event": "R_RESTORE_UNANSWERED",
+      "restore_attempts": 0,
+      "state": "RESTORING"
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 6,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "writes_night": 2
+     }
+    }
+   ]
+  },
+  {
+   "id": "V121",
+   "title": "Modbus down 2 min at a guard: the restore waits for the inverter, no attempt is spent",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 91000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_TELEMETRY_STALE",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 9000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 2,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V122",
+   "title": "Modbus down 5 min at a guard: the restore waits for the inverter, no attempt is spent",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 91000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_TELEMETRY_STALE",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 9000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 2,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V123",
+   "title": "Modbus down 10 min at a guard: the restore waits for the inverter, no attempt is spent",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 91000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_TELEMETRY_STALE",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 9000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 2,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V124",
+   "title": "dongle and inverter boot together, the inverter answers after 2 min: the boot restore waits",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "silent": true,
+     "reboot": {
+      "corrupt": -1,
+      "rx_never": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "last_reason": "R_BOOT_RECOVERY",
+      "restore_attempts": 0,
+      "writes_night": 1
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 9000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 1,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V125",
+   "title": "dongle and inverter boot together, the inverter answers after 5 min: the boot restore waits",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "silent": true,
+     "reboot": {
+      "corrupt": -1,
+      "rx_never": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "last_reason": "R_BOOT_RECOVERY",
+      "restore_attempts": 0,
+      "writes_night": 1
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 9000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 1,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V126",
+   "title": "dongle and inverter boot together, the inverter answers after 10 min: the boot restore waits",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "silent": true,
+     "reboot": {
+      "corrupt": -1,
+      "rx_never": true
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "last_reason": "R_BOOT_RECOVERY",
+      "restore_attempts": 0,
+      "writes_night": 1
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 10000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 9000,
+     "silent": true,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 1,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V127",
+   "title": "the inverter clamps a write: the readback is owned, recorded and restored over (no FOREIGN fault)",
+   "final": {
+    "record_flags": 4
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "value": 6000
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "FAIL",
+      "op_value": 5000
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 2,
+      "event": "R_READBACK_MISMATCH",
+      "q": 5000,
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "record_flags": 13,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "q": -1
+     }
+    }
+   ]
+  },
+  {
+   "id": "V128",
+   "title": "a clamped write, then a restart before the restore: the boot keeps the owned readback",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "FAIL",
+      "op_value": 5000
+     },
+     "expect": {
+      "action": "RESTORE",
+      "q": 5000
+     }
+    },
+    {
+     "dt": 1000,
+     "reboot": {
+      "corrupt": -1
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 1,
+      "q": 5000,
+      "restore_attempts": 2,
+      "writes_night": 3,
+      "last_reason": "R_BOOT_RECOVERY"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V129",
+   "title": "the restore's own readback differs: owned too, the restore is retried and lands",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL",
+      "op_value": 7500
+     },
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_RESTORE_RETRY",
+      "q": 7500,
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 3,
+      "restore_attempts": 2,
+      "writes_night": 3
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V130",
+   "title": "Restore original after three answered restore failures: one classified restore, then IDLE",
+   "final": {
+    "state": "IDLE",
+    "record_flags": 4,
+    "v": 0
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "action": "RESTORE",
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "event": "R_RESTORE_RETRY"
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "restore_attempts": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "event": "R_RESTORE_RETRY"
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "restore_attempts": 3,
+      "writes_night": 4
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL"
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_RESTORE_FAILED"
+     }
+    },
+    {
+     "dt": 60000,
+     "expect": {
+      "state": "FAULT",
+      "action": "NONE",
+      "record_flags": 7
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "state": "FAULT",
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 5,
+      "event": "R_OWNER_RESTORE",
+      "writes_night": 5,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_OWNER_RESTORE",
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V131",
+   "title": "Restore original is refused when the original is not known (a corrupt record)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "reboot": {
+      "corrupt": 7
+     },
+     "expect": {
+      "state": "FAULT",
+      "last_reason": "R_RECORD_CORRUPT"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "state": "FAULT",
+      "action": "NONE",
+      "event": "R_REFUSE_RESTORE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V132",
+   "title": "Restore original on a foreign value writes nothing: FAULT stays",
+   "final": {
+    "record_flags": 7
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "live_sp": 7000
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_FOREIGN"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FOREIGN"
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_FOREIGN",
+      "last_reason": "R_FOREIGN",
+      "action": "NONE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V133",
+   "title": "Restore original: refused on a silent inverter or a busy bus, bounded by the night's write ceiling",
+   "boot": {
+    "flags": 7,
+    "slot": 1,
+    "original": 8000,
+    "v": 6000,
+    "p": 6000,
+    "night_id": 20261125,
+    "writes_night": 8,
+    "changes": 5,
+    "restore_attempts": 3,
+    "lease_end": 1795014100,
+    "reason": 101
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "expect": {
+      "state": "FAULT",
+      "last_reason": "R_RESTORE_FAILED"
+     }
+    },
+    {
+     "dt": 31000,
+     "silent": true,
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "action": "NONE",
+      "event": "R_REFUSE_RESTORE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "mutex_busy": true
+     },
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "action": "NONE",
+      "event": "R_REFUSE_RESTORE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "mutex_busy": false
+     },
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 1,
+      "writes_night": 9
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "NO_ANSWER"
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_RESTORE_UNANSWERED",
+      "writes_night": 8
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "seq": 2,
+      "writes_night": 9
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "FAIL",
+      "op_value": 6000
+     },
+     "expect": {
+      "state": "FAULT",
+      "event": "R_RESTORE_FAILED",
+      "q": -1,
+      "writes_night": 9
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "restore_req": true
+     },
+     "expect": {
+      "action": "NONE",
+      "event": "R_REFUSE_RESTORE"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V140",
+   "title": "a late WRITE result after its timeout is never taken as the restore's (sequence and kind)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "seq": 1
+     }
+    },
+    {
+     "dt": 15000,
+     "set": {
+      "arm": false
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "seq": 2,
+      "event": "R_OP_TIMEOUT",
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "DEFERRED"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_RESTORE_DEFERRED",
+      "restore_attempts": 0,
+      "writes_night": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK",
+      "op_seq": 1,
+      "op_kind": "WRITE"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_STALE_RESULT",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "DEFERRED",
+      "op_seq": 2,
+      "op_kind": "RESTORE"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_STALE_RESULT",
+      "action": "NONE",
+      "restore_attempts": 0
+     }
+    },
+    {
+     "dt": 27000,
+     "expect": {
+      "action": "NONE",
+      "state": "RESTORING"
+     }
+    },
+    {
+     "dt": 1000,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 3,
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V144",
+   "title": "a late WRITE result while the restore is outstanding is not the restore's result",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 15000,
+     "set": {
+      "arm": false
+     },
+     "expect": {
+      "action": "RESTORE",
+      "seq": 2,
+      "event": "R_OP_TIMEOUT"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK",
+      "op_seq": 1,
+      "op_kind": "WRITE"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "event": "R_STALE_RESULT",
+      "action": "NONE",
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V141",
+   "title": "a result with the wrong sequence or the wrong kind is ignored",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "action": "WRITE",
+      "seq": 1
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK",
+      "op_seq": 7
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "event": "R_STALE_RESULT",
+      "action": "NONE",
+      "v": 8000
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK",
+      "op_kind": "RESTORE"
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "event": "R_STALE_RESULT",
+      "v": 8000
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V142",
+   "title": "a change the integration could not run (DEFERRED) ends the lease; nothing was written",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "DEFERRED"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "seq": 2,
+      "event": "R_WRITE_DEFERRED"
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK_NOWRITE"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V143",
+   "title": "a change the inverter did not answer ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "NO_ANSWER"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "event": "R_WRITE_UNANSWERED"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V150",
+   "title": "START refused: the plan's window end is 5 min later than the slot's own end",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT"
+     },
+     "plan": {
+      "window_end": 1795018000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V151",
+   "title": "START refused: the review's bad plan (p 0, capacity 1 kWh, taper 100, window end a day late)",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT"
+     },
+     "plan": {
+      "p": [
+       0
+      ],
+      "capacity_wh": 1000,
+      "taper": 100,
+      "window_end": 1795104100
+     }
+    }
+   ]
+  },
+  {
+   "id": "V152",
+   "title": "START accepted: the plan's window end 119 s after the slot's own end",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "plan": {
+      "window_end": 1795017760
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V153",
+   "title": "START refused: the plan's window end 121 s before the slot's own end",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_SLOT",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_SLOT"
+     },
+     "plan": {
+      "window_end": 1795017520
+     }
+    }
+   ]
+  },
+  {
+   "id": "V154",
+   "title": "a plan whose window end moves a day ends the lease",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "plan": {
+      "window_end": 1795104100
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_PLAN_WINDOW",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_PLAN_WINDOW",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V155",
+   "title": "the target guard uses the slot's own end, not the plan's window end",
+   "base_plan": {
+    "window_end": 1795017760
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 51,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_TARGET_GUARD"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V156",
+   "title": "a lower capacity in a later plan never lowers the guard's capacity",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "capacity_wh": 20000
+     },
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 50,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_TARGET_GUARD",
+      "capacity_wh": 30000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V157",
+   "title": "the firmware capacity floor: a plan claiming 1 kWh is guarded as 20 kWh",
+   "base_plan": {
+    "capacity_wh": 1000
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 123,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED",
+      "capacity_wh": 20000
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_TARGET_GUARD"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V157b",
+   "title": "START refused: the capacity floor applies to a plan claiming 1 kWh",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_TARGET_AT_RISK",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_TARGET_AT_RISK"
+     },
+     "set": {
+      "live_sp": 4000,
+      "batt_w": 4100
+     },
+     "plan": {
+      "capacity_wh": 1000
+     }
+    }
+   ]
+  },
+  {
+   "id": "V157c",
+   "title": "the capacity floor holds from the lease's first tick",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "set": {
+      "soc": 461,
+      "live_sp": 4000,
+      "batt_w": 4100
+     },
+     "plan": {
+      "capacity_wh": 1000
+     },
+     "expect": {
+      "state": "LEASED",
+      "action": "NONE",
+      "capacity_wh": 20000
+     }
+    },
+    {
+     "dt": 59000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "value": 4000,
+      "event": "R_TARGET_GUARD"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V158",
+   "title": "the target guard caps the plan's taper knee at 95 %",
+   "base_plan": {
+    "taper": 100
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 82,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_TARGET_GUARD"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V159",
+   "title": "an owner ceiling far below the present value is approached in 2000 W steps",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "ceiling_w": 500
+     },
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 27,
+     "dt": 60000,
+     "keep": true,
+     "expect_all": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 4000,
+      "changes": 2
+     }
+    }
+   ]
+  },
+  {
+   "id": "V160",
+   "title": "START refused: the grid is not connected",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_REFUSE_GRID",
+      "action": "NONE",
+      "disarm": true,
+      "last_reason": "R_REFUSE_GRID"
+     },
+     "set": {
+      "grid_ok": false
+     }
+    }
+   ]
+  },
+  {
+   "id": "V161",
+   "title": "grid lost during the lease: the restore is emitted in the same tick",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "grid_ok": false
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_GRID_LOSS",
+      "restore_attempts": 1,
+      "writes_night": 2,
+      "commit": true
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_GRID_LOSS",
+      "writes_night": 2,
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V162",
+   "title": "grid lost while a write is in flight: latched, acted on at the verified result, no settle",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "arm": false,
+      "grid_ok": false
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "set": {
+      "grid_ok": true
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "RESTORING",
+      "action": "RESTORE",
+      "value": 8000,
+      "seq": 2,
+      "event": "R_GRID_LOSS",
+      "v": 6000
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "IDLE",
+      "event": "R_RESTORED",
+      "last_reason": "R_GRID_LOSS"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V163",
+   "title": "grid loss outranks END",
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "set": {
+      "grid_ok": false
+     },
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "event": "R_GRID_LOSS"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V170",
+   "title": "a restore without any result: timed out, retried after the backoff, the third timeout latches FAULT",
+   "final": {
+    "record_flags": 7,
+    "last_reason": "R_RESTORE_FAILED"
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795014100
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "seq": 2,
+      "restore_attempts": 1,
+      "writes_night": 2
+     }
+    },
+    {
+     "dt": 14999,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "dt": 1,
+     "expect": {
+      "state": "RESTORING",
+      "action": "NONE",
+      "event": "R_RESTORE_RETRY",
+      "restore_attempts": 1
+     }
+    },
+    {
+     "dt": 29999,
+     "expect": {
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 3,
+      "restore_attempts": 2,
+      "writes_night": 3
+     }
+    },
+    {
+     "dt": 15000,
+     "expect": {
+      "event": "R_RESTORE_RETRY"
+     }
+    },
+    {
+     "dt": 30000,
+     "expect": {
+      "action": "RESTORE",
+      "seq": 4,
+      "restore_attempts": 3,
+      "writes_night": 4
+     }
+    },
+    {
+     "dt": 15000,
+     "expect": {
+      "state": "FAULT",
+      "event": "R_RESTORE_FAILED",
+      "commit": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "V171",
+   "title": "a slot across midnight: START at 23:35, guards past 00:00, the lease end from the slot's own end",
+   "epoch_offset": -3600,
+   "base_set": {
+    "slot_start_min": 1410
+   },
+   "base_plan": {
+    "deadline": 1795017400,
+    "t": [
+     1794996340
+    ]
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 1000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "ADJUSTING",
+      "action": "WRITE",
+      "value": 6000,
+      "seq": 1,
+      "disarm": true,
+      "commit": true,
+      "event": "R_LEASE_STARTED",
+      "changes": 1,
+      "writes_night": 1,
+      "gain_pct": 102,
+      "v": 8000,
+      "p": 6000,
+      "lease_end": 1795017041
+     }
+    },
+    {
+     "dt": 2000,
+     "set": {
+      "arm": false
+     },
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING",
+      "event": "R_WRITE_VERIFIED",
+      "v": 6000,
+      "action": "NONE"
+     }
+    },
+    {
+     "repeat": 4,
+     "dt": 10000,
+     "keep": true,
+     "set": {
+      "batt_w": 6150,
+      "live_sp": 6000
+     },
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE",
+      "event": "R_NONE"
+     }
+    },
+    {
+     "repeat": 3,
+     "dt": 10000,
+     "keep": true,
+     "expect_all": {
+      "state": "SETTLING",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 10000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "event": "R_RESPONSE_OK",
+      "gain_pct": 102,
+      "p_ref": 6150
+     }
+    },
+    {
+     "repeat": 28,
+     "dt": 60000,
+     "keep": true,
+     "plan": {
+      "p": [
+       5000
+      ]
+     },
+     "expect_all": {
+      "action": "NONE",
+      "state": "LEASED",
+      "lease_end": 1795017041
+     }
+    },
+    {
+     "dt": 60000,
+     "keep": true,
+     "expect": {
+      "action": "WRITE",
+      "value": 4900,
+      "state": "ADJUSTING",
+      "lease_end": 1795017041
+     }
+    },
+    {
+     "dt": 1000,
+     "pulse": {
+      "op": "OK"
+     },
+     "expect": {
+      "state": "SETTLING"
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "pulse": {
+      "end": true
+     },
+     "expect": {
+      "action": "RESTORE",
+      "value": 8000,
+      "event": "R_END"
+     }
+    }
+   ]
+  },
+  {
+   "id": "V172",
+   "title": "the lease end follows the slot's own end on every tick, earlier only",
+   "base_plan": {
+    "p": [
+     8000
+    ],
+    "deadline": 1795017400
+   },
+   "ticks": [
+    {
+     "dt": 0,
+     "set": {
+      "arm": true
+     },
+     "expect": {
+      "state": "ARMED",
+      "event": "R_ARMED",
+      "action": "NONE"
+     }
+    },
+    {
+     "dt": 59000,
+     "sample": true,
+     "pulse": {
+      "start": true
+     },
+     "expect": {
+      "state": "LEASED",
+      "action": "NONE",
+      "lease_end": 1795017099
+     }
+    },
+    {
+     "dt": 1000,
+     "keep": true,
+     "expect": {
+      "state": "LEASED",
+      "lease_end": 1795017040
+     }
+    }
+   ]
   }
  ],
  "units": {
@@ -7991,6 +13248,7 @@
     8000,
     6000,
     4900,
+    -1,
     "CLS_ALREADY"
    ],
    [
@@ -7998,6 +13256,7 @@
     8000,
     6000,
     4900,
+    -1,
     "CLS_OWNED"
    ],
    [
@@ -8005,6 +13264,7 @@
     8000,
     6000,
     4900,
+    -1,
     "CLS_OWNED"
    ],
    [
@@ -8012,6 +13272,7 @@
     8000,
     6000,
     4900,
+    -1,
     "CLS_FOREIGN"
    ],
    [
@@ -8019,6 +13280,7 @@
     8000,
     6000,
     6000,
+    -1,
     "CLS_FOREIGN"
    ],
    [
@@ -8026,7 +13288,183 @@
     8000,
     8000,
     8000,
+    -1,
     "CLS_ALREADY"
+   ],
+   [
+    5000,
+    8000,
+    8000,
+    6000,
+    5000,
+    "CLS_OWNED"
+   ],
+   [
+    0,
+    8000,
+    6000,
+    6000,
+    0,
+    "CLS_OWNED"
+   ],
+   [
+    5000,
+    8000,
+    6000,
+    6000,
+    4000,
+    "CLS_FOREIGN"
+   ],
+   [
+    8000,
+    8000,
+    6000,
+    6000,
+    5000,
+    "CLS_ALREADY"
+   ],
+   [
+    -1,
+    8000,
+    6000,
+    6000,
+    -1,
+    "CLS_FOREIGN"
+   ]
+  ],
+  "lost_lease": [
+   [
+    [
+     8000,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    [
+     8000,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    0
+   ],
+   [
+    [
+     6000,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    [
+     8000,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    1
+   ],
+   [
+    [
+     8000,
+     8000,
+     500,
+     8000,
+     8000,
+     6900
+    ],
+    [
+     8000,
+     8000,
+     8000,
+     8000,
+     8000,
+     7000
+    ],
+    36
+   ],
+   [
+    [
+     -1,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    [
+     8000,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    0
+   ],
+   [
+    [
+     6000,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    [
+     -1,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    0
+   ],
+   [
+    [
+     8000,
+     8000,
+     8000,
+     8000,
+     8000,
+     8000
+    ],
+    [
+     6000,
+     6000,
+     6000,
+     6000,
+     6000,
+     6000
+    ],
+    0
+   ],
+   [
+    [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    63
    ]
   ],
   "records": [
@@ -8117,6 +13555,70 @@
      "writes_night": 2,
      "changes": 7,
      "lease_end": 1795000000
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 13,
+     "slot": 1,
+     "original": 8000,
+     "v": 8000,
+     "p": 6000,
+     "q": 5000,
+     "night_id": 20261125,
+     "writes_night": 2,
+     "changes": 1,
+     "restore_attempts": 1,
+     "lease_end": 1795014100,
+     "reason": 86
+    },
+    "status": "DEC_OK"
+   },
+   {
+    "fields": {
+     "flags": 15,
+     "slot": 1,
+     "original": 8000,
+     "v": 6000,
+     "p": 6000,
+     "q": 0,
+     "night_id": 20261125,
+     "writes_night": 4,
+     "changes": 1,
+     "restore_attempts": 3,
+     "lease_end": 1795014100,
+     "reason": 101
+    },
+    "status": "DEC_OK"
+   },
+   {
+    "fields": {
+     "flags": 12,
+     "q": 5000,
+     "night_id": 20261125
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 5,
+     "slot": 1,
+     "original": 8000,
+     "v": 6000,
+     "p": 6000,
+     "q": 5000,
+     "night_id": 20261125,
+     "writes_night": 2,
+     "changes": 1,
+     "lease_end": 1795000000
+    },
+    "status": "DEC_BAD_VALUE"
+   },
+   {
+    "fields": {
+     "flags": 16,
+     "night_id": 20261125
     },
     "status": "DEC_BAD_VALUE"
    }

@@ -6,9 +6,12 @@ serialises the same expanded inputs for the C++ header harness). No I/O except r
 
 Compact tick keys: dt (ms advanced before the tick; default 1000, 0 allowed), set {In field: value} persistent,
 plan {Plan field: value} persistent and resets the plan age, refresh (plan age 0), sample (new telemetry frame),
-cfg (new configuration read), keep (sample + cfg + refresh), pulse {start, end, ack, op} for this tick only,
-epoch_hold (the wall clock does not advance), repeat n, reboot {"corrupt": byte index or -1, "absent": bool}
-before the tick, expect {...} on the last expanded tick, expect_all {...} on every expanded tick.
+cfg (new configuration read), keep (sample + cfg + refresh), pulse {start, end, ack, restore_req, op, op_seq, op_kind,
+op_value} for this tick only (an op without op_seq / op_kind echoes the core's outstanding operation at run time),
+silent (the inverter answers nothing: no frame, no configuration read, rx_age_ms grows), epoch_hold (the wall clock
+does not advance), repeat n, reboot {"corrupt": byte index or -1, "absent": bool, "rx_never": bool} before the tick,
+expect {...} on the last expanded tick, expect_all {...} on every expanded tick. Vector keys: epoch_offset (s added
+to the frame's start E0), base_set, base_plan, config, boot, final.
 """
 
 from __future__ import annotations
@@ -23,10 +26,12 @@ E0 = 1_795_000_000            # 00:35 local in the vectors' frame
 E_MID = E0 - 35 * 60          # that night's local midnight
 NOW0 = 1_000_000
 NIGHT0 = 20261125
+NEVER = 0xFFFFFFFF
 
 IN_FIELDS = ["now_ms", "epoch", "local_min", "night_id", "clock_change_night", "inv_skew_s", "rtc_busy", "mutex_busy",
              "other", "fault", "arm", "start", "end", "ack", "op", "soc", "batt_w", "tel_ok", "tel_age_ms", "sample_seq",
-             "cfg_age_ms", "live_sp", "slot_start_min", "slot_end_min", "slot_grid", "slot_target"]
+             "cfg_age_ms", "live_sp", "slot_start_min", "slot_end_min", "slot_grid", "slot_target", "op_seq",
+             "op_kind", "op_value", "rx_age_ms", "grid_ok", "restore_req"]
 PLAN_FIELDS = ["valid", "age_ms", "slot", "target", "deadline", "window_end", "ceiling_w", "capacity_wh", "taper", "n"]
 CONFIG_FIELDS = ["floor_w", "round_w", "fw_bound_w", "max_step_w", "hyst_w", "reversal_extra_w", "dwell_ms", "settle_ms",
                  "judge_samples", "max_changes", "max_restore_attempts", "night_write_ceiling", "restore_backoff_ms",
@@ -34,12 +39,14 @@ CONFIG_FIELDS = ["floor_w", "round_w", "fw_bound_w", "max_step_w", "hyst_w", "re
                  "clock_skew_max_s", "end_margin_s", "min_lease_s", "arm_window_ms", "charging_min_w",
                  "response_min_pct", "wrong_dir_w", "max_ineffective", "gain_min_pct", "gain_max_pct", "runaway_pct",
                  "runaway_margin_w", "runaway_samples", "stop_w", "stop_samples", "stop_soc_gap", "soc_jump_max",
-                 "soc_drop_max", "guard_margin_s", "guard_derate_pct", "guard_tail_pct", "watchdog_extra_ms"]
+                 "soc_drop_max", "guard_margin_s", "guard_derate_pct", "guard_tail_pct", "watchdog_extra_ms",
+                 "rx_fresh_ms", "window_match_s", "capacity_floor_wh", "taper_max_pct", "script_steps",
+                 "script_step_ms", "script_queue_ms"]
 
 BASE_IN = {"now_ms": NOW0, "night_id": NIGHT0, "clock_change_night": False, "inv_skew_s": 5, "rtc_busy": False,
            "mutex_busy": False, "other": 0, "fault": False, "arm": False, "soc": 400, "batt_w": 8200, "tel_ok": True,
            "sample_seq": 1, "live_sp": 8000, "slot_start_min": 30, "slot_end_min": 330, "slot_grid": True,
-           "slot_target": 100}
+           "slot_target": 100, "rx_age_ms": 0, "grid_ok": True}
 BASE_PLAN = {"valid": True, "slot": 1, "target": 100, "deadline": E_MID + 270 * 60, "window_end": E_MID + 330 * 60,
              "ceiling_w": 8000, "capacity_wh": 30000, "taper": 90, "t": [E0 - 60], "p": [6000]}
 
@@ -59,10 +66,11 @@ def expand(vec: dict, M) -> list[tuple]:
         if k in vec.get("base_set", {}):
             pinned[k] = vec["base_set"][k]
             cur.pop(k, None)
-    epoch_real = E0
+    epoch_real = E0 + vec.get("epoch_offset", 0)
     now = cur.pop("now_ms")
     tel_age = cfg_age = plan_age = 0
     seq = cur.pop("sample_seq")
+    rx_age = cur.pop("rx_age_ms")
     out = []
     first = True
     for entry in vec["ticks"]:
@@ -88,13 +96,22 @@ def expand(vec: dict, M) -> list[tuple]:
                 plan.update(copy.deepcopy(entry["plan"]))
                 plan_age = 0
             keep = entry.get("keep", False)
+            silent = entry.get("silent", False)
+            rb = entry.get("reboot") if r == 0 else None
+            if rb is not None and rb.get("rx_never"):
+                rx_age = NEVER
             if entry.get("refresh") or keep:
                 plan_age = 0
-            if entry.get("sample") or keep:
+            if (entry.get("sample") or keep) and not silent:
                 seq += 1
                 tel_age = 0
-            if entry.get("cfg") or keep:
+            if (entry.get("cfg") or keep) and not silent:
                 cfg_age = 0
+            if silent:
+                if rx_age != NEVER:
+                    rx_age = min(rx_age + dt, NEVER - 1)
+            else:
+                rx_age = 0
             i = M.In()
             for k, v in cur.items():
                 setattr(i, k, v)
@@ -104,10 +121,12 @@ def expand(vec: dict, M) -> list[tuple]:
                 i.local_min = pinned["local_min"]
             else:
                 i.local_min = ((i.epoch - E_MID) // 60) % 1440 if i.epoch > 0 else -1
-            i.tel_age_ms, i.cfg_age_ms, i.sample_seq = tel_age, cfg_age, seq
+            i.tel_age_ms, i.cfg_age_ms, i.sample_seq, i.rx_age_ms = tel_age, cfg_age, seq, rx_age
             pulse = entry.get("pulse", {}) if r == reps - 1 or entry.get("pulse_all") else {}
+            if "op" in pulse:
+                i.op_seq, i.op_kind = -1, -1          # echo the outstanding operation unless pinned
             for k, v in pulse.items():
-                setattr(i, k, M.OP_NAMES.index(v) if k == "op" else v)
+                setattr(i, k, M.OP_NAMES.index(v) if k == "op" else M.ACTION_NAMES.index(v) if k == "op_kind" else v)
             pl = M.Plan()
             for k, v in plan.items():
                 if k not in ("t", "p"):
@@ -119,7 +138,7 @@ def expand(vec: dict, M) -> list[tuple]:
             i.plan = pl
             meta = {"expect_all": entry.get("expect_all"),
                     "expect": entry.get("expect") if r == reps - 1 else None,
-                    "reboot": entry.get("reboot") if r == 0 else None}
+                    "reboot": rb}
             out.append((i, meta))
     return out
 
@@ -145,10 +164,12 @@ def reboot(core, cfg, spec: dict, now_ms: int, M):
     return nc
 
 
-def run(vec: dict, M) -> tuple[list[str], list[str], object]:
-    """-> (trace lines, expectation failures, final core)."""
+def run(vec: dict, M) -> tuple[list[str], list[str], object, list]:
+    """-> (trace lines, expectation failures, final core, the items stepped: ("R", reboot spec) | ("T", In)).
+    A result pulse that does not pin op_seq / op_kind echoes the core's outstanding operation, as the firmware's
+    grc_last_op does; the items carry the filled-in values, so the header harness replays exactly the same inputs."""
     core, cfg = make_core(vec, M)
-    lines, fails = [], []
+    lines, fails, items = [], [], []
     if vec.get("boot") is not None:
         status, rec = M.decode_record(M.encode_record(M.Record(**vec["boot"])), cfg)
         core.boot(status, rec, NOW0)
@@ -156,7 +177,14 @@ def run(vec: dict, M) -> tuple[list[str], list[str], object]:
     for n, (i, meta) in enumerate(expand(vec, M)):
         if meta["reboot"] is not None:
             core = reboot(core, cfg, meta["reboot"], i.now_ms, M)
+            items.append(("R", meta["reboot"]))
             lines.append("BOOT " + trace_state(core))
+        if i.op != M.OP_NONE:
+            if i.op_seq < 0:
+                i.op_seq = core.op_seq
+            if i.op_kind < 0:
+                i.op_kind = core.op_kind
+        items.append(("T", i))
         o = core.step(i)
         lines.append(M.trace_line(core, o))
         for key in ("expect_all", "expect"):
@@ -170,12 +198,12 @@ def run(vec: dict, M) -> tuple[list[str], list[str], object]:
         bad = check_expect(vec["final"], core, None, M)
         if bad:
             fails.append(f"{vec['id']} final: {bad}")
-    return lines, fails, core
+    return lines, fails, core, items
 
 
 def trace_state(core) -> str:
-    return " ".join(str(x) for x in (core.state, core.v, core.p, core.changes, core.writes_night, core.restore_attempts,
-                                     core.last_reason))
+    return " ".join(str(x) for x in (core.state, core.v, core.p, core.q, core.changes, core.writes_night,
+                                     core.restore_attempts, core.last_reason))
 
 
 def check_expect(exp: dict, core, o, M) -> str:
@@ -185,9 +213,9 @@ def check_expect(exp: dict, core, o, M) -> str:
             g = M.STATE_NAMES[core.state]
         elif k == "action":
             g = M.ACTION_NAMES[o.action] if o else None
-        elif k in ("value", "disarm", "commit"):
+        elif k in ("value", "disarm", "commit", "seq"):
             g = getattr(o, k) if o else None
-            if k != "value":
+            if k not in ("value", "seq"):
                 g = bool(g)
         elif k == "event":
             g = M.REASON_NAMES.get(o.event) if o else None
@@ -235,17 +263,22 @@ def fuzz_items(seed: int, M, n: int = 300, check=None):
     plan = copy.deepcopy(BASE_PLAN)
     now = cur.pop("now_ms") if rng.random() < 0.6 else 0xFFFFFFFF - 200_000
     cur.pop("sample_seq")
+    rx_age = cur.pop("rx_age_ms")
     epoch, seq = E0, 1
     tel_age = cfg_age = plan_age = 0
     soc, batt, live = 400, 8200, 8000
-    pending = None
+    pending = None          # (kind, value, seq) of the operation the glue still owes a result for
+    issued: list = []       # every (seq, kind) issued since the last restart: late duplicates come from here
+    down = 0                # ticks of a Modbus outage still to run
     items = []
     for _ in range(n):
         if items and rng.random() < 0.012:
             corrupt = rng.choice([-1, -1, -1, 5, 13])
             items.append(("R", corrupt))
             core = reboot(core, cfg, {"corrupt": corrupt}, now, M)
-            pending = None
+            pending, issued = None, []
+            if rng.random() < 0.5:
+                rx_age = NEVER
         dt = rng.choice([0, 1, 1000, 5000, 10_000, 10_000, 10_000, 30_000, 60_000, 60_000, 120_000, 400_000])
         now = (now + dt) & 0xFFFFFFFF
         if rng.random() > 0.02:
@@ -253,28 +286,54 @@ def fuzz_items(seed: int, M, n: int = 300, check=None):
         tel_age += dt
         cfg_age += dt
         plan_age += dt
-        op = M.OP_NONE
+        if down == 0 and rng.random() < 0.02:
+            down = rng.choice([2, 4, 8, 15])
+        silent = down > 0
+        if silent:
+            down -= 1
+            if rx_age != NEVER:
+                rx_age = min(rx_age + dt, NEVER - 1)
+        else:
+            rx_age = 0
+        op, op_seq, op_kind, op_value = M.OP_NONE, 0, 0, -1
         if pending is not None:
             r = rng.random()
-            kind, value = pending
-            if r < 0.75:
+            kind, value, pseq = pending
+            if silent:
+                op = M.OP_NO_ANSWER if r < 0.6 else M.OP_NONE
+            elif r < 0.68:
                 op = M.OP_OK
                 reg = value
-            elif r < 0.83:
+            elif r < 0.74:
                 op = M.OP_FAIL
-            elif r < 0.87:
+                op_value = rng.choice([-1, reg])
+            elif r < 0.78:
+                op = M.OP_FAIL
+                reg = max(0, value - rng.choice([100, 500, 1000])) if kind == M.A_WRITE else rng.choice([7500, 0])
+                op_value = reg
+            elif r < 0.82:
                 op = M.OP_FOREIGN
-            elif r < 0.92:
+            elif r < 0.86:
                 op = M.OP_OK_NOWRITE
+            elif r < 0.89:
+                op = M.OP_DEFERRED
+            elif r < 0.92:
+                op = M.OP_NO_ANSWER
             if op != M.OP_NONE:
+                op_seq, op_kind = pseq, kind
+                if rng.random() < 0.03:
+                    op_seq = (pseq + rng.choice([1, 2, 0xFFFFFFFF])) & 0xFFFFFFFF
                 pending = None
-        if rng.random() < 0.85:
+        elif issued and rng.random() < 0.02:
+            op = rng.choice([M.OP_OK, M.OP_FAIL, M.OP_NO_ANSWER, M.OP_OK_NOWRITE])
+            op_seq, op_kind = rng.choice(issued)
+        if not silent and rng.random() < 0.85:
             seq += 1
             tel_age = 0
             r = rng.random()
             soc = max(0, min(1000, soc + (rng.choice([0, 0, 10, 10, 20]) if r < 0.95 else rng.choice([-60, 70, 600]))))
             batt = int(reg * rng.uniform(0.98, 1.06)) if rng.random() < 0.85 else rng.choice([0, 50, 2000, 9000, 12000])
-        if rng.random() < 0.6:
+        if not silent and rng.random() < 0.6:
             live, cfg_age = reg, 0
         if rng.random() < 0.01:
             reg = rng.choice([7000, 6950, 500])
@@ -291,6 +350,12 @@ def fuzz_items(seed: int, M, n: int = 300, check=None):
                 plan["valid"] = not plan["valid"] if rng.random() < 0.5 else True
             if rng.random() < 0.03:
                 plan["target"] = rng.choice([90, 100])
+            if rng.random() < 0.05:
+                plan["ceiling_w"] = rng.choice([500, 3000, 5000, 8000])
+            if rng.random() < 0.05:
+                plan["capacity_wh"] = rng.choice([1000, 20000, 30000, 40000])
+            if rng.random() < 0.03:
+                plan["window_end"] = plan["window_end"] + rng.choice([-200, 100, 86400])
         if soc >= 990 and rng.random() < 0.3:
             soc = rng.choice([300, 400])
             cur["night_id"] = cur["night_id"] + 1
@@ -305,6 +370,7 @@ def fuzz_items(seed: int, M, n: int = 300, check=None):
         cur["inv_skew_s"] = rng.choice([-1, 200]) if rng.random() < 0.01 else 5
         cur["slot_target"] = plan["target"] if rng.random() < 0.99 else 90
         cur["tel_ok"] = rng.random() > 0.01
+        cur["grid_ok"] = rng.random() > 0.01
         i = M.In()
         for k, v in cur.items():
             setattr(i, k, v)
@@ -313,7 +379,9 @@ def fuzz_items(seed: int, M, n: int = 300, check=None):
         i.start = rng.random() < 0.12
         i.end = rng.random() < 0.015
         i.ack = rng.random() < 0.03
-        i.op = op
+        i.restore_req = rng.random() < 0.05
+        i.op, i.op_seq, i.op_kind, i.op_value = op, op_seq, op_kind, op_value
+        i.rx_age_ms = rx_age
         i.soc, i.batt_w, i.live_sp = soc, batt, live
         i.tel_age_ms, i.cfg_age_ms, i.sample_seq = tel_age, cfg_age, seq
         pl = M.Plan()
@@ -326,12 +394,14 @@ def fuzz_items(seed: int, M, n: int = 300, check=None):
         pl.age_ms = plan_age
         i.plan = pl
         before = {"state": core.state, "op_pending": core.op_pending, "op_start_ms": core.op_start_ms, "v": core.v,
-                  "original": core.original}
+                  "original": core.original, "op_seq": core.op_seq, "op_kind": core.op_kind,
+                  "restore_attempts": core.restore_attempts, "seq": core.seq}
         o = core.step(i)
         if check is not None:
             check(before, i, o, core)
         if o.action != M.A_NONE:
-            pending = (o.action, o.value)
+            pending = (o.action, o.value, o.seq)
+            issued.append((o.seq, o.action))
         items.append(("T", i))
     return cfg, items
 

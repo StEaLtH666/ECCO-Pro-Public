@@ -9,8 +9,9 @@
 //   R <k>                                   restart: the core's own record, byte k ^ 0x5A when k >= 0,
 //                                           no record at all when k == -2; decode; boot          -> BOOT ...
 //   E                                       end of sequence                                      -> REC <hex>
-//   K <live> <original> <v> <p>             restore classifier                                   -> K <class>
+//   K <live> <original> <v> <p> <q>         restore classifier                                   -> K <class>
 //   H <hex>                                 decode a record                                      -> H <status> <fields>
+//   W <live[6]> <table[6]>                  lost-lease warning mask                              -> W <mask>
 // Test code only: never part of any firmware build.
 
 #include "ecco_gentle_rate_core.h"
@@ -38,13 +39,14 @@ struct Tok {
 };
 
 void print_trace(const Core &c, const Out &o) {
-  std::printf("%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %lld\n", c.state, o.action, o.value, o.disarm ? 1 : 0,
-              o.commit ? 1 : 0, o.event, c.v, c.p, c.changes, c.writes_night, c.restore_attempts, c.gain_pct, c.p_ref,
-              c.last_reason, c.bms_limited ? 1 : 0, c.ineffective, (long long) c.lease_end);
+  std::printf("%d %d %d %u %d %d %d %d %d %d %d %d %d %d %d %d %d %d %lld\n", c.state, o.action, o.value,
+              (unsigned) o.seq, o.disarm ? 1 : 0, o.commit ? 1 : 0, o.event, c.v, c.p, c.q, c.changes, c.writes_night,
+              c.restore_attempts, c.gain_pct, c.p_ref, c.last_reason, c.bms_limited ? 1 : 0, c.ineffective,
+              (long long) c.lease_end);
 }
 
 void print_boot(const Core &c) {
-  std::printf("BOOT %d %d %d %d %d %d %d\n", c.state, c.v, c.p, c.changes, c.writes_night, c.restore_attempts,
+  std::printf("BOOT %d %d %d %d %d %d %d %d\n", c.state, c.v, c.p, c.q, c.changes, c.writes_night, c.restore_attempts,
               c.last_reason);
 }
 
@@ -65,6 +67,7 @@ Record read_record(Tok &t) {
   r.changes = (uint8_t) t.next();
   r.restore_attempts = (uint8_t) t.next();
   r.lease_end = (uint32_t) t.next();
+  r.q = (uint16_t) t.next();
   return r;
 }
 
@@ -103,6 +106,13 @@ int main() {
                          &cfg.soc_drop_max, &cfg.guard_margin_s, &cfg.guard_derate_pct, &cfg.guard_tail_pct};
       for (auto *f : rest) *f = (int32_t) t.next();
       cfg.watchdog_extra_ms = (uint32_t) t.next();
+      cfg.rx_fresh_ms = (uint32_t) t.next();
+      cfg.window_match_s = (int32_t) t.next();
+      cfg.capacity_floor_wh = (int32_t) t.next();
+      cfg.taper_max_pct = (int32_t) t.next();
+      cfg.script_steps = (int32_t) t.next();
+      cfg.script_step_ms = (uint32_t) t.next();
+      cfg.script_queue_ms = (uint32_t) t.next();
     } else if (op == 'S') {
       core = Core(cfg);
       last_now = 0;
@@ -142,6 +152,12 @@ int main() {
       i.slot_end_min = (int32_t) t.next();
       i.slot_grid = t.next() != 0;
       i.slot_target = (int32_t) t.next();
+      i.op_seq = (uint32_t) t.next();
+      i.op_kind = (uint8_t) t.next();
+      i.op_value = (int32_t) t.next();
+      i.rx_age_ms = (uint32_t) t.next();
+      i.grid_ok = t.next() != 0;
+      i.restore_req = t.next() != 0;
       Plan &pl = i.plan;
       pl.valid = t.next() != 0;
       pl.age_ms = (uint32_t) t.next();
@@ -178,7 +194,13 @@ int main() {
       std::printf("\n");
     } else if (op == 'K') {
       int32_t live = (int32_t) t.next(), orig = (int32_t) t.next(), v = (int32_t) t.next(), p = (int32_t) t.next();
-      std::printf("K %d\n", classify_restore(live, orig, v, p));
+      int32_t q = (int32_t) t.next();
+      std::printf("K %d\n", classify_restore(live, orig, v, p, q));
+    } else if (op == 'W') {
+      int32_t live[6], table[6];
+      for (auto &x : live) x = (int32_t) t.next();
+      for (auto &x : table) x = (int32_t) t.next();
+      std::printf("W %u\n", (unsigned) lost_lease_slots(live, table));
     } else if (op == 'H') {
       char *s = t.p;
       while (*s == ' ') s++;
@@ -191,8 +213,9 @@ int main() {
       }
       Decoded d = decode_record(buf, n, cfg);
       const Record &r = d.rec;
-      std::printf("H %d %d %d %d %d %d %d %u %d %d %d %u\n", d.status, r.flags, r.slot, r.reason, r.original, r.v, r.p,
-                  (unsigned) r.night_id, r.writes_night, r.changes, r.restore_attempts, (unsigned) r.lease_end);
+      std::printf("H %d %d %d %d %d %d %d %u %d %d %d %u %d\n", d.status, r.flags, r.slot, r.reason, r.original, r.v,
+                  r.p, (unsigned) r.night_id, r.writes_night, r.changes, r.restore_attempts, (unsigned) r.lease_end,
+                  r.q);
     } else if (op == '\n' || op == '\r' || op == '#') {
       continue;
     } else {

@@ -6,8 +6,11 @@ meets every expectation and that vectors.json is exactly what this script writes
 Frame (vector_runner.py): E0 = 00:35 local, the slot runs 00:30-05:30 (grid, target 100 %), the plan deadline is 04:30
 (E0 + 14100), the window end 05:30 (E0 + 17700), capacity 30000 Wh, taper 90 %, one plan point of 6000 W realised.
 Every number is a synthetic test frame, not a site reading.
+The slot's own end (SPEC revision 2) is taken from the configured slot end and the dongle clock, never later than the
+real end: slot_end = epoch + minutes-to-end * 60 - 60 = E0 + 17640 + (x % 60) at epoch E0 + x. The lease end is
+min(deadline, slot_end - 600); the target guard compares against slot_end - 600 = E0 + 17040 + (x % 60).
 Target guard at SOC 40.0 %: plateau 500 * 30000 // 1000 = 15000 Wh at 8200*85//100 = 6970 W -> 7747 s, tail 3000 Wh at
-8200*25//100 = 2050 W -> 5268 s; it trips once epoch + 13015 + 900 >= E0 + 17100, i.e. from E0 + 3185.
+8200*25//100 = 2050 W -> 5268 s; it trips once x + 13015 + 900 >= 17040 + x % 60, i.e. x - x % 60 >= 3125: from E0+3180.
 Before the lease the slot power is 8000 and the battery takes 8200 W (gain 102 %).
 """
 
@@ -25,6 +28,7 @@ V: list[dict] = []
 
 
 def vec(vid: str, title: str, ticks: list, **kw) -> None:
+    assert all(x["id"] != vid for x in V), vid
     d = {"id": vid, "title": title}
     d.update(kw)
     d["ticks"] = ticks
@@ -47,14 +51,14 @@ def refuse(reason: str, start_extra: dict | None = None) -> list:
 
 # The standard lease start (11 ticks): START writes 6000 (8000*6000//8200 = 5853, capped at 8000-2000 = 6000), the
 # write is verified, 4 samples after the 45 s settle judge the response (6150 W: act -2050, expected 2040, gain 102).
-def prefix(batt: int = 6150, judge: dict | None = None) -> list:
+def prefix(batt: int = 6150, judge: dict | None = None, lease_end: int = E0 + 14100) -> list:
     j = {"state": "LEASED", "event": "R_RESPONSE_OK", "gain_pct": 102, "p_ref": 6150} if judge is None else judge
     return [
         dict(ARM),
         {"dt": 1000, "sample": True, "pulse": {"start": True},
-         "expect": {"state": "ADJUSTING", "action": "WRITE", "value": 6000, "disarm": True, "commit": True,
+         "expect": {"state": "ADJUSTING", "action": "WRITE", "value": 6000, "seq": 1, "disarm": True, "commit": True,
                     "event": "R_LEASE_STARTED", "changes": 1, "writes_night": 1, "gain_pct": 102, "v": 8000, "p": 6000,
-                    "lease_end": E0 + 14100}},
+                    "lease_end": lease_end}},
         {"dt": 2000, "set": {"arm": False}, "pulse": {"op": "OK"},
          "expect": {"state": "SETTLING", "event": "R_WRITE_VERIFIED", "v": 6000, "action": "NONE"}},
         {"repeat": 4, "dt": 10000, "keep": True, "set": {"batt_w": batt, "live_sp": 6000},
@@ -134,12 +138,12 @@ R = [
      "R_REFUSE_IMPLAUSIBLE", {"set": {"batt_w": 3900}}),
     ("V41", "realised 12100 W at 8000: gain 151 %", "R_REFUSE_IMPLAUSIBLE", {"set": {"batt_w": 12100}}),
     ("V42", "deadline 2999 s away", "R_REFUSE_TOO_LATE", {"plan": {"deadline": E0 + 3000}}),
-    # soc 19.0 %: plateau 710*30000//1000 = 21300 Wh -> 11001 s, tail 5268 s; E0+1+16269+900 >= E0+17100
+    # soc 19.0 %: plateau 710*30000//1000 = 21300 Wh -> 11001 s, tail 5268 s; E0+1+16269+900 >= E0+17041
     ("V43", "the target is at risk even at today's rate", "R_REFUSE_TARGET_AT_RISK", {"set": {"soc": 190}}),
 ]
 for vid, title, reason, extra in R:
     vec(vid, "START refused: " + title, refuse(reason, extra))
-# soc 20.0 %: plateau 21000 Wh -> 10846 s, tail 5268 s: E0+1+16114+900 < E0+17100
+# soc 20.0 %: plateau 21000 Wh -> 10846 s, tail 5268 s: E0+1+16114+900 = E0+17015 < E0+17041
 vec("V43b", "START accepted just inside the target guard (SOC 20 %)",
     [dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}, "set": {"soc": 200},
                  "expect": {"state": "ADJUSTING", "action": "WRITE", "value": 6000}}])
@@ -192,9 +196,14 @@ vec("V55", "subtractive: never above the pre-lease value although the plan and t
      {"repeat": 28, "dt": 60000, "keep": True, "plan": {"p": [10000]}, "expect_all": {"action": "NONE"}},
      {"dt": 60000, "keep": True, "expect": {"action": "WRITE", "value": 7000}}],
     base_set={"live_sp": 7000})
-vec("V56", "the owner ceiling wins over the step cap (a larger step, downward only)",
-    [dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True},
-                 "expect": {"action": "WRITE", "value": 5000}}], base_plan={"ceiling_w": 5000})
+# revision 2 (stricter): the owner ceiling is approached by at most one 2000 W step per change. START: 8000*6000//8200
+# = 5853 is capped at 6000, the owner ceiling 5000 is a step below 8000 - 2000 = 6000 so 6000 is written (revision 1
+# wrote 5000 at once: the killed mutant "the owner ceiling bypasses the step cap"); after the dwell the ceiling binds:
+# 6000*6000//6150 = 5853 -> 5900, ceiling max(5000, 4000) = 5000
+vec("V56", "the owner ceiling is approached by at most one 2000 W step per change",
+    prefix() + [{"repeat": 28, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED"}},
+                {"dt": 60000, "keep": True, "expect": {"action": "WRITE", "value": 5000, "changes": 2}}],
+    base_plan={"ceiling_w": 5000})
 # p 1000 at START: 8000*1000//8200 = 975, capped at 6000
 vec("V57", "the step cap bounds the START write", [dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True},
                                                             "expect": {"action": "WRITE", "value": 6000}}],
@@ -358,7 +367,8 @@ vec("V85", "target reached ends the lease", prefix() + [
     {"dt": 10000, "keep": True, "set": {"soc": 500},
      "expect": {"action": "RESTORE", "event": "R_TARGET_REACHED"}}] + restore_ok("R_TARGET_REACHED", 2),
     base_plan={"target": 50}, base_set={"slot_target": 50})
-# guard from epoch E0 + 3185 (see the frame note): tick 52 after the prefix (E0 + 83 + 60k)
+# guard from epoch E0 + 3180 (see the frame note): tick 52 after the prefix (E0 + 83 + 60k: k = 51 is x 3143, 3120 <
+# 3125; k = 52 is x 3203, 3180 >= 3125)
 vec("V86", "target guard: behind on time, the charge goes back to today's rate",
     prefix() + [{"repeat": 51, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED"}},
                 {"dt": 60000, "keep": True, "expect": {"action": "RESTORE", "event": "R_TARGET_GUARD"}}])
@@ -491,11 +501,295 @@ vec("V110", "one lease per night; the next night may lease again",
        {"dt": 1000, "keep": True, "set": {"night_id": NIGHT0 + 1}, "pulse": {"start": True},
         "expect": {"state": "ADJUSTING", "action": "WRITE", "writes_night": 1}}])
 
+
+# ================================================================================ revision 2 (review findings)
+# ---- B1: the restore budget counts only ANSWERED failures; the restore waits for the inverter to answer
+def silent_for(total_ms: int, step_ms: int = 10000) -> list:
+    """The inverter answers nothing for total_ms (no frame, no configuration read), in ticks of step_ms."""
+    out, left = [], total_ms
+    while left > 0:
+        d = min(step_ms, left)
+        out.append({"dt": d, "silent": True, "expect": {"state": "RESTORING", "action": "NONE", "restore_attempts": 0}})
+        left -= d
+    return out
+
+
+# END -> RESTORE (seq 2); NO_ANSWER gives back the attempt and the write; 30 s backoff; four unanswered restores in a row
+# (revision 1 latched FAULT RESTORE_FAILED after three), then the inverter answers and the restore lands.
+t = prefix() + [{"dt": 1000, "keep": True, "pulse": {"end": True},
+                 "expect": {"state": "RESTORING", "action": "RESTORE", "value": 8000, "seq": 2, "event": "R_END",
+                            "restore_attempts": 1, "writes_night": 2}},
+                {"dt": 1000, "pulse": {"op": "NO_ANSWER"},
+                 "expect": {"state": "RESTORING", "action": "NONE", "event": "R_RESTORE_UNANSWERED",
+                            "restore_attempts": 0, "writes_night": 1, "commit": True}},
+                {"dt": 29999, "expect": {"action": "NONE"}},
+                {"dt": 1, "expect": {"action": "RESTORE", "seq": 3, "restore_attempts": 1, "writes_night": 2}}]
+for k in (4, 5, 6):
+    t += [{"dt": 1000, "pulse": {"op": "NO_ANSWER"}, "expect": {"event": "R_RESTORE_UNANSWERED", "restore_attempts": 0,
+                                                               "state": "RESTORING"}},
+          {"dt": 30000, "expect": {"action": "RESTORE", "seq": k, "restore_attempts": 1, "writes_night": 2}}]
+t += [{"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "IDLE", "event": "R_RESTORED", "writes_night": 2}}]
+vec("V120", "an unanswered restore uses no attempt: retried after the backoff for as long as it takes, then restored",
+    t, final={"state": "IDLE", "record_flags": 4})
+
+# Modbus down when a guard ends the lease: 91 s without a frame -> TELEMETRY_STALE; no restore is emitted while the
+# inverter has not answered within 30 s (revision 1 emitted at once and spent its attempts on the outage).
+for vid, mins in (("V121", 2), ("V122", 5), ("V123", 10)):
+    t = prefix() + [{"dt": 91000, "silent": True,
+                     "expect": {"state": "RESTORING", "event": "R_TELEMETRY_STALE", "action": "NONE",
+                                "restore_attempts": 0}}]
+    t += silent_for(mins * 60000 - 91000)
+    t += [{"dt": 1000, "keep": True, "expect": {"action": "RESTORE", "value": 8000, "seq": 2, "restore_attempts": 1,
+                                                "writes_night": 2}},
+          {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "IDLE", "event": "R_RESTORED"}}]
+    vec(vid, f"Modbus down {mins} min at a guard: the restore waits for the inverter, no attempt is spent", t,
+        final={"state": "IDLE", "record_flags": 4})
+
+# dongle and inverter boot together: the boot restore waits for the first answered read since this boot
+for vid, mins in (("V124", 2), ("V125", 5), ("V126", 10)):
+    t = prefix() + [{"dt": 1000, "silent": True, "reboot": {"corrupt": -1, "rx_never": True},
+                     "expect": {"state": "RESTORING", "action": "NONE", "last_reason": "R_BOOT_RECOVERY",
+                                "restore_attempts": 0, "writes_night": 1}}]
+    t += silent_for(mins * 60000 - 1000)
+    t += [{"dt": 1000, "keep": True, "expect": {"action": "RESTORE", "value": 8000, "seq": 1, "restore_attempts": 1,
+                                                "writes_night": 2}},
+          {"dt": 1000, "pulse": {"op": "OK_NOWRITE"}, "expect": {"state": "IDLE", "event": "R_RESTORED"}}]
+    vec(vid, f"dongle and inverter boot together, the inverter answers after {mins} min: the boot restore waits", t,
+        final={"state": "IDLE", "record_flags": 4})
+
+# the inverter clamps the START write (6000 read back as 5000): the readback under the GRC's own lock is owned (q),
+# committed before the restore (record flags ACTIVE | NIGHT_USED | READBACK = 13) and restored over
+vec("V127", "the inverter clamps a write: the readback is owned, recorded and restored over (no FOREIGN fault)", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}, "expect": {"action": "WRITE", "value": 6000}},
+    {"dt": 2000, "set": {"arm": False}, "pulse": {"op": "FAIL", "op_value": 5000},
+     "expect": {"state": "RESTORING", "action": "RESTORE", "value": 8000, "seq": 2, "event": "R_READBACK_MISMATCH",
+                "q": 5000, "restore_attempts": 1, "writes_night": 2, "record_flags": 13, "commit": True}},
+    {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "IDLE", "event": "R_RESTORED", "q": -1}}],
+    final={"record_flags": 4})
+vec("V128", "a clamped write, then a restart before the restore: the boot keeps the owned readback", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}},
+    {"dt": 2000, "set": {"arm": False}, "pulse": {"op": "FAIL", "op_value": 5000},
+     "expect": {"action": "RESTORE", "q": 5000}},
+    {"dt": 1000, "reboot": {"corrupt": -1},
+     "expect": {"state": "RESTORING", "action": "RESTORE", "value": 8000, "seq": 1, "q": 5000, "restore_attempts": 2,
+                "writes_night": 3, "last_reason": "R_BOOT_RECOVERY"}},
+    {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "IDLE", "event": "R_RESTORED"}}])
+vec("V129", "the restore's own readback differs: owned too, the restore is retried and lands", prefix() + [
+    {"dt": 1000, "keep": True, "pulse": {"end": True}, "expect": {"action": "RESTORE", "restore_attempts": 1}},
+    {"dt": 1000, "pulse": {"op": "FAIL", "op_value": 7500},
+     "expect": {"state": "RESTORING", "event": "R_RESTORE_RETRY", "q": 7500, "restore_attempts": 1}},
+    {"dt": 30000, "expect": {"action": "RESTORE", "seq": 3, "restore_attempts": 2, "writes_night": 3}},
+    {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "IDLE", "event": "R_RESTORED"}}])
+# V90's three answered failures, then the owner's Restore original: one classified restore (writes 4 -> 5), then IDLE
+vec("V130", "Restore original after three answered restore failures: one classified restore, then IDLE", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}},
+    {"dt": 2000, "set": {"arm": False}, "pulse": {"op": "FAIL"}, "expect": {"action": "RESTORE", "restore_attempts": 1}},
+    {"dt": 1000, "pulse": {"op": "FAIL"}, "expect": {"event": "R_RESTORE_RETRY"}},
+    {"dt": 30000, "expect": {"action": "RESTORE", "restore_attempts": 2}},
+    {"dt": 1000, "pulse": {"op": "FAIL"}, "expect": {"event": "R_RESTORE_RETRY"}},
+    {"dt": 30000, "expect": {"action": "RESTORE", "restore_attempts": 3, "writes_night": 4}},
+    {"dt": 1000, "pulse": {"op": "FAIL"}, "expect": {"state": "FAULT", "event": "R_RESTORE_FAILED"}},
+    {"dt": 60000, "expect": {"state": "FAULT", "action": "NONE", "record_flags": 7}},
+    {"dt": 1000, "pulse": {"restore_req": True},
+     "expect": {"state": "FAULT", "action": "RESTORE", "value": 8000, "seq": 5, "event": "R_OWNER_RESTORE",
+                "writes_night": 5, "commit": True}},
+    {"dt": 1000, "pulse": {"op": "OK"},
+     "expect": {"state": "IDLE", "event": "R_RESTORED", "last_reason": "R_OWNER_RESTORE", "commit": True}}],
+    final={"state": "IDLE", "record_flags": 4, "v": 0})
+vec("V131", "Restore original is refused when the original is not known (a corrupt record)", prefix() + [
+    {"dt": 1000, "keep": True, "reboot": {"corrupt": 7}, "expect": {"state": "FAULT", "last_reason": "R_RECORD_CORRUPT"}},
+    {"dt": 1000, "keep": True, "pulse": {"restore_req": True},
+     "expect": {"state": "FAULT", "action": "NONE", "event": "R_REFUSE_RESTORE"}}])
+vec("V132", "Restore original on a foreign value writes nothing: FAULT stays", prefix() + [
+    {"dt": 10000, "keep": True, "set": {"live_sp": 7000}, "expect": {"state": "FAULT", "event": "R_FOREIGN"}},
+    {"dt": 1000, "keep": True, "pulse": {"restore_req": True}, "expect": {"action": "RESTORE", "value": 8000}},
+    {"dt": 1000, "pulse": {"op": "FOREIGN"},
+     "expect": {"state": "FAULT", "event": "R_FOREIGN", "last_reason": "R_FOREIGN", "action": "NONE"}}],
+    final={"record_flags": 7})
+# a FAULT record with 8 writes tonight: refused while the inverter is silent or the bus busy; an unanswered owner
+# restore gives its write back; an answered failure keeps the FAULT; the ninth write is the last one the night allows
+BOOT_F8 = {"flags": 7, "slot": 1, "original": 8000, "v": 6000, "p": 6000, "night_id": NIGHT0, "writes_night": 8,
+           "changes": 5, "restore_attempts": 3, "lease_end": E0 + 14100, "reason": 101}
+vec("V133", "Restore original: refused on a silent inverter or a busy bus, bounded by the night's write ceiling", [
+    {"dt": 0, "expect": {"state": "FAULT", "last_reason": "R_RESTORE_FAILED"}},
+    {"dt": 31000, "silent": True, "pulse": {"restore_req": True}, "expect": {"action": "NONE",
+                                                                            "event": "R_REFUSE_RESTORE"}},
+    {"dt": 1000, "set": {"mutex_busy": True}, "pulse": {"restore_req": True},
+     "expect": {"action": "NONE", "event": "R_REFUSE_RESTORE"}},
+    {"dt": 1000, "set": {"mutex_busy": False}, "pulse": {"restore_req": True},
+     "expect": {"action": "RESTORE", "value": 8000, "seq": 1, "writes_night": 9}},
+    {"dt": 1000, "pulse": {"op": "NO_ANSWER"}, "expect": {"state": "FAULT", "event": "R_RESTORE_UNANSWERED",
+                                                        "writes_night": 8}},
+    {"dt": 1000, "pulse": {"restore_req": True}, "expect": {"action": "RESTORE", "seq": 2, "writes_night": 9}},
+    {"dt": 1000, "pulse": {"op": "FAIL", "op_value": 6000},
+     "expect": {"state": "FAULT", "event": "R_RESTORE_FAILED", "q": -1, "writes_night": 9}},
+    {"dt": 1000, "pulse": {"restore_req": True}, "expect": {"action": "NONE", "event": "R_REFUSE_RESTORE"}}],
+    boot=BOOT_F8)
+
+# ---- M2: results are tagged with the action's sequence number and kind
+# the review's race: the WRITE (seq 1) times out, the RESTORE (seq 2) is emitted, the integration could not run it
+# (DEFERRED: no attempt), then the WRITE's late OK arrives: stale, never taken as the restore's success
+vec("V140", "a late WRITE result after its timeout is never taken as the restore's (sequence and kind)", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}, "expect": {"action": "WRITE", "seq": 1}},
+    {"dt": 15000, "set": {"arm": False},
+     "expect": {"state": "RESTORING", "action": "RESTORE", "seq": 2, "event": "R_OP_TIMEOUT", "restore_attempts": 1,
+                "writes_night": 2}},
+    {"dt": 1000, "pulse": {"op": "DEFERRED"},
+     "expect": {"state": "RESTORING", "event": "R_RESTORE_DEFERRED", "restore_attempts": 0, "writes_night": 1}},
+    {"dt": 1000, "pulse": {"op": "OK", "op_seq": 1, "op_kind": "WRITE"},
+     "expect": {"state": "RESTORING", "event": "R_STALE_RESULT", "action": "NONE"}},
+    {"dt": 1000, "pulse": {"op": "DEFERRED", "op_seq": 2, "op_kind": "RESTORE"},
+     "expect": {"state": "RESTORING", "event": "R_STALE_RESULT", "action": "NONE", "restore_attempts": 0}},
+    {"dt": 27000, "expect": {"action": "NONE", "state": "RESTORING"}},
+    {"dt": 1000, "expect": {"action": "RESTORE", "seq": 3, "restore_attempts": 1}},
+    {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "IDLE", "event": "R_RESTORED"}}])
+# the same race when the integration drops the RESTORE without a word: the WRITE's late OK (seq 1, kind WRITE) arrives
+# while the RESTORE (seq 2) is outstanding and is not its result; the RESTORE's own result is
+vec("V144", "a late WRITE result while the restore is outstanding is not the restore's result", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}},
+    {"dt": 15000, "set": {"arm": False}, "expect": {"action": "RESTORE", "seq": 2, "event": "R_OP_TIMEOUT"}},
+    {"dt": 1000, "pulse": {"op": "OK", "op_seq": 1, "op_kind": "WRITE"},
+     "expect": {"state": "RESTORING", "event": "R_STALE_RESULT", "action": "NONE", "restore_attempts": 1}},
+    {"dt": 1000, "pulse": {"op": "OK_NOWRITE"}, "expect": {"state": "IDLE", "event": "R_RESTORED"}}])
+vec("V141", "a result with the wrong sequence or the wrong kind is ignored", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}, "expect": {"action": "WRITE", "seq": 1}},
+    {"dt": 1000, "set": {"arm": False}, "pulse": {"op": "OK", "op_seq": 7},
+     "expect": {"state": "ADJUSTING", "event": "R_STALE_RESULT", "action": "NONE", "v": 8000}},
+    {"dt": 1000, "pulse": {"op": "OK", "op_kind": "RESTORE"},
+     "expect": {"state": "ADJUSTING", "event": "R_STALE_RESULT", "v": 8000}},
+    {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "SETTLING", "event": "R_WRITE_VERIFIED", "v": 6000}}])
+vec("V142", "a change the integration could not run (DEFERRED) ends the lease; nothing was written", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}},
+    {"dt": 1000, "set": {"arm": False}, "pulse": {"op": "DEFERRED"},
+     "expect": {"state": "RESTORING", "action": "RESTORE", "seq": 2, "event": "R_WRITE_DEFERRED"}},
+    {"dt": 1000, "pulse": {"op": "OK_NOWRITE"}, "expect": {"state": "IDLE", "event": "R_RESTORED"}}])
+vec("V143", "a change the inverter did not answer ends the lease", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}},
+    {"dt": 1000, "set": {"arm": False}, "pulse": {"op": "NO_ANSWER"},
+     "expect": {"state": "RESTORING", "action": "RESTORE", "event": "R_WRITE_UNANSWERED"}}])
+
+# ---- M3: the firmware no longer trusts the plan beyond its own bounds
+# the slot's own end at START (x = 1) is E0 + 17641; the plan's window end must lie within 120 s of it
+vec("V150", "START refused: the plan's window end is 5 min later than the slot's own end",
+    refuse("R_REFUSE_SLOT", {"plan": {"window_end": E0 + 18000}}))
+vec("V151", "START refused: the review's bad plan (p 0, capacity 1 kWh, taper 100, window end a day late)",
+    refuse("R_REFUSE_SLOT", {"plan": {"p": [0], "capacity_wh": 1000, "taper": 100, "window_end": E0 + 17700 + 86400}}))
+vec("V152", "START accepted: the plan's window end 119 s after the slot's own end",
+    [dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}, "plan": {"window_end": E0 + 17760},
+                 "expect": {"state": "ADJUSTING", "action": "WRITE", "value": 6000}}])
+vec("V153", "START refused: the plan's window end 121 s before the slot's own end",
+    refuse("R_REFUSE_SLOT", {"plan": {"window_end": E0 + 17520}}))
+vec("V154", "a plan whose window end moves a day ends the lease", lease_end_with(
+    "R_PLAN_WINDOW", {"dt": 1000, "keep": True, "plan": {"window_end": E0 + 17700 + 86400}}))
+# the guard uses the slot's own end even when the plan claims 119 s more: it trips at tick 52 as in V86 (with the
+# plan's window end it would wait until x + 13915 >= 17160, tick 53)
+vec("V155", "the target guard uses the slot's own end, not the plan's window end",
+    prefix() + [{"repeat": 51, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED"}},
+                {"dt": 60000, "keep": True, "expect": {"action": "RESTORE", "event": "R_TARGET_GUARD"}}],
+    base_plan={"window_end": E0 + 17760})
+# a later plan claiming 20 kWh never lowers the guard's 30 kWh: still tick 52 (with 20 kWh: t_need 8676 s, x >= 7500)
+vec("V156", "a lower capacity in a later plan never lowers the guard's capacity",
+    prefix() + [{"dt": 60000, "keep": True, "plan": {"capacity_wh": 20000}, "expect": {"action": "NONE"}},
+                {"repeat": 50, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED"}},
+                {"dt": 60000, "keep": True, "expect": {"action": "RESTORE", "event": "R_TARGET_GUARD",
+                                                       "capacity_wh": 30000}}])
+# a plan claiming 1 kWh is guarded as the firmware floor 20 kWh: plateau 10000 Wh -> 5164 s, tail 2000 Wh -> 3512 s,
+# t_need 8676: trips once x - x % 60 >= 7464: k = 123 is x 7463 (7440, no), k = 124 is x 7523 (7500, trips)
+vec("V157", "the firmware capacity floor: a plan claiming 1 kWh is guarded as 20 kWh",
+    prefix() + [{"repeat": 123, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED",
+                                                                         "capacity_wh": 20000}},
+                {"dt": 60000, "keep": True, "expect": {"action": "RESTORE", "event": "R_TARGET_GUARD"}}],
+    base_plan={"capacity_wh": 1000})
+# START at 4000 W slot power (4100 W realised): with the 20 kWh floor at SOC 40 %: plateau 10000 Wh at 3485 W -> 10329 s,
+# tail 2000 Wh at 1025 W -> 7024 s; 1 + 17353 + 900 >= 17041: refused (with 1 kWh it would start)
+vec("V157b", "START refused: the capacity floor applies to a plan claiming 1 kWh",
+    refuse("R_REFUSE_TARGET_AT_RISK", {"set": {"live_sp": 4000, "batt_w": 4100}, "plan": {"capacity_wh": 1000}}))
+# SOC 46.1 % at 4100 W: plateau 439*20 = 8780 Wh -> 9069 s, tail 7024 s, t_need 16093: START (x = 1): 16994 < 17041;
+# one minute later (x = 60): 17053 >= 17040, the very first guard tick of the lease trips (it must already use 20 kWh)
+vec("V157c", "the capacity floor holds from the lease's first tick", [
+    dict(ARM),
+    {"dt": 1000, "sample": True, "pulse": {"start": True}, "set": {"soc": 461, "live_sp": 4000, "batt_w": 4100},
+     "plan": {"capacity_wh": 1000}, "expect": {"state": "LEASED", "action": "NONE", "capacity_wh": 20000}},
+    {"dt": 59000, "keep": True, "expect": {"action": "RESTORE", "value": 4000, "event": "R_TARGET_GUARD"}}])
+# a plan taper of 100 is guarded with the 95 % knee: plateau 550*30 = 16500 Wh -> 8522 s, tail 1500 Wh -> 2634 s,
+# t_need 11156: trips once x - x % 60 >= 4984: k = 82 is x 5003 (4980, no), k = 83 is x 5063 (5040, trips); with
+# the plan's 100 % knee it would wait until x - x % 60 >= 6844
+vec("V158", "the target guard caps the plan's taper knee at 95 %",
+    prefix() + [{"repeat": 82, "dt": 60000, "keep": True, "expect_all": {"action": "NONE", "state": "LEASED"}},
+                {"dt": 60000, "keep": True, "expect": {"action": "RESTORE", "event": "R_TARGET_GUARD"}}],
+    base_plan={"taper": 100})
+# the plan drops the owner ceiling to 500 W: after the dwell 6000 -> 4000 (one step), not 500
+vec("V159", "an owner ceiling far below the present value is approached in 2000 W steps",
+    prefix() + [{"dt": 60000, "keep": True, "plan": {"ceiling_w": 500}, "expect": {"action": "NONE"}},
+                {"repeat": 27, "dt": 60000, "keep": True, "expect_all": {"action": "NONE"}},
+                {"dt": 60000, "keep": True, "expect": {"action": "WRITE", "value": 4000, "changes": 2}}])
+
+# ---- M4: a direct grid-loss input ends the lease and restores at once
+vec("V160", "START refused: the grid is not connected", refuse("R_REFUSE_GRID", {"set": {"grid_ok": False}}))
+vec("V161", "grid lost during the lease: the restore is emitted in the same tick",
+    lease_end_with("R_GRID_LOSS", {"dt": 1000, "keep": True, "set": {"grid_ok": False}}))
+vec("V162", "grid lost while a write is in flight: latched, acted on at the verified result, no settle", [
+    dict(ARM), {"dt": 1000, "sample": True, "pulse": {"start": True}},
+    {"dt": 1000, "set": {"arm": False, "grid_ok": False}, "expect": {"state": "ADJUSTING", "action": "NONE"}},
+    {"dt": 1000, "set": {"grid_ok": True}, "pulse": {"op": "OK"},
+     "expect": {"state": "RESTORING", "action": "RESTORE", "value": 8000, "seq": 2, "event": "R_GRID_LOSS",
+                "v": 6000}},
+    {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "IDLE", "event": "R_RESTORED",
+                                                  "last_reason": "R_GRID_LOSS"}}])
+vec("V163", "grid loss outranks END", prefix() + [
+    {"dt": 1000, "keep": True, "set": {"grid_ok": False}, "pulse": {"end": True},
+     "expect": {"action": "RESTORE", "event": "R_GRID_LOSS"}}])
+
+# ---- M5: the restore operation timeout and a slot across midnight
+vec("V170", "a restore without any result: timed out, retried after the backoff, the third timeout latches FAULT",
+    prefix() + [{"dt": 1000, "keep": True, "pulse": {"end": True}, "expect": {"action": "RESTORE", "seq": 2,
+                                                                           "restore_attempts": 1, "writes_night": 2}},
+                {"dt": 14999, "expect": {"state": "RESTORING", "action": "NONE", "event": "R_NONE"}},
+                {"dt": 1, "expect": {"state": "RESTORING", "action": "NONE", "event": "R_RESTORE_RETRY",
+                                     "restore_attempts": 1}},
+                {"dt": 29999, "expect": {"action": "NONE"}},
+                {"dt": 1, "expect": {"action": "RESTORE", "seq": 3, "restore_attempts": 2, "writes_night": 3}},
+                {"dt": 15000, "expect": {"event": "R_RESTORE_RETRY"}},
+                {"dt": 30000, "expect": {"action": "RESTORE", "seq": 4, "restore_attempts": 3, "writes_night": 4}},
+                {"dt": 15000, "expect": {"state": "FAULT", "event": "R_RESTORE_FAILED", "commit": True}}],
+    final={"record_flags": 7, "last_reason": "R_RESTORE_FAILED"})
+# slot 23:30-05:30, START at 23:35 (E0 - 3600 + 1, local 1415): slot end = epoch + mod1440(330 - 1415) * 60 - 60 =
+# E0 - 3599 + 355 * 60 - 60 = E0 + 17641; deadline E0 + 17400, so the lease end comes from the slot: E0 + 17041. The
+# prefix ticks have x % 60 >= 3 and the later ones x % 60 = 23, so it never moves. Midnight passes at tick 24 after
+# the prefix (x = 83 + 60k >= 1500); the dwell change at tick 29 is V52's 4900.
+vec("V171", "a slot across midnight: START at 23:35, guards past 00:00, the lease end from the slot's own end",
+    prefix(lease_end=E0 + 17041)
+    + [{"repeat": 28, "dt": 60000, "keep": True, "plan": {"p": [5000]},
+        "expect_all": {"action": "NONE", "state": "LEASED", "lease_end": E0 + 17041}},
+       {"dt": 60000, "keep": True, "expect": {"action": "WRITE", "value": 4900, "state": "ADJUSTING",
+                                              "lease_end": E0 + 17041}},
+       {"dt": 1000, "pulse": {"op": "OK"}, "expect": {"state": "SETTLING"}},
+       {"dt": 1000, "keep": True, "pulse": {"end": True}, "expect": {"action": "RESTORE", "value": 8000,
+                                                                     "event": "R_END"}}],
+    epoch_offset=-3600, base_set={"slot_start_min": 1410}, base_plan={"deadline": E0 + 17400, "t": [E0 - 3660]})
+# START at x = 59 (slot end E0 + 17699, lease end E0 + 17099); a minute later x = 60 gives E0 + 17640 - 600 = E0 + 17040
+vec("V172", "the lease end follows the slot's own end on every tick, earlier only", [
+    dict(ARM),
+    {"dt": 59000, "sample": True, "pulse": {"start": True},
+     "expect": {"state": "LEASED", "action": "NONE", "lease_end": E0 + 17099}},
+    {"dt": 1000, "keep": True, "expect": {"state": "LEASED", "lease_end": E0 + 17040}}],
+    base_plan={"p": [8000], "deadline": E0 + 17400})
+
 # ------------------------------------------------------------------------------------------------- unit vectors
 UNITS = {
-    "classify": [[8000, 8000, 6000, 4900, "CLS_ALREADY"], [6000, 8000, 6000, 4900, "CLS_OWNED"],
-                 [4900, 8000, 6000, 4900, "CLS_OWNED"], [7000, 8000, 6000, 4900, "CLS_FOREIGN"],
-                 [0, 8000, 6000, 6000, "CLS_FOREIGN"], [8000, 8000, 8000, 8000, "CLS_ALREADY"]],
+    "classify": [[8000, 8000, 6000, 4900, -1, "CLS_ALREADY"], [6000, 8000, 6000, 4900, -1, "CLS_OWNED"],
+                 [4900, 8000, 6000, 4900, -1, "CLS_OWNED"], [7000, 8000, 6000, 4900, -1, "CLS_FOREIGN"],
+                 [0, 8000, 6000, 6000, -1, "CLS_FOREIGN"], [8000, 8000, 8000, 8000, -1, "CLS_ALREADY"],
+                 [5000, 8000, 8000, 6000, 5000, "CLS_OWNED"], [0, 8000, 6000, 6000, 0, "CLS_OWNED"],
+                 [5000, 8000, 6000, 6000, 4000, "CLS_FOREIGN"], [8000, 8000, 6000, 6000, 5000, "CLS_ALREADY"],
+                 [-1, 8000, 6000, 6000, -1, "CLS_FOREIGN"]],
+    "lost_lease": [[[8000, 8000, 8000, 8000, 8000, 8000], [8000, 8000, 8000, 8000, 8000, 8000], 0],
+                   [[6000, 8000, 8000, 8000, 8000, 8000], [8000, 8000, 8000, 8000, 8000, 8000], 1],
+                   [[8000, 8000, 500, 8000, 8000, 6900], [8000, 8000, 8000, 8000, 8000, 7000], 36],
+                   [[-1, 8000, 8000, 8000, 8000, 8000], [8000, 8000, 8000, 8000, 8000, 8000], 0],
+                   [[6000, 8000, 8000, 8000, 8000, 8000], [-1, 8000, 8000, 8000, 8000, 8000], 0],
+                   [[8000, 8000, 8000, 8000, 8000, 8000], [6000, 6000, 6000, 6000, 6000, 6000], 0],
+                   [[0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1], 63]],
     "records": [
         {"fields": {"flags": 5, "slot": 1, "original": 8000, "v": 6000, "p": 4900, "night_id": NIGHT0,
                     "writes_night": 2, "changes": 2, "restore_attempts": 0, "lease_end": E0 + 14100, "reason": 44},
@@ -510,11 +804,21 @@ UNITS = {
         {"fields": {"flags": 4, "night_id": NIGHT0, "writes_night": 10}, "status": "DEC_BAD_VALUE"},
         {"fields": {"flags": 5, "slot": 1, "original": 8000, "v": 6000, "p": 6000, "night_id": NIGHT0,
                     "writes_night": 2, "changes": 7, "lease_end": E0}, "status": "DEC_BAD_VALUE"},
+        {"fields": {"flags": 13, "slot": 1, "original": 8000, "v": 8000, "p": 6000, "q": 5000, "night_id": NIGHT0,
+                    "writes_night": 2, "changes": 1, "restore_attempts": 1, "lease_end": E0 + 14100, "reason": 86},
+         "status": "DEC_OK"},
+        {"fields": {"flags": 15, "slot": 1, "original": 8000, "v": 6000, "p": 6000, "q": 0, "night_id": NIGHT0,
+                    "writes_night": 4, "changes": 1, "restore_attempts": 3, "lease_end": E0 + 14100, "reason": 101},
+         "status": "DEC_OK"},
+        {"fields": {"flags": 12, "q": 5000, "night_id": NIGHT0}, "status": "DEC_BAD_VALUE"},
+        {"fields": {"flags": 5, "slot": 1, "original": 8000, "v": 6000, "p": 6000, "q": 5000, "night_id": NIGHT0,
+                    "writes_night": 2, "changes": 1, "lease_end": E0}, "status": "DEC_BAD_VALUE"},
+        {"fields": {"flags": 16, "night_id": NIGHT0}, "status": "DEC_BAD_VALUE"},
     ],
 }
 
 if __name__ == "__main__":
-    doc = {"spec": "docs/dev/gentle-rate-controller/SPEC.md revision 1", "frame": {"E0": E0, "NOW0": NOW0,
+    doc = {"spec": "docs/dev/gentle-rate-controller/SPEC.md revision 2", "frame": {"E0": E0, "NOW0": NOW0,
                                                                                   "NIGHT0": NIGHT0},
            "vectors": V, "units": UNITS}
     out = HERE / "vectors.json"

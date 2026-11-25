@@ -2,7 +2,7 @@
 """Host C++ compile and replay proof of firmware/proposed/ecco_gentle_rate_core.h against the GRC reference model.
 
 The header is the pure decision core of the guarded charge-rate controller (spec docs/dev/gentle-rate-controller/
-SPEC.md revision 1); docs/dev/gentle-rate-controller/reference_model.py is its executable specification and
+SPEC.md revision 2); docs/dev/gentle-rate-controller/reference_model.py is its executable specification and
 vectors.json holds the golden vectors. This suite proves the header equals the model:
 
   [1] compiler: a GCC C++ compiler that can also RUN executables must exist. It FAILS, never skips. Search order:
@@ -14,7 +14,8 @@ vectors.json holds the golden vectors. This suite proves the header equals the m
       numbers, and the harness reads every model configuration and input field;
   [4] the model meets every hand-computed expectation of vectors.json (so CI checks the golden vectors too), and
       EXECUTABLE PROOF: the harness (registry/tests/gentle_rate_harness.cpp) replays every golden vector (with its
-      boot record and restarts), the unit vectors (classifier, record decode of valid, corrupted and truncated
+      boot record and restarts, with each result echoing the sequence number and kind it answers), the unit vectors
+      (classifier with the owned readback, the lost-lease warning, record decode of valid, corrupted and truncated
       records) and FUZZ_SEQUENCES seeded fuzz sequences; every printed line must equal the model's line;
   [5] SANITIZERS: the same harness built with -fsanitize=address,undefined replays the vectors and 200 fuzz
       sequences without a report;
@@ -139,10 +140,12 @@ def find_xtensa() -> str | None:
 # The replay input and the model's expected output
 # ===========================================================================================================
 REC_FIELDS = ["flags", "slot", "reason", "original", "v", "p", "night_id", "writes_night", "changes",
-              "restore_attempts", "lease_end"]
+              "restore_attempts", "lease_end", "q"]
 
 
 def vector_program(vectors: list[dict]) -> tuple[list[str], list[str], list[str]]:
+    """The inputs the model actually stepped (VR.run fills each result's echoed sequence number and kind), so the
+    header replays exactly the same ticks."""
     inp, exp, fails = [], [], []
     for v in vectors:
         _, cfg = VR.make_core(v, M)
@@ -150,13 +153,13 @@ def vector_program(vectors: list[dict]) -> tuple[list[str], list[str], list[str]
         if v.get("boot") is not None:
             r = M.Record(**v["boot"])
             inp.append("B " + " ".join(str(getattr(r, k)) for k in REC_FIELDS) + f" {VR.NOW0}")
-        for i, meta in VR.expand(v, M):
-            if meta["reboot"] is not None:
-                rb = meta["reboot"]
-                inp.append("R " + str(-2 if rb.get("absent") else rb.get("corrupt", -1)))
-            inp.append(VR.serialise_in(i))
+        lines, bad, _, items = VR.run(v, M)
+        for kind, x in items:
+            if kind == "R":
+                inp.append("R " + str(-2 if x.get("absent") else x.get("corrupt", -1)))
+            else:
+                inp.append(VR.serialise_in(x))
         inp.append("E")
-        lines, bad, _ = VR.run(v, M)
         exp += lines
         fails += bad
     return inp, exp, fails
@@ -178,9 +181,12 @@ def unit_program() -> tuple[list[str], list[str]]:
     import json
     units = json.loads((MODEL_DIR / "vectors.json").read_text(encoding="utf-8"))["units"]
     inp, exp = [VR.serialise_config(M.Config()), "S"], []
-    for live, orig, v, p, _want in units["classify"]:
-        inp.append(f"K {live} {orig} {v} {p}")
-        exp.append(f"K {M.classify_restore(live, orig, v, p)}")
+    for live, orig, v, p, q, _want in units["classify"]:
+        inp.append(f"K {live} {orig} {v} {p} {q}")
+        exp.append(f"K {M.classify_restore(live, orig, v, p, q)}")
+    for live, table, _want in units["lost_lease"]:
+        inp.append("W " + " ".join(str(x) for x in list(live) + list(table)))
+        exp.append(f"W {M.lost_lease_slots(live, table)}")
     cfg = M.Config()
     blobs = []
     for r in units["records"]:
@@ -188,7 +194,7 @@ def unit_program() -> tuple[list[str], list[str]]:
     good = blobs[0]
     for k in range(len(good)):
         blobs.append(good[:k] + bytes([good[k] ^ 0x01]) + good[k + 1:])
-    for n in (0, 1, 27):
+    for n in (0, 1, 27, 28, 31):
         blobs.append(good[:n] if n else b"")
     for b in blobs:
         st, rec = M.decode_record(b, cfg)
@@ -253,7 +259,8 @@ def run(tmp: Path) -> None:
             detail.append(name)
     header_reasons = set(re.findall(r"\b(R_[A-Z_]+) = \d+", header_text))
     for group in (("IDLE", "ARMED", "LEASED", "ADJUSTING", "SETTLING", "RESTORING", "FAULT"),
-                  ("A_NONE", "A_WRITE", "A_RESTORE"), ("OP_NONE", "OP_OK", "OP_OK_NOWRITE", "OP_FAIL", "OP_FOREIGN"),
+                  ("A_NONE", "A_WRITE", "A_RESTORE"),
+                  ("OP_NONE", "OP_OK", "OP_OK_NOWRITE", "OP_FAIL", "OP_FOREIGN", "OP_NO_ANSWER", "OP_DEFERRED"),
                   ("CLS_ALREADY", "CLS_OWNED", "CLS_FOREIGN"),
                   ("DEC_OK", "DEC_ABSENT", "DEC_BAD_SIZE", "DEC_BAD_CRC", "DEC_BAD_MAGIC", "DEC_BAD_VERSION",
                    "DEC_BAD_VALUE")):
@@ -362,8 +369,8 @@ def run(tmp: Path) -> None:
 
 HEADER_MUTANTS = [
     ("floor clamp removed", "return (int32_t) imax(c.floor_w, imin(ceiling, r));", "return (int32_t) imin(ceiling, r);"),
-    ("ceiling ignores the pre-lease value", "imin(imin(original, i.plan.ceiling_w), c.fw_bound_w)",
-     "imin(i.plan.ceiling_w, c.fw_bound_w)"),
+    ("ceiling ignores the pre-lease value", "int64_t hard = imin(original, c.fw_bound_w) / c.round_w * c.round_w;",
+     "int64_t hard = (int64_t) c.fw_bound_w / c.round_w * c.round_w;"),
     ("no step cap", "raw = imax((int64_t) v - c.max_step_w, imin((int64_t) v + c.max_step_w, raw));", "(void) 0;"),
     ("no hysteresis", "if (iabs(delta) < c.hyst_w) return;", "if (iabs(delta) < 0) return;"),
     ("dwell is the settle time", "if (elapsed(i.now_ms, last_change_ms) < c.dwell_ms) return;",
@@ -377,16 +384,19 @@ HEADER_MUTANTS = [
      "if (i.live_sp != v && i.live_sp != p) return R_CONFIG_DRIFT;"),
     ("restore attempts unbounded", "if (restore_attempts >= c.max_restore_attempts) {\n          fault(o, R_RESTORE_FAILED);",
      "if (false) {\n          fault(o, R_RESTORE_FAILED);"),
-    ("the record CRC is not checked", "if (get32(d + 24) != crc32(d, 24)) { o.status = DEC_BAD_CRC; return o; }", ""),
-    ("the pending value is not owned", "if (live == v || live == p) return CLS_OWNED;", "if (live == v) return CLS_OWNED;"),
+    ("the record CRC is not checked", "if (get32(d + 28) != crc32(d, 28)) { o.status = DEC_BAD_CRC; return o; }", ""),
+    ("the pending value is not owned", "if (live == v || live == p || (q >= 0 && live == q)) return CLS_OWNED;",
+     "if (live == v || (q >= 0 && live == q)) return CLS_OWNED;"),
     ("two leases a night", "if (night_used) return R_REFUSE_NIGHT_USED;", ""),
     ("target guard ignores the taper tail", "int64_t e_tail = (tgt - imax(soc, knee)) * cap_wh / 1000;",
      "int64_t e_tail = 0;"),
     ("an RTC correction does not defer a change", "if (i.rtc_busy || i.mutex_busy) return;\n    int32_t d = desired(i);",
      "if (i.mutex_busy) return;\n    int32_t d = desired(i);"),
     ("END lost while a write is in flight",
-     "if (i.end) end_pending = true;\n    if (st == ADJUSTING) { adjusting(i, o); return o; }",
-     "if (st == ADJUSTING) { adjusting(i, o); return o; }\n    if (i.end) end_pending = true;"),
+     "if (i.end) end_pending = true;\n    if (!i.grid_ok) grid_pending = true;\n"
+     "    if (st == ADJUSTING) { adjusting(i, o, res); return o; }",
+     "if (!i.grid_ok) grid_pending = true;\n    if (st == ADJUSTING) { adjusting(i, o, res); return o; }\n"
+     "    if (i.end) end_pending = true;"),
     ("uptime comparison not wrap safe", "constexpr uint32_t elapsed(uint32_t now, uint32_t then) { return (uint32_t) (now - then); }",
      "constexpr uint32_t elapsed(uint32_t now, uint32_t then) { return now >= then ? now - then : 0u; }"),
     ("relative step ignores the realised power", "int64_t raw = (int64_t) v * plan_power(i.plan, i.epoch) / p_ref;",
@@ -394,6 +404,57 @@ HEADER_MUTANTS = [
     ("SOC jump unchecked",
      "if (iabs((int64_t) i.soc - last_soc) > c.soc_jump_max || i.soc < soc_max - c.soc_drop_max) return R_SOC_INVALID;",
      "if (i.soc < soc_max - c.soc_drop_max) return R_SOC_INVALID;"),
+    # ---- revision 2 (the review findings), each also a model mutant
+    ("no restore operation timeout",
+     "} else if (res == OP_FAIL || elapsed(i.now_ms, op_start_ms) >= c.op_timeout_ms) {\n        op_pending = false;\n"
+     "        if (res == OP_FAIL) own_readback(i);\n        if (restore_attempts >= c.max_restore_attempts) {",
+     "} else if (res == OP_FAIL) {\n        op_pending = false;\n"
+     "        if (res == OP_FAIL) own_readback(i);\n        if (restore_attempts >= c.max_restore_attempts) {"),
+    ("the in_slot wrap branch is never true", "if (start > end) return m >= start || m < end;",
+     "if (start > end) return false;"),
+    ("an unanswered restore spends an attempt", "restore_attempts = (int32_t) imax(0, restore_attempts - 1);", "(void) 0;"),
+    ("the restore does not wait for the inverter to answer",
+     "if (i.rx_age_ms > c.rx_fresh_ms) return;\n    if (writes_night + 1 > c.night_write_ceiling) { fault(o, R_NIGHT_CEILING);",
+     "if (writes_night + 1 > c.night_write_ceiling) { fault(o, R_NIGHT_CEILING);"),
+    ("a clamped readback is not owned", "q = i.op_value;\n      begin_restore(i, o, R_READBACK_MISMATCH);",
+     "begin_restore(i, o, R_WRITE_FAILED);"),
+    ("the classifier ignores the owned readback", "if (live == v || live == p || (q >= 0 && live == q)) return CLS_OWNED;",
+     "if (live == v || live == p) return CLS_OWNED;"),
+    ("a result is taken whatever its sequence", "if (op_pending && i.op_seq == op_seq && i.op_kind == op_kind) return i.op;",
+     "if (op_pending && i.op_kind == op_kind) return i.op;"),
+    ("a result is taken whatever its kind", "if (op_pending && i.op_seq == op_seq && i.op_kind == op_kind) return i.op;",
+     "if (op_pending && i.op_seq == op_seq) return i.op;"),
+    ("the sequence number does not advance", "seq = seq + 1;\n    if (seq == 0) seq = 1;", "if (seq == 0) seq = 1;"),
+    ("the plan's window end is not checked at START",
+     "if (iabs(pl.window_end - slot_end) > c.window_match_s) return R_REFUSE_SLOT;", ""),
+    ("the plan's window end is not checked in a lease",
+     "if (iabs(pl.window_end - slot_end) > c.window_match_s) return R_PLAN_WINDOW;", ""),
+    ("the target guard uses the plan's window end",
+     "if (guard_trips(i.epoch, i.soc, target, capacity_wh, p0, slot_end, taper)) return R_TARGET_GUARD;",
+     "if (guard_trips(i.epoch, i.soc, target, capacity_wh, p0, pl.window_end, taper)) return R_TARGET_GUARD;"),
+    ("the lease end ignores the slot's own end",
+     "lease_end = imin(pl.deadline, slot_end_epoch(i.epoch, i.local_min, i.slot_end_min) - c.end_margin_s);",
+     "lease_end = imin(pl.deadline, pl.window_end - c.end_margin_s);"),
+    ("the slot end does not wrap midnight", "return epoch + (int64_t) mod1440(slot_end_min - local_min) * 60 - 60;",
+     "return epoch + (int64_t) (slot_end_min - local_min) * 60 - 60;"),
+    ("no capacity floor in the lease", "capacity_wh = (int32_t) imax(pl.capacity_wh, c.capacity_floor_wh);",
+     "capacity_wh = pl.capacity_wh;"),
+    ("a later plan may lower the guard's capacity", "if (cap > capacity_wh) capacity_wh = cap;",
+     "if (cap != capacity_wh) capacity_wh = cap;"),
+    ("the guard accepts any taper knee", "int64_t knee = imin(tgt, imin(taper_pct, c.taper_max_pct) * 10);",
+     "int64_t knee = imin(tgt, (int64_t) taper_pct * 10);"),
+    ("the owner ceiling bypasses the step cap",
+     "int64_t owner = imax(i.plan.ceiling_w, (imax(0, (int64_t) v - c.max_step_w) + c.round_w - 1) / c.round_w * c.round_w);",
+     "int64_t owner = i.plan.ceiling_w;"),
+    ("grid loss ignored in a lease", "if (grid_pending) return R_GRID_LOSS;", ""),
+    ("START with the grid lost", "if (!i.grid_ok) return R_REFUSE_GRID;", ""),
+    ("grid loss not acted on at the verified write",
+     "if (grid_pending) { begin_restore(i, o, R_GRID_LOSS); restoring(i, o, OP_NONE); return; }", ""),
+    ("Restore original without a known original", "if (original == 0 || busy ||", "if (busy ||"),
+    ("FAULT restores without the owner's pulse", "if (i.restore_req) {\n      bool busy", "if (true) {\n      bool busy"),
+    ("an unanswered change does not end the lease",
+     "} else if (res == OP_NO_ANSWER) {\n      begin_restore(i, o, R_WRITE_UNANSWERED);",
+     "} else if (false) {\n      begin_restore(i, o, R_WRITE_UNANSWERED);"),
 ]
 
 

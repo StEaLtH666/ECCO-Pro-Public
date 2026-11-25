@@ -4,13 +4,18 @@ reading this folder.
 
   [1] golden vectors: every hand-computed expectation of vectors.json holds; vectors.json is exactly what
       make_vectors.py writes (no hand edit, no drift)
-  [2] unit vectors: the restore classifier, the durable record (decode statuses, round trip, EVERY single-byte
-      corruption of a valid record is rejected, every truncation is rejected), config_ok
-  [3] properties on a seeded fuzz (FUZZ_SEQUENCES sequences): bounds, rounding, step cap, no action on a busy bus or
-      with an operation outstanding, budgets, one-shot arm, no write once a lease is ending, records always decodable
-  [4] closed loop against the INDEPENDENT truth battery (simulator.py): 80 normal nights and 20 fault nights, every
-      property of the simulator, no target missed that today's fixed rate reaches, gentler on average, and the
-      designed outcome of each fault night
+  [2] unit vectors: the restore classifier (with the owned readback), the lost-lease warning, the durable record
+      (decode statuses, round trip, EVERY single-byte corruption of a valid record is rejected, every truncation is
+      rejected), config_ok
+  [3] properties on a seeded fuzz (FUZZ_SEQUENCES sequences): bounds, rounding, the step cap without exception (the
+      owner ceiling included), no action on a busy bus or with an operation outstanding (a stale result is no result),
+      no restore while the inverter is silent, no write while the grid is lost, an unanswered or deferred restore
+      never spends an attempt, a fresh sequence number per action, budgets, one-shot arm, no write once a lease is
+      ending, FAULT emits nothing but the owner's Restore original, records always decodable
+  [4] closed loop against the INDEPENDENT truth battery (simulator.py): 80 normal nights and 29 fault nights (Modbus
+      down 2, 5 and 10 min at a guard and at a restart, an inverter that rounds or clamps the value, a grid outage,
+      ...), every property of the simulator, no target missed that today's fixed rate reaches, gentler on average,
+      and the designed outcome of each fault night
   [5] mutation: MUTANTS faults injected into a copy of the model source; each must make [1]-[4] fail
 
 Run: python -I -B -X utf8 docs/dev/gentle-rate-controller/test_reference_model.py
@@ -59,7 +64,7 @@ def load_model(source: str | None = None, name: str = "grc_reference_model"):
 def battery_vectors(M) -> list[str]:
     bad = []
     for v in VR.load_vectors():
-        _, fails, _ = VR.run(v, M)
+        _, fails, _, _ = VR.run(v, M)
         bad += fails
     return bad
 
@@ -67,10 +72,14 @@ def battery_vectors(M) -> list[str]:
 def battery_units(M) -> list[str]:
     bad = []
     units = json.loads((HERE / "vectors.json").read_text(encoding="utf-8"))["units"]
-    for live, orig, v, p, want in units["classify"]:
-        got = M.classify_restore(live, orig, v, p)
+    for live, orig, v, p, q, want in units["classify"]:
+        got = M.classify_restore(live, orig, v, p, q)
         if got != getattr(M, want):
-            bad.append(f"classify({live},{orig},{v},{p}) = {got}, want {want}")
+            bad.append(f"classify({live},{orig},{v},{p},{q}) = {got}, want {want}")
+    for live, table, want in units["lost_lease"]:
+        got = M.lost_lease_slots(live, table)
+        if got != want:
+            bad.append(f"lost_lease_slots({live}, {table}) = {got}, want {want}")
     cfg = M.Config()
     for r in units["records"]:
         b = M.encode_record(M.Record(**r["fields"]))
@@ -93,7 +102,9 @@ def battery_units(M) -> list[str]:
     if not M.config_ok(M.Config()):
         bad.append("default config rejected")
     for field, value in (("night_write_ceiling", 8), ("settle_ms", 1_800_000), ("floor_w", 450), ("fw_bound_w", 8100),
-                         ("max_step_w", 200), ("guard_tail_pct", 0), ("hyst_w", 0)):
+                         ("max_step_w", 200), ("guard_tail_pct", 0), ("hyst_w", 0), ("op_timeout_ms", 12_000),
+                         ("script_queue_ms", 6_000), ("end_margin_s", 180), ("window_match_s", 60),
+                         ("capacity_floor_wh", 999), ("taper_max_pct", 49), ("rx_fresh_ms", 0)):
         c = M.Config()
         setattr(c, field, value)
         if M.config_ok(c):
@@ -107,31 +118,46 @@ def battery_fuzz(M, sequences: int = FUZZ_SEQUENCES) -> list[str]:
     def chk(before, i, o, core):
         c = core.c
         tag = f"fuzz state {before['state']}->{core.state} action {o.action}"
+        valid = i.op != M.OP_NONE and before["op_pending"] and i.op_seq == before["op_seq"] and \
+            i.op_kind == before["op_kind"]
         if o.action == M.A_WRITE:
             v0 = before["v"] if before["state"] != M.ARMED else i.live_sp
-            ceiling = min(core.original, i.plan.ceiling_w, c.fw_bound_w) // c.round_w * c.round_w
-            if core.state != M.ADJUSTING or o.value % c.round_w or not c.floor_w <= o.value <= ceiling:
-                bad.append(f"{tag}: WRITE {o.value} outside the bounds (ceiling {ceiling})")
+            hard = min(core.original, c.fw_bound_w) // c.round_w * c.round_w
+            owner = max(i.plan.ceiling_w, (max(0, v0 - c.max_step_w) + c.round_w - 1) // c.round_w * c.round_w)
+            if core.state != M.ADJUSTING or o.value % c.round_w or not c.floor_w <= o.value <= min(hard, owner):
+                bad.append(f"{tag}: WRITE {o.value} outside the bounds (hard {hard}, owner step {owner})")
             if abs(o.value - v0) < c.hyst_w:
                 bad.append(f"{tag}: WRITE {o.value} within the hysteresis of {v0}")
-            if o.value - v0 > c.max_step_w or (v0 - o.value > c.max_step_w and o.value != ceiling):
+            if abs(o.value - v0) > c.max_step_w:
                 bad.append(f"{tag}: WRITE {o.value} steps more than {c.max_step_w} from {v0}")
             if before["state"] in (M.RESTORING, M.FAULT, M.IDLE):
                 bad.append(f"{tag}: WRITE from state {before['state']}")
-        if o.action == M.A_RESTORE and (o.value != core.original or core.state != M.RESTORING):
+            if not i.grid_ok:
+                bad.append(f"{tag}: WRITE while the grid is lost")
+        if o.action == M.A_RESTORE and (o.value != core.original or core.original == 0 or
+                                        core.state not in (M.RESTORING, M.FAULT)):
             bad.append(f"{tag}: RESTORE {o.value} != original {core.original}")
+        if o.action == M.A_RESTORE and i.rx_age_ms > c.rx_fresh_ms:
+            bad.append(f"{tag}: RESTORE while the inverter has not answered for {i.rx_age_ms} ms")
         if o.action != M.A_NONE and (i.rtc_busy or i.mutex_busy):
             bad.append(f"{tag}: action on a busy bus")
-        if before["op_pending"] and i.op == M.OP_NONE and o.action != M.A_NONE and \
+        if o.action != M.A_NONE and (o.seq == 0 or o.seq == before["seq"] or o.seq != core.op_seq):
+            bad.append(f"{tag}: action without a fresh sequence number ({before['seq']} -> {o.seq})")
+        if before["op_pending"] and not valid and o.action != M.A_NONE and \
                 M.elapsed(i.now_ms, before["op_start_ms"]) < c.op_timeout_ms:
             bad.append(f"{tag}: action with an operation outstanding")
+        if valid and i.op in (M.OP_NO_ANSWER, M.OP_DEFERRED) and before["state"] == M.RESTORING and (
+                core.state == M.FAULT or core.restore_attempts >= before["restore_attempts"]):
+            bad.append(f"{tag}: an unanswered or deferred restore spent an attempt or latched FAULT")
         if core.changes > c.max_changes or core.writes_night > c.night_write_ceiling or \
                 core.restore_attempts > c.max_restore_attempts:
             bad.append(f"{tag}: budget exceeded {core.changes}/{core.writes_night}/{core.restore_attempts}")
         if before["state"] == M.ARMED and i.arm and i.start and not o.disarm:
             bad.append(f"{tag}: START did not consume the arm")
         if before["state"] in (M.IDLE, M.ARMED, M.FAULT) and o.action != M.A_NONE and not (
-                before["state"] == M.ARMED and o.action == M.A_WRITE):
+                (before["state"] == M.ARMED and o.action == M.A_WRITE) or
+                (before["state"] == M.FAULT and o.action == M.A_RESTORE and i.restore_req and not i.ack and
+                 before["original"] != 0)):
             bad.append(f"{tag}: action from state {before['state']}")
         st, _ = M.decode_record(M.encode_record(core.record()), c)
         if st != M.DEC_OK:
@@ -158,7 +184,15 @@ EXPECTED_FAULT_OUTCOME = {
     "restore_fail_twice": "R_END", "restore_fail_always": "R_RESTORE_FAILED", "commit_fail": "R_WRITE_FAILED",
     "rtc_busy_long": "R_RTC_STUCK", "slot_not_binding": "R_NO_RESPONSE", "wrong_direction": "R_WRONG_DIRECTION",
     "planner_too_low": "R_TARGET_GUARD", "owner_end": "R_END",
+    "modbus_down_2min_guard": "R_TELEMETRY_STALE", "modbus_down_5min_guard": "R_TELEMETRY_STALE",
+    "modbus_down_10min_guard": "R_TELEMETRY_STALE", "modbus_down_2min_boot": "R_BOOT_RECOVERY",
+    "modbus_down_5min_boot": "R_BOOT_RECOVERY", "modbus_down_10min_boot": "R_BOOT_RECOVERY",
+    "inverter_rounds": "R_READBACK_MISMATCH", "inverter_clamps": "R_READBACK_MISMATCH", "grid_outage": "R_GRID_LOSS",
 }
+# the nights after which the slot power must be the original again (the simulator checks it; these may not end in
+# FAULT, and must spend at most one restore attempt)
+MUST_RESTORE = ("modbus_down_2min_guard", "modbus_down_5min_guard", "modbus_down_10min_guard", "modbus_down_2min_boot",
+                "modbus_down_5min_boot", "modbus_down_10min_boot", "inverter_rounds", "inverter_clamps", "grid_outage")
 
 
 def battery_sim(M, normal: int = 80, report: bool = False) -> list[str]:
@@ -187,6 +221,8 @@ def battery_sim(M, normal: int = 80, report: bool = False) -> list[str]:
         want = EXPECTED_FAULT_OUTCOME.get(sc.name)
         if want and r["last_reason"] != want:
             bad.append(f"{sc.name}: ended {r['last_reason']}, designed {want}")
+        if sc.name in MUST_RESTORE and (r["final_state"] != "IDLE" or r["final_reg"] != sc.original_sp):
+            bad.append(f"{sc.name}: ended {r['final_state']} with the slot power at {r['final_reg']}")
         if not want and r["last_reason"] not in ("R_TARGET_REACHED", "R_DEADLINE", "R_TARGET_GUARD"):
             bad.append(f"{sc.name}: ended {r['last_reason']}")
     if report:
@@ -201,12 +237,11 @@ def battery_sim(M, normal: int = 80, report: bool = False) -> list[str]:
 # ===========================================================================================================
 MUTANTS = [
     ("floor clamp removed", "return max(c.floor_w, min(ceiling, r))", "return min(ceiling, r)"),
-    ("ceiling ignores the pre-lease value", "ceiling = min(self.original, i.plan.ceiling_w, c.fw_bound_w)",
-     "ceiling = min(i.plan.ceiling_w, c.fw_bound_w)"),
-    ("ceiling ignores the owner limit", "ceiling = min(self.original, i.plan.ceiling_w, c.fw_bound_w)",
-     "ceiling = min(self.original, c.fw_bound_w)"),
-    ("ceiling not rounded down", "min(self.original, i.plan.ceiling_w, c.fw_bound_w) // c.round_w * c.round_w",
-     "min(self.original, i.plan.ceiling_w, c.fw_bound_w)"),
+    ("ceiling ignores the pre-lease value", "hard = min(self.original, c.fw_bound_w) // c.round_w * c.round_w",
+     "hard = c.fw_bound_w // c.round_w * c.round_w"),
+    ("ceiling ignores the owner limit", "ceiling = min(hard, owner)", "ceiling = hard"),
+    ("ceiling not rounded down", "hard = min(self.original, c.fw_bound_w) // c.round_w * c.round_w",
+     "hard = min(self.original, c.fw_bound_w)"),
     ("no step cap", "raw = max(self.v - c.max_step_w, min(self.v + c.max_step_w, raw))", "raw = raw"),
     ("rounding floors", "r = (raw + c.round_w // 2) // c.round_w * c.round_w", "r = raw // c.round_w * c.round_w"),
     ("no hysteresis in the lease", "        if abs(delta) < c.hyst_w:\n", "        if abs(delta) < 0:\n"),
@@ -223,10 +258,10 @@ MUTANTS = [
      "if self.writes_night + 1 > c.night_write_ceiling - c.max_restore_attempts:\n            return R_REFUSE_WRITE_BUDGET",
      "if self.writes_night + 1 > c.night_write_ceiling:\n            return R_REFUSE_WRITE_BUDGET"),
     ("END lost while a write is in flight",
-     "        if i.end:\n            self.end_pending = True\n        if st == ADJUSTING:\n            self._adjusting(i, o)\n"
-     "            return o\n",
-     "        if st == ADJUSTING:\n            self._adjusting(i, o)\n            return o\n        if i.end:\n"
-     "            self.end_pending = True\n"),
+     "        if i.end:\n            self.end_pending = True\n        if not i.grid_ok:\n            self.grid_pending = True\n"
+     "        if st == ADJUSTING:\n            self._adjusting(i, o, res)\n            return o\n",
+     "        if not i.grid_ok:\n            self.grid_pending = True\n        if st == ADJUSTING:\n"
+     "            self._adjusting(i, o, res)\n            return o\n        if i.end:\n            self.end_pending = True\n"),
     ("lost wall clock ignored", "if i.epoch == 0 or i.local_min < 0:\n            return R_CLOCK_INVALID",
      "if False:\n            return R_CLOCK_INVALID"),
     ("clock change ignored in a lease", "if i.clock_change_night:\n            return R_CLOCK_CHANGE\n",
@@ -263,7 +298,7 @@ MUTANTS = [
     ("target reached ignored", "if i.soc >= self.target * 10:\n            return R_TARGET_REACHED",
      "if False:\n            return R_TARGET_REACHED"),
     ("no target guard in a lease",
-     "if self._guard_trips(i.epoch, i.soc, self.target, self.capacity_wh, self.p0, self.window_end, self.taper):",
+     "if self._guard_trips(i.epoch, i.soc, self.target, self.capacity_wh, self.p0, slot_end, self.taper):",
      "if False:"),
     ("target guard ignores the taper tail", "e_tail = (tgt - max(soc, knee)) * capacity_wh // 1000", "e_tail = 0"),
     ("target guard without its margin", "return epoch + t_need + c.guard_margin_s >= window_end - c.end_margin_s",
@@ -284,9 +319,11 @@ MUTANTS = [
      "if self.restore_attempts >= c.max_restore_attempts:\n                    self._fault(o, R_RESTORE_FAILED)",
      "if False:\n                    self._fault(o, R_RESTORE_FAILED)"),
     ("a FOREIGN restore result counts as restored",
-     "                self._fault(o, R_FOREIGN)\n            elif i.op == OP_FAIL",
-     "                self._clear_lease()\n                self.state = IDLE\n            elif i.op == OP_FAIL"),
-    ("no restore backoff", "self.restore_next_ms = (i.now_ms + c.restore_backoff_ms) & MASK32", "self.restore_next_ms = i.now_ms"),
+     "                self._fault(o, R_FOREIGN)\n            elif res in (OP_NO_ANSWER, OP_DEFERRED):",
+     "                self._clear_lease()\n                self.state = IDLE\n            elif res in (OP_NO_ANSWER, OP_DEFERRED):"),
+    ("no restore backoff",
+     "self.restore_next_ms = (i.now_ms + c.restore_backoff_ms) & MASK32\n                    o.event = R_RESTORE_RETRY",
+     "self.restore_next_ms = i.now_ms\n                    o.event = R_RESTORE_RETRY"),
     ("wrong direction unchecked", "if dirn * act < 0 and abs(act) > c.wrong_dir_w:", "if False:"),
     ("weak responses never counted", "            self.ineffective += 1\n", "            self.ineffective += 0\n"),
     ("response gain unchecked",
@@ -302,28 +339,137 @@ MUTANTS = [
      "if g < c.gain_min_pct or g > c.gain_max_pct:\n            return R_REFUSE_IMPLAUSIBLE",
      "if False:\n            return R_REFUSE_IMPLAUSIBLE"),
     ("the arm never expires", "if elapsed(i.now_ms, self.armed_ms) >= c.arm_window_ms:", "if False:"),
-    ("the pending value is not owned", "if live == v or live == p:", "if live == v:"),
+    ("the pending value is not owned", "if live == v or live == p or (q >= 0 and live == q):",
+     "if live == v or (q >= 0 and live == q):"),
     ("the record CRC is not checked",
-     "if int.from_bytes(b[24:28], \"little\") != (zlib.crc32(bytes(b[0:24])) & MASK32):\n        return DEC_BAD_CRC, r",
+     "if int.from_bytes(b[28:32], \"little\") != (zlib.crc32(bytes(b[0:28])) & MASK32):\n        return DEC_BAD_CRC, r",
      "if False:\n        return DEC_BAD_CRC, r"),
     ("an active record boots idle",
      "        if rec.flags & F_ACTIVE:\n            if self.restore_attempts >= self.c.max_restore_attempts:",
      "        if False:\n            if self.restore_attempts >= self.c.max_restore_attempts:"),
-    ("the lease may outlast the slot", "if lease_end - i.epoch > to_end_s:\n            return R_REFUSE_SLOT",
+    ("the lease may outlast the slot (no window check at START)",
+     "if abs(pl.window_end - slot_end) > c.window_match_s:\n            return R_REFUSE_SLOT",
      "if False:\n            return R_REFUSE_SLOT"),
     ("START ignores the slot's own target",
      "if not i.slot_grid or i.slot_target != pl.target or not in_slot(i.local_min, i.slot_start_min, i.slot_end_min):\n"
      "            return R_REFUSE_SLOT", "if not i.slot_grid:\n            return R_REFUSE_SLOT"),
     ("no operation timeout",
-     "        elif elapsed(i.now_ms, self.op_start_ms) >= c.op_timeout_ms:\n            self.op_pending = False\n"
-     "            self._begin_restore(i, o, R_OP_TIMEOUT)",
-     "        elif False:\n            self.op_pending = False\n            self._begin_restore(i, o, R_OP_TIMEOUT)"),
-    ("OK_NOWRITE accepted for a change", "if i.op in (OP_FAIL, OP_OK_NOWRITE):", "if i.op == OP_FAIL:"),
-    ("ACK without a fresh configuration read", "if i.ack and i.cfg_age_ms <= self.c.config_stale_ms:", "if i.ack:"),
+     "        elif elapsed(i.now_ms, self.op_start_ms) >= c.op_timeout_ms:\n            self._begin_restore(i, o, R_OP_TIMEOUT)",
+     "        elif False:\n            self._begin_restore(i, o, R_OP_TIMEOUT)"),
+    ("OK_NOWRITE accepted for a change", "        elif res == OP_OK_NOWRITE:\n            self._begin_restore(i, o, R_WRITE_FAILED)\n",
+     ""),
+    ("ACK without a fresh configuration read", "if i.ack and i.cfg_age_ms <= c.config_stale_ms:", "if i.ack:"),
     ("relative step ignores the realised power", "raw = self.v * plan_power(i.plan, i.epoch) // self.p_ref",
      "raw = plan_power(i.plan, i.epoch)"),
     ("plan points ignored after the first", "        if pl.t[k] <= epoch:\n            val = pl.p[k]",
      "        if pl.t[k] <= epoch:\n            val = pl.p[0]"),
+    # ---- revision 2 (the review findings). B1: only answered restore failures count; the restore waits for the
+    # inverter; the readback under the GRC's own lock is owned; the owner's Restore original in FAULT
+    ("an unanswered restore spends an attempt", "self.restore_attempts = max(0, self.restore_attempts - 1)",
+     "self.restore_attempts = self.restore_attempts"),
+    ("an unanswered restore keeps its write",
+     "                self.writes_night = max(0, self.writes_night - 1)\n                self.restore_next_ms",
+     "                self.restore_next_ms"),
+    ("an unanswered restore is retried without a backoff",
+     "self.restore_next_ms = (i.now_ms + c.restore_backoff_ms) & MASK32\n                o.event = R_RESTORE_UNANSWERED",
+     "self.restore_next_ms = i.now_ms\n                o.event = R_RESTORE_UNANSWERED"),
+    ("an unanswered restore is a failure", "            elif res in (OP_NO_ANSWER, OP_DEFERRED):\n                # nothing was",
+     "            elif False:\n                # nothing was"),
+    ("the restore does not wait for the inverter to answer",
+     "if i.rx_age_ms > c.rx_fresh_ms:\n            return\n        if self.writes_night + 1 > c.night_write_ceiling:",
+     "if False:\n            return\n        if self.writes_night + 1 > c.night_write_ceiling:"),
+    ("a clamped readback is not owned (revision 1: R_WRITE_FAILED, then FOREIGN)",
+     "            self.q = i.op_value\n            self._begin_restore(i, o, R_READBACK_MISMATCH)",
+     "            self._begin_restore(i, o, R_WRITE_FAILED)"),
+    ("the classifier ignores the owned readback", "if live == v or live == p or (q >= 0 and live == q):",
+     "if live == v or live == p:"),
+    ("the restore's own readback is not owned",
+     "                if res == OP_FAIL:\n                    self._own_readback(i)\n                if self.restore_attempts",
+     "                if self.restore_attempts"),
+    ("the owned readback is not persisted", "        if rb:\n            r.q = self.q\n", ""),
+    ("the boot forgets the owned readback", "self.q = rec.q if rec.flags & F_READBACK else -1", "self.q = -1"),
+    ("Restore original without a known original", "if self.original == 0 or busy or", "if busy or"),
+    ("Restore original on a busy bus", "busy = i.rtc_busy or i.mutex_busy or i.rx_age_ms > c.rx_fresh_ms",
+     "busy = i.rx_age_ms > c.rx_fresh_ms"),
+    ("Restore original on a silent inverter", "busy = i.rtc_busy or i.mutex_busy or i.rx_age_ms > c.rx_fresh_ms",
+     "busy = i.rtc_busy or i.mutex_busy"),
+    ("Restore original beyond the night's write ceiling",
+     "if self.original == 0 or busy or self.writes_night + 1 > c.night_write_ceiling:",
+     "if self.original == 0 or busy:"),
+    ("FAULT restores without the owner's pulse", "        if i.restore_req:\n            busy =",
+     "        if True:\n            busy ="),
+    ("an unanswered Restore original keeps its write",
+     "                self.writes_night = max(0, self.writes_night - 1)\n                o.event = R_RESTORE_UNANSWERED",
+     "                o.event = R_RESTORE_UNANSWERED"),
+    # M2: results are tagged with the action's sequence number and kind
+    ("a result is taken whatever its sequence",
+     "if self.op_pending and i.op_seq == self.op_seq and i.op_kind == self.op_kind:",
+     "if self.op_pending and i.op_kind == self.op_kind:"),
+    ("a result is taken whatever its kind",
+     "if self.op_pending and i.op_seq == self.op_seq and i.op_kind == self.op_kind:",
+     "if self.op_pending and i.op_seq == self.op_seq:"),
+    ("a result is taken without an outstanding operation",
+     "if self.op_pending and i.op_seq == self.op_seq and i.op_kind == self.op_kind:",
+     "if i.op_seq == self.op_seq and i.op_kind == self.op_kind:"),
+    ("the sequence number does not advance", "self.seq = (self.seq + 1) & MASK32", "self.seq = self.seq & MASK32"),
+    ("a deferred change does not end the lease", "        elif res == OP_DEFERRED:\n            self._begin_restore",
+     "        elif False:\n            self._begin_restore"),
+    ("an unanswered change does not end the lease", "        elif res == OP_NO_ANSWER:\n            self._begin_restore",
+     "        elif False:\n            self._begin_restore"),
+    # M3: the plan is cross-checked against the firmware's own bounds
+    ("the revision 1 slot check: the plan's window end trusted",
+     "        slot_end = slot_end_epoch(i.epoch, i.local_min, i.slot_end_min)\n"
+     "        if abs(pl.window_end - slot_end) > c.window_match_s:\n            return R_REFUSE_SLOT\n"
+     "        lease_end = min(pl.deadline, slot_end - c.end_margin_s)\n",
+     "        slot_end = pl.window_end\n        lease_end = min(pl.deadline, pl.window_end - c.end_margin_s)\n"
+     "        if lease_end - i.epoch > mod1440(i.slot_end_min - i.local_min) * 60 - 60:\n            return R_REFUSE_SLOT\n"),
+    ("the plan's window end is not checked in a lease",
+     "if abs(pl.window_end - slot_end) > c.window_match_s:\n            return R_PLAN_WINDOW",
+     "if False:\n            return R_PLAN_WINDOW"),
+    ("the target guard uses the plan's window end",
+     "if self._guard_trips(i.epoch, i.soc, self.target, self.capacity_wh, self.p0, slot_end, self.taper):",
+     "if self._guard_trips(i.epoch, i.soc, self.target, self.capacity_wh, self.p0, pl.window_end, self.taper):"),
+    ("the lease end ignores the slot's own end",
+     "self.lease_end = min(pl.deadline, slot_end_epoch(i.epoch, i.local_min, i.slot_end_min) - c.end_margin_s)",
+     "self.lease_end = min(pl.deadline, pl.window_end - c.end_margin_s)"),
+    ("the lease end stops following the slot's own end", "cand = min(pl.deadline, slot_end - c.end_margin_s)",
+     "cand = min(pl.deadline, pl.window_end - c.end_margin_s)"),
+    ("the slot end does not wrap midnight", "return epoch + mod1440(slot_end_min - local_min) * 60 - 60",
+     "return epoch + (slot_end_min - local_min) * 60 - 60"),
+    ("the in_slot wrap branch is never true", "    if start > end:\n        return m >= start or m < end",
+     "    if start > end:\n        return False"),
+    ("no capacity floor at START",
+     "if self._guard_trips(i.epoch, i.soc, pl.target, max(pl.capacity_wh, c.capacity_floor_wh), i.batt_w, slot_end,",
+     "if self._guard_trips(i.epoch, i.soc, pl.target, pl.capacity_wh, i.batt_w, slot_end,"),
+    ("no capacity floor in the lease", "self.capacity_wh = max(pl.capacity_wh, c.capacity_floor_wh)",
+     "self.capacity_wh = pl.capacity_wh"),
+    ("a later plan may lower the guard's capacity", "if cap > self.capacity_wh:", "if cap != self.capacity_wh:"),
+    ("the guard accepts any taper knee", "knee = min(tgt, min(taper, c.taper_max_pct) * 10)", "knee = min(tgt, taper * 10)"),
+    ("the owner ceiling bypasses the step cap (revision 1)",
+     "owner = max(i.plan.ceiling_w, (max(0, self.v - c.max_step_w) + c.round_w - 1) // c.round_w * c.round_w)",
+     "owner = i.plan.ceiling_w"),
+    # M4: a direct grid-loss input
+    ("grid loss ignored in a lease", "if self.grid_pending:\n            return R_GRID_LOSS",
+     "if False:\n            return R_GRID_LOSS"),
+    ("START with the grid lost", "if not i.grid_ok:\n            return R_REFUSE_GRID", "if False:\n            return R_REFUSE_GRID"),
+    ("grid loss not latched while a write is in flight",
+     "        if not i.grid_ok:\n            self.grid_pending = True\n        if st == ADJUSTING:\n"
+     "            self._adjusting(i, o, res)\n            return o\n",
+     "        if st == ADJUSTING:\n            self._adjusting(i, o, res)\n            return o\n"
+     "        if not i.grid_ok:\n            self.grid_pending = True\n"),
+    ("grid loss not acted on at the verified write", "            if self.grid_pending:\n                self._begin_restore",
+     "            if False:\n                self._begin_restore"),
+    ("END outranks grid loss",
+     "        if self.grid_pending:\n            return R_GRID_LOSS\n        if self.end_pending:\n            return R_END\n",
+     "        if self.end_pending:\n            return R_END\n        if self.grid_pending:\n            return R_GRID_LOSS\n"),
+    # M5: the restore operation timeout (it survived every battery in revision 1)
+    ("no restore operation timeout",
+     "            elif res == OP_FAIL or elapsed(i.now_ms, self.op_start_ms) >= c.op_timeout_ms:\n"
+     "                self.op_pending = False\n                if res == OP_FAIL:\n                    self._own_readback(i)\n"
+     "                if self.restore_attempts",
+     "            elif res == OP_FAIL:\n"
+     "                self.op_pending = False\n                if res == OP_FAIL:\n                    self._own_readback(i)\n"
+     "                if self.restore_attempts"),
 ]
 
 
@@ -365,7 +511,8 @@ def main() -> int:
 
     print("[4] closed loop against the independent truth battery (simulator.py)")
     bad = battery_sim(M, 80, report=True)
-    check("80 normal + 20 fault nights: no violation, never worse than today, gentler, designed fault outcomes",
+    check(f"80 normal + {len(S.fault_scenarios(500))} fault nights: no violation, never worse than today, gentler, "
+          "designed fault outcomes",
           not bad, "; ".join(bad[:5]))
 
     print(f"[5] mutation ({len(MUTANTS)} mutants)")
@@ -383,7 +530,7 @@ def main() -> int:
         if not bad:
             survivors.append(name)
         print(f"        {'killed' if bad else 'SURVIVED'}: {name}" + (f"  <- {bad[0][:90]}" if bad else ""))
-    check(f"every one of {len(MUTANTS)} mutants is killed (at least 40)", not survivors and len(MUTANTS) >= 40,
+    check(f"every one of {len(MUTANTS)} mutants is killed (at least 100)", not survivors and len(MUTANTS) >= 100,
           ", ".join(survivors))
     sys.modules["grc_reference_model"] = M
 
