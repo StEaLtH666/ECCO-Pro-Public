@@ -181,7 +181,10 @@ test("unusable inputs: unknown, stale or implausible data is never guessed and n
     assert.equal(p.actuationSupported, false);
   }
   assert.equal(planGentleNight(null as unknown as GentleNightInput).codes[0], "INPUT_INVALID");
-  assert.equal(plan({ socAgeMin: 15 }).status, "OK", "the age limit is inclusive");
+  // the age limit is inclusive; with nothing in force the battery supplied the house for those 15 minutes, so a drain bound is needed (confirmation
+  // review MAJOR 3): without one the plan is refused, never guessed; with 0 W given explicitly the SOC is the reading
+  assert.equal(plan({ socAgeMin: 15, drainBoundW: 0 }).status, "OK", "the age limit is inclusive");
+  assert.deepEqual(plan({ socAgeMin: 15 }).codes, ["DRAIN_UNKNOWN_AGED_READING"]);
   assert.equal(plan({ elapsedMin: -721 }).codes[0], "ELAPSED_INVALID");
 });
 

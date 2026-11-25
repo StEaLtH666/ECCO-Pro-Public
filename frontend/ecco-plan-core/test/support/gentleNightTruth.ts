@@ -8,10 +8,12 @@
 // Three families: IN_ENVELOPE (capacity +-6 %, efficiency 0.90 to 0.97, scale +-3 %, knee 91 to 99, tail 1/8 to 1/3 of the plateau at the knee): the planner's declared
 // bands cover these, so a plan called feasible must make the deadline. KNEE_MIDWINDOW (review finding BLOCKER 1): the same bands, but the battery starts within a
 // few points of its knee with an OUTSIDE rate in force that runs for 5 to 20 minutes before the planner is first asked, so the knee may already be crossed at that
-// rate. STRESS (knee from 85, tail from 0, a slow trickle decay after the fall): outside the declared bands, used only to check the safety invariants and honest
-// reporting, never to claim the deadline.
+// rate. KNEE_MIDWINDOW_AGED (confirmation review BLOCKER): the same, but the planner's first reading is 10 to 15 minutes old (inside the accepted age), and in
+// half the nights (the worst knee corner, a low-reading sensor) the outside rate crosses the knee AFTER that reading and before the first call. STRESS (knee
+// from 85, tail from 0, a slow trickle decay after the fall): outside the declared bands, used only to check the safety invariants and honest reporting, never
+// to claim the deadline. `drainTo` runs the battery with nothing charging it, supplying the house (a battery-side power), for the drain checks.
 
-export type TruthFamily = "IN_ENVELOPE" | "KNEE_MIDWINDOW" | "STRESS";
+export type TruthFamily = "IN_ENVELOPE" | "KNEE_MIDWINDOW" | "KNEE_MIDWINDOW_AGED" | "STRESS";
 
 export interface TruthParams {
   seed: number;
@@ -46,6 +48,8 @@ export interface TruthParams {
   preRunMin?: number;
   /** An adversarial sensor inside the noise band: the displayed reading is always the LOWEST the noise allows (clean - noiseAmp, rounded). */
   lowReading?: boolean;
+  /** KNEE_MIDWINDOW_AGED only: the planner's first reading is the one taken this many minutes before its first call. */
+  firstReadingAgeMin?: number;
 }
 
 /** A small seeded generator (xorshift-style), separate from the one in fixtures.ts. */
@@ -62,11 +66,34 @@ function makeGen(seed: number): () => number {
 }
 
 export function drawTruth(seed: number, family: TruthFamily): TruthParams {
-  const g = makeGen(seed * 7919 + (family === "STRESS" ? 104729 : family === "KNEE_MIDWINDOW" ? 130363 : 1));
+  const g = makeGen(seed * 7919 + (family === "STRESS" ? 104729 : family === "KNEE_MIDWINDOW" ? 130363 : family === "KNEE_MIDWINDOW_AGED" ? 155921 : 1));
   for (let i = 0; i < 4; i++) g();
   const u = (a: number, b: number): number => a + (b - a) * g();
   const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(g() * xs.length) % xs.length] as T;
   const helperKwh = Math.round(u(20, 40) * 10) / 10;
+  if (family === "KNEE_MIDWINDOW_AGED") {
+    // half the nights in the worst knee corner (knee at true 91, a low-reading sensor, much noise), started so that the outside rate crosses the knee between
+    // the reading (10 to 15 minutes before the first call) and the first call; the other half anywhere in the envelope a few points either side of the knee
+    const corner = g() < 0.5;
+    const kneeTrue = corner ? u(91, 91.1) : u(91, 99);
+    const ownerLimitW = pick([8000, 8000, 6000, 4000]);
+    const outsideW = 100 * Math.round(u(10, Math.min(60, ownerLimitW / 100)));
+    const firstReadingAgeMin = u(10, 15);
+    const preRunMin = 5 * Math.ceil((firstReadingAgeMin + u(0, 10)) / 5);
+    const capKwh = helperKwh * u(0.94, 1.06);
+    const unit: "AC" | "DC" = g() < 0.5 ? "AC" : "DC";
+    const effAc = u(0.9, 0.97);
+    const dcOver = u(1, 1.08);
+    // true points a minute on the plateau at the outside rate: the knee is crossed at preRunMin - f x age, f from 0.1 to 0.9, after the reading
+    const perMin = ((outsideW * (unit === "AC" ? effAc : dcOver)) / 1000 / 60 / capKwh) * 100;
+    const startTrueSoc = corner ? kneeTrue - perMin * (preRunMin - u(0.1, 0.9) * firstReadingAgeMin) : Math.min(99.5, kneeTrue + u(-6, 1));
+    return {
+      seed, family, helperKwh, capKwh, unit, effAc, dcOver, sensorErr: corner ? u(0.029, 0.03) : u(-0.03, 0.03), kneeTrue, tailFrac: corner ? u(0.125, 0.2) : u(0.125, 0.35),
+      dropMin: corner ? u(1, 2) : u(1, 5), trickleDecayPerHour: 0, noiseAmp: corner ? u(0.4, 0.45) : u(0.1, 0.45), startTrueSoc, windowMin: 5 * Math.round(u(150, 300) / 5),
+      bufferMin: pick([0, 15, 30, 45, 60, 60, 90]), targetPct: pick([93, 95, 95, 97, 100]), ownerLimitW,
+      profile: pick(["UNCONSTRAINED", "FREE_POWER_LEASE", "TOU_SLOT_EDITOR", "RATE_CONTROLLER_PROPOSED"] as const), outsideW, preRunMin, lowReading: corner, firstReadingAgeMin,
+    };
+  }
   if (family === "KNEE_MIDWINDOW") {
     // half the nights sit in the envelope's worst knee corner (the knee at true 91 shows at a reading just above 90.7, much noise), started just below
     // the knee so the outside rate crosses it before the first call; the other half anywhere in the envelope, a few points either side of the knee
@@ -105,6 +132,8 @@ export interface Truth {
   trueSoc(): number;
   /** Runs the battery with a constant commanded setpoint until the given minute. The inverter stops grid charging once the clean reading reaches the target. */
   runTo(untilMin: number, setpointW: number): void;
+  /** Runs the battery with nothing charging it until the given minute, supplying the house at a constant battery-side power (W). */
+  drainTo(untilMin: number, batteryW: number): void;
   /** The first minute at which the clean reading was at or above the target, or null. */
   reachedAt(): number | null;
   /** The highest battery-side power seen and the highest commanded setpoint, for the ceiling checks. */
@@ -162,6 +191,14 @@ export function createTruth(p: TruthParams): Truth {
         t += dt;
         const after = clean();
         if (reached === null && after >= p.targetPct - 1e-9) reached = after > before ? t - dt + (dt * (p.targetPct - before)) / (after - before) : t;
+      }
+    },
+    drainTo(untilMin: number, batteryW: number) {
+      const dt = 0.5;
+      while (t < untilMin - 1e-9) {
+        const step = Math.min(dt, untilMin - t);
+        kwh = Math.max(0, kwh - (batteryW / 1000) * (step / 60));
+        t += step;
       }
     },
   };

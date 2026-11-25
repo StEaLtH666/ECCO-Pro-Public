@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { planGentleNight, windowFromSlotTable, NIGHT_CODES } from "../src/gentleNight.ts";
-import type { GentleNightInput, GentleNightPlan } from "../src/gentleNight.ts";
+import type { GentleNightInput, GentleNightPlan, NightCode } from "../src/gentleNight.ts";
 import { GENTLE_ACTUATOR_PROFILES, maxChargePowerCeiling } from "../src/gentleController.ts";
 import { rng, slot } from "./fixtures.ts";
 
@@ -35,12 +35,21 @@ test("BLOCKER 1: the knee is decided from the reading's optimistic estimate: fro
       assert.ok(p.codes.includes("RATE_AT_CEILING"), what);
     }
   }
-  // by hand, reading 90: the pessimistic world starts ON THE TAIL at 89 with 225 W for 235 min: 0.88125 kWh = 2.544 points, so 91.5 at the deadline
-  near(band(gen({ elapsedMin: 5, socPct: 90, targetSocPct: 95, inForce })).pessimisticHeld.socAtDeadlinePct, 91.5, 0.05, "SOC at the deadline");
-  // just below the threshold (88.9 + 1.0 < 90) the knee is surely ahead: the raise is credited and made (the threshold is inclusive, not a margin)
-  const below = gen({ elapsedMin: 5, socPct: 88.9, targetSocPct: 95, inForce });
+  // by hand, reading 90: the pessimistic world takes the worse of its two consistent starts (confirmation review MINOR: the earlier start on the tail at 89,
+  // below its own knee, was a state the model cannot be in). Past the knee: AT the knee 90 on the tail, 225 W for 235 min: 0.88125 kWh = 2.544 points, so
+  // 92.54. Not yet past it: the plateau from 89 at 1.8 kW (0.086603 points a minute) reaches 90 in 11.55 min, the cliff minute adds 0.0487 points, then the
+  // tail 0.010825 points a minute for 222.45 min adds 2.408: 92.46. The lower of the two, to a tenth: 92.5 (91.5 before, kept as a killed mutant)
+  near(band(gen({ elapsedMin: 5, socPct: 90, targetSocPct: 95, inForce })).pessimisticHeld.socAtDeadlinePct, 92.5, 0.05, "SOC at the deadline");
+  // the threshold also counts the charge possible since the reading (confirmation review BLOCKER): the reading is 1 min old and 2000 W is in force, so
+  // 1 x 2000 x 1.1 / 60000 / 0.289301 = 0.1267 points: held from 90 - 1.0 - 0.1267 = 88.873 (inclusive). Just below it (88.8 + 1.1267 < 90) the knee is
+  // surely ahead: the raise is credited and made; at 88.9 (90.027) it is held (88.9 was the first reading credited before, without the age)
+  const below = gen({ elapsedMin: 5, socPct: 88.8, targetSocPct: 95, inForce });
   assert.equal(below.now.change, "INCREASE");
   assert.ok(!below.codes.includes("HELD_PAST_KNEE"));
+  near(below.assumptions?.chargeSinceReadingPct, (2000 * 1.1) / 60000 / ((31.7 * 0.94) / 1.03 / 100), 0.006, "the charge since a 1 min old reading");
+  const at = gen({ elapsedMin: 5, socPct: 88.9, targetSocPct: 95, inForce });
+  assert.equal(at.now.change, "KEEP");
+  assert.ok(at.codes.includes("HELD_PAST_KNEE"));
   // a target at or below the pessimistic knee is reached on the plateau: no hold there
   assert.notEqual(gen({ elapsedMin: 5, socPct: 89.5, targetSocPct: 90, inForce }).now.change, "KEEP");
 });
@@ -54,10 +63,14 @@ test("BLOCKER 1: a start past the knee is on the tail, anchored at the lower of 
   const raise = gen({ elapsedMin: 100, socPct: 93, targetSocPct: 95, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 0 } });
   assert.equal(raise.now.neededW, 8000);
   assert.equal(raise.now.neededMeetsDeadline, false);
-  // a START past the knee (nothing in force) anchors at the start rate itself: 3 points in 140 min need 1.03924 kWh / (140/60 h) / (0.125 x 0.9) = 3959 W, so 4000 W
+  // a START past the knee (nothing in force) crosses the knee AT the start, at the start rate (nothing has charged before: confirmation review MINOR, a START
+  // is monotone in the SOC): the one-minute cliff delivers (1 + 0.125) / 2 of the plateau, then the tail. 3900 W: plateau 3.51 kW / 60 / 0.346412 = 0.16888
+  // points a minute, the cliff 0.0950 points, the tail 0.021110 points a minute: (3 - 0.0950) / 0.021110 + 1 = 138.6 min <= 140. 3800 W: 0.16455, the cliff
+  // 0.0926, the tail 0.020569: 142.4 min > 140. So 3900 W (4000 W before, when the fall was taken as already over at a START: kept as a killed mutant)
   const start = gen({ elapsedMin: 100, socPct: 93, targetSocPct: 95 });
   assert.equal(start.now.change, "START");
-  assert.equal(start.now.setpointW, 4000);
+  assert.equal(start.now.setpointW, 3900);
+  near(band(start).pessimisticHeld.finishMin, 100 + 1 + (3 - (1.125 / 2) * ((3.51 / 60) / PK)) / (0.125 * (3.51 / 60) / PK), 0.15, "the START's pessimistic finish");
 });
 
 test("BLOCKER 2: on a path that fixes the rate at the START, a rate in force above the ceiling gives STOP_RECOMMENDED, never a change; the band is the rate in force", () => {
@@ -122,10 +135,20 @@ test("BLOCKER 3: with any rate in force the outputs are numbers and never below 
   for (let i = 0; i < 500; i++) {
     const limit = [8000, 6000, 3000][Math.floor(r() * 3)] as number;
     const w = [0, 300, 500, 1000, 2000, 4000, 6000, 8000, 2050][Math.floor(r() * 9)] as number;
-    const p = plan({
-      actuatorProfile: profiles[Math.floor(r() * 4)] as (typeof profiles)[number], elapsedMin: Math.floor(r() * 300), socPct: Math.floor(r() * 1000) / 10, targetSocPct: 60 + Math.floor(r() * 41),
-      ceilings: [maxChargePowerCeiling(8000, limit)], inForce: { setpointW: w, lastChangeAtMin: Math.floor(r() * 200) - 60, changesUsed: Math.floor(r() * 3) },
-    });
+    // the same seeded draws in the same order as before; a last change drawn after now is refused since the confirmation review (MINOR), so the sweep
+    // takes it as made now, and the drawn record itself must be refused
+    const actuatorProfile = profiles[Math.floor(r() * 4)] as (typeof profiles)[number];
+    const elapsedMin = Math.floor(r() * 300);
+    const socPct = Math.floor(r() * 1000) / 10;
+    const targetSocPct = 60 + Math.floor(r() * 41);
+    const drawnChangeAt = Math.floor(r() * 200) - 60;
+    const changesUsed = Math.floor(r() * 3);
+    const over: Partial<GentleNightInput> = { actuatorProfile, elapsedMin, socPct, targetSocPct, ceilings: [maxChargePowerCeiling(8000, limit)] };
+    const p = plan({ ...over, inForce: { setpointW: w, lastChangeAtMin: Math.min(drawnChangeAt, elapsedMin), changesUsed } });
+    if (drawnChangeAt > elapsedMin) {
+      const q = plan({ ...over, inForce: { setpointW: w, lastChangeAtMin: drawnChangeAt, changesUsed } });
+      assert.ok(q.codes.includes("INPUT_INVALID") && q.now.setpointW === null && q.band === null, "a last change after now is refused: " + q.codes.join(","));
+    }
     for (const c of p.codes) assert.ok((NIGHT_CODES as readonly string[]).includes(c), c);
     if (p.band !== null) {
       for (const o of [p.band.pessimistic, p.band.pessimisticHeld, p.band.expected, p.band.optimistic]) {
@@ -164,8 +187,10 @@ test("MAJOR 4: before the window the SOC at the window start is the reading less
   // a battery at the target now may not be at the window start
   assert.equal(plan({ elapsedMin: -300, socPct: 81, preWindowDrainW: 600 }).status, "OK");
   assert.equal(plan({ elapsedMin: -10, socPct: 85, preWindowDrainW: 0 }).status, "NO_NEED");
-  // once the window is open the drain bound is ignored
-  assert.deepEqual(plan({ preWindowDrainW: 5000 }).now, plan().now);
+  // once the window is open the drain still counts while nothing charges (confirmation review MAJOR 3; "ignored once the window is open" before): a START
+  // counts it over the reading's age, 5000 W for 1 min = 0.08333 kWh = 0.2881 points; a rate in force charges, so with a reading taken in the window none
+  near(plan({ preWindowDrainW: 5000 }).assumptions?.socAtPlanStartPct, 20 - 5000 / 60 / 1000 / ((31.7 * 0.94) / 1.03 / 100), 0.006, "a START counts the drain over the age");
+  assert.equal(gen({ preWindowDrainW: 5000, elapsedMin: 30, inForce: { setpointW: 4000, lastChangeAtMin: 0, changesUsed: 0 } }).assumptions?.socAtPlanStartPct, 20, "a rate in force: no drain");
 });
 
 test("MAJOR 5: OK never relies on a later change: the owner-confirmed raise on the TOU editor gives TARGET_AT_RISK (the review's case: 3000 W in force, 5900 W needed)", () => {
@@ -264,4 +289,299 @@ test("MAJOR 7 survivors: the optimistic band, a miss inside the buffer, the lowe
   assert.equal(risk.bufferThatWouldFitMin, 40);
   // a slot table with an entry that is not a slot gives no window
   assert.equal(windowFromSlotTable([slot(60, 5000, 90, "Grid"), null as never, slot(180, 5000, 15, "None")]), null);
+});
+
+// ---- the independent confirmation review of 52ed09e (2 BLOCKER, 1 MAJOR, 5 MINOR, 11 surviving mutants): each pinned by a behavioural assertion ----------
+// More model numbers: the fewest kWh per point (the most points per kWh) for the trusted 31.7 kWh = 31.7 x 0.94 / 1.03 / 100 = 0.289301 (the drain and the
+// charge possible since a reading are counted in it), and the most realised power = the overshoot allowance 1.1 x the setpoint (above the best efficiency).
+const OPT = (31.7 * 0.94) / 1.03 / 100;
+const rc3000 = { setpointW: 3000, lastChangeAtMin: -60, changesUsed: 0 };
+const lease8000 = { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 };
+
+test("confirmation BLOCKER 1: the knee estimate counts the charge possible since the reading (age x rate in force x 1.1 in the most points per kWh) (by hand)", () => {
+  // 15 min at 3000 W: 15 x 3000 x 1.1 / 60000 / 0.289301 = 2.8517 points, so a rate in force is held from the reading 90 - 1.0 - 2.8517 = 86.148
+  const at = (socPct: number, socAgeMin: number): GentleNightPlan => plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin, socPct, targetSocPct: 95, inForce: rc3000 });
+  const held = at(86.2, 15);
+  near(held.assumptions?.chargeSinceReadingPct, (15 * 3000 * 1.1) / 60000 / OPT, 0.006, "the charge since the reading");
+  near(held.assumptions?.kneeEstimatePct, 86.2 + 1 + (15 * 3000 * 1.1) / 60000 / OPT, 0.006, "the knee estimate");
+  assert.equal(held.now.change, "KEEP");
+  assert.ok(held.codes.includes("HELD_PAST_KNEE"));
+  assert.notEqual(held.status, "OK");
+  assert.equal(held.now.neededMeetsDeadline, false, "past the knee the tail is anchored at 3000 W: 337.5 W from the knee 90 does not reach 95 in 220 min");
+  // just below the threshold (89.95 < 90) the knee is surely ahead: the raise is credited; the same reading 1 min old (0.19 points) likewise
+  assert.equal(at(86.1, 15).now.change, "INCREASE");
+  const fresh = at(86.2, 1);
+  assert.equal(fresh.now.change, "INCREASE");
+  near(fresh.assumptions?.chargeSinceReadingPct, (1 * 3000 * 1.1) / 60000 / OPT, 0.006, "1 min of age");
+  // nothing charges before the window opens: a reading taken 15 min before minute 5 counts those 5 min only (0.9506 points); the 10 min before the window
+  // need a drain bound (the battery supplied the house: MAJOR 3)
+  const early = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 5, socAgeMin: 15, socPct: 86.2, targetSocPct: 95, inForce: rc3000, drainBoundW: 0 });
+  near(early.assumptions?.chargeSinceReadingPct, (5 * 3000 * 1.1) / 60000 / OPT, 0.006, "only the window part of the age charges");
+  assert.equal(early.assumptions?.idleSinceReadingMin, 10);
+  // a change made after the reading: before it the rate is not known, so the firmware bound: 10 min at 8000 W, then 5 min at 3000 W: 6.0203 points
+  const changed = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, socPct: 80, targetSocPct: 95, inForce: { setpointW: 3000, lastChangeAtMin: 15, changesUsed: 1 } });
+  near(changed.assumptions?.chargeSinceReadingPct, ((10 * 8000 + 5 * 3000) * 1.1) / 60000 / OPT, 0.006, "an unknown rate before a change after the reading");
+  // the most points per kWh: a learned capacity SMALLER than the trusted one counts (25 kWh: 3.616 points)
+  const small = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, socPct: 80, targetSocPct: 95, inForce: rc3000, learnedCapacityKwh: 25 });
+  near(small.assumptions?.chargeSinceReadingPct, (15 * 3000 * 1.1) / 60000 / ((25 * 0.94) / 1.03 / 100), 0.006, "the smaller learned capacity");
+});
+
+test("confirmation BLOCKER 1 / MINOR: past the knee the pessimistic world is the WORSE of its two consistent starts; before the window a slot power set has not charged (by hand)", () => {
+  // reading 86.2 15 min old, 3000 W in force, target 91 (held: the estimate 90.05): past the knee, from the knee 90 on the tail 0.125 x 2.7 = 0.3375 kW: 1 point
+  // x 0.346412 kWh in 61.58 min; NOT yet past it, from 85.2 on the plateau (0.129904 points a minute) 4.8 points in 36.95 min, the cliff minute 0.0731, then the
+  // tail 0.016238 points a minute for the 0.9269 left: 57.08 min, 95.03 min in all. The later of the two: the plateau start, at minute 20 + 95.03
+  const both = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 20, socAgeMin: 15, socPct: 86.2, targetSocPct: 91, inForce: rc3000 });
+  assert.equal(both.now.change, "KEEP");
+  const perMin = 2.7 / 60 / PK;
+  near(band(both).pessimisticHeld.finishMin, 20 + 4.8 / perMin + 1 + (1 - (1.125 / 2) * perMin) / (0.125 * perMin), 0.1, "the later of the two starts");
+  assert.equal(both.status, "OK", "each start makes the deadline 240 (the battery is in one of the two cases)");
+  // the rate needed decides on both starts too: the plateau start needs 4.8 points x 0.346412 / (0.9 S) + 1 + (1 - cliff) x 0.346412 / (0.1125 S) <= 220 min:
+  // 1300 W gives 223.9 min, 1400 W 207.6 min, so 1400 W (the past start alone would accept 900 W: 0.1125 x 900 W carries the 1 point in 205 min)
+  assert.equal(both.now.neededW, 1400);
+  // and the start past the knee can be the later one: reading 90.9 with 8000 W in force (held), the plateau start from 89.9 reaches 90 in 0.29 min, its
+  // cliff minute carries 0.195 points, then the tail 900 W; the start past it carries all 5 points on the tail: 5 x 0.346412 / 0.9 x 60 = 115.47 min, 3.2 min later
+  const late = gen({ elapsedMin: 100, socPct: 90.9, targetSocPct: 95, inForce: { setpointW: 8000, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(late.now.change, "KEEP");
+  near(band(late).pessimisticHeld.finishMin, 100 + ((5 * PK) / 0.9) * 60, 0.1, "the start past the knee, the later one here");
+  // the threshold is inclusive: a reading of age 0 adds nothing, so 89 + 1.0 = 90 is held and 88.99 is not
+  const exact = (socPct: number): GentleNightPlan => gen({ elapsedMin: 5, socAgeMin: 0, socPct, targetSocPct: 95, inForce: { setpointW: 2000, lastChangeAtMin: -60, changesUsed: 0 } });
+  assert.ok(exact(89).codes.includes("HELD_PAST_KNEE"));
+  assert.equal(exact(88.99).now.change, "INCREASE");
+  // before the window (TOU, 2000 W set, reading 92, 30 min before, drain 0): nothing has charged yet, the knee is crossed at the window start at the rate in
+  // force then, so the raise is credited like a START (the review: KEEP AT_RISK before, while a START gave 3100 OK). From 91, crossed at the start: the cliff
+  // minute 0.5625 and 239 min of the tail 0.125 of the plateau must give 4 points: plateau 0.13142 points a minute, so 3035 W: 3100 W
+  const tou = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: -30, drainBoundW: 0, socPct: 92, targetSocPct: 95, inForce: { setpointW: 2000, lastChangeAtMin: -200, changesUsed: 0 } });
+  const start = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: -30, drainBoundW: 0, socPct: 92, targetSocPct: 95 });
+  assert.equal(start.now.setpointW, 3100);
+  assert.equal(tou.now.change, "INCREASE");
+  assert.equal(tou.now.setpointW, 3100);
+  assert.equal(tou.status, "OK");
+  assert.ok(!tou.codes.includes("HELD_PAST_KNEE"));
+  assert.equal(tou.assumptions?.chargeSinceReadingPct, 0);
+});
+
+test("confirmation MINOR: a START is monotone in the SOC with targets ABOVE the knee: a higher reading never needs a higher rate nor gets a worse status (before the window too)", () => {
+  const rank: Record<string, number> = { OK: 0, TARGET_AT_RISK: 1, UNREACHABLE: 2 };
+  let compared = 0;
+  for (const targetSocPct of [91, 93, 95, 97, 100]) {
+    for (const elapsedMin of [-30, 0, 100, 180]) {
+      for (const capacityKwh of [20, 31.7]) {
+        for (const bufferMin of [0, 60]) {
+          let prev: GentleNightPlan | null = null;
+          for (let s = 850; s <= 999; s++) {
+            const socPct = s / 10;
+            const p = plan({ targetSocPct, elapsedMin, capacityKwh, bufferMin, socPct, drainBoundW: 0, actuatorProfile: "FREE_POWER_LEASE" });
+            if (p.now.change !== "START") {
+              prev = null;
+              continue;
+            }
+            if (prev !== null) {
+              compared++;
+              const what = JSON.stringify({ targetSocPct, elapsedMin, capacityKwh, bufferMin, socPct });
+              assert.ok((p.now.setpointW as number) <= (prev.now.setpointW as number), "a higher reading raised the START: " + what);
+              assert.ok((rank[p.status] as number) <= (rank[prev.status] as number), "a higher reading made the status worse: " + what + " " + prev.status + " to " + p.status);
+            }
+            prev = p;
+          }
+        }
+      }
+    }
+  }
+  assert.ok(compared > 4000, "compared " + compared);
+  // the review's case, t = 100, target 95: 88.9 OK 6800 W, 89.0 TARGET_AT_RISK 8000 W, 90 OK 8000 W before; now all OK and falling
+  const r = (socPct: number): [string, number | null] => {
+    const p = plan({ elapsedMin: 100, socPct, targetSocPct: 95, actuatorProfile: "FREE_POWER_LEASE" });
+    return [p.status, p.now.setpointW];
+  };
+  assert.deepEqual([r(88.9), r(89), r(90)], [["OK", 6800], ["OK", 6800], ["OK", 6600]]);
+});
+
+// BLOCKER 2: every refusal after the parameters and the path are known. The lease (fixed rate) has 8000 W in force since before the window; the owner
+// limit is 6000 W unless the case says otherwise. [the path, the input, the refusal's own code, the known ceiling it breaches, its name]
+const EARLY: Array<[string, Partial<GentleNightInput>, NightCode, number, string]> = [
+  ["a target outside 10 to 100", { targetSocPct: 5 }, "TARGET_INVALID", 6000, "max_charge_power_effective"],
+  ["a buffer off the 5 minute step", { bufferMin: 7 }, "BUFFER_INVALID", 6000, "max_charge_power_effective"],
+  ["no charge window", { chargeWindow: null as unknown as { startMin: number; endMin: number } }, "WINDOW_INVALID", 6000, "max_charge_power_effective"],
+  ["an invalid clock day", { clockDay: { changeAtMin: 120, deltaMin: 30 } as unknown as GentleNightInput["clockDay"] }, "CLOCK_DAY_INVALID", 6000, "max_charge_power_effective"],
+  ["a clock-change night", { clockDay: { changeAtMin: 120, deltaMin: 60 } }, "CLOCK_CHANGE_NIGHT", 6000, "max_charge_power_effective"],
+  ["an elapsed time that is not a number", { elapsedMin: NaN }, "ELAPSED_INVALID", 6000, "max_charge_power_effective"],
+  ["no SOC", { socPct: null }, "NO_SOC", 6000, "max_charge_power_effective"],
+  ["a stale SOC", { socAgeMin: 30 }, "STALE_SOC", 6000, "max_charge_power_effective"],
+  ["a SOC above 100", { socPct: 101 }, "SOC_IMPLAUSIBLE", 6000, "max_charge_power_effective"],
+  ["a SOC jump against the previous reading", { previousSoc: { socPct: 10, elapsedMin: 55 } }, "SOC_IMPLAUSIBLE", 6000, "max_charge_power_effective"],
+  ["no usable capacity", { capacityKwh: 0 }, "CAPACITY_UNUSABLE", 6000, "max_charge_power_effective"],
+  ["a last change after now", { inForce: { setpointW: 8000, lastChangeAtMin: 100, changesUsed: 0 } }, "INPUT_INVALID", 6000, "max_charge_power_effective"],
+  ["two drain bounds that disagree", { drainBoundW: 100, preWindowDrainW: 200 }, "INPUT_INVALID", 6000, "max_charge_power_effective"],
+  ["no drain bound before the window", { elapsedMin: -30 }, "PRE_WINDOW_DRAIN_UNKNOWN", 6000, "max_charge_power_effective"],
+  ["no drain bound for a reading taken before the window", { elapsedMin: 5, socAgeMin: 15 }, "DRAIN_UNKNOWN_AGED_READING", 6000, "max_charge_power_effective"],
+  ["the reading at the target (the lease has no stop at a target SOC)", { socPct: 80 }, "AT_TARGET", 6000, "max_charge_power_effective"],
+  ["the window over", { elapsedMin: 300 }, "WINDOW_OVER", 6000, "max_charge_power_effective"],
+  ["only a stale ceiling (a stale lower value still caps)", { ceilings: [maxChargePowerCeiling(8000, 6000, 90)] }, "NO_SAFE_CEILING", 6000, "max_charge_power_effective"],
+  ["no ceiling list (the firmware bound, 9000 W in force)", { ceilings: null as unknown as GentleNightInput["ceilings"], inForce: { setpointW: 9000, lastChangeAtMin: -60, changesUsed: 0 } }, "NO_SAFE_CEILING", 8000, "firmware_setpoint_bound"],
+  ["a grid limit that is not a number", { household: { gridImportLimitW: -5 } }, "INPUT_INVALID", 6000, "max_charge_power_effective"],
+  ["a stale grid limit (6000 W: the headroom 4636 W)", { ceilings: [maxChargePowerCeiling(8000, 8000)], household: { gridImportLimitW: 6000, gridImportLimitAgeMin: 90, demandPeakW: 0, demandAgeMin: 1 } }, "GRID_LIMIT_STALE", 4600, "grid_headroom"],
+  ["a grid limit with the demand unknown (the limit alone: 6000 x 0.85 / 1.1 = 4636 W)", { ceilings: [maxChargePowerCeiling(8000, 8000)], household: { gridImportLimitW: 6000 } }, "DEMAND_UNKNOWN", 4600, "grid_import_limit"],
+  ["a grid headroom below the minimum (3000 - 2500 x 1.2 = 0)", { ceilings: [maxChargePowerCeiling(8000, 8000)], household: { gridImportLimitW: 3000, demandPeakW: 2500, demandAgeMin: 1 } }, "HEADROOM_BELOW_MIN", 0, "grid_headroom"],
+  ["an owner limit below the minimum (300 W)", { ceilings: [maxChargePowerCeiling(8000, 300)] }, "CEILING_BELOW_MIN", 300, "max_charge_power_effective"],
+];
+for (const [path, over, code, ceilingW, ceilingName] of EARLY) {
+  test("confirmation BLOCKER 2, early return '" + path + "': a lease rate in force above a known ceiling gives STOP_RECOMMENDED, never 'the fallback holds whatever is in force'", () => {
+    const p = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: { ...lease8000, lastChangeAtMin: -60 }, ...over });
+    assert.equal(p.status, "STOP_RECOMMENDED", p.codes.join(","));
+    assert.equal(p.stopRecommended, true);
+    assert.equal(p.now.change, "STOP");
+    assert.equal(p.now.setpointW, null);
+    assert.deepEqual(p.trajectory, []);
+    assert.equal(p.expectedFinish, null);
+    assert.equal(p.codes[0], code, p.codes.join(","));
+    assert.ok(p.codes.includes("FORCED_BELOW_CEILING") && p.codes.includes("ACTUATOR_FIXED_RATE"), p.codes.join(","));
+    assert.equal(p.now.ceilingW, ceilingW);
+    assert.equal(p.now.ceilingName, ceilingName);
+    assert.match(p.needed.join(" "), /Stop the charge on this path: the rate in force \(\d+ W\) is above the safe ceiling/);
+    assert.doesNotMatch(p.needed.join(" "), /fallback holds/);
+    assert.equal(p.profile?.id, "FREE_POWER_LEASE");
+    assert.equal(p.actuationSupported, false);
+  });
+}
+
+test("confirmation BLOCKER 2: on a path that can change, an early return with a rate above a known ceiling never says the fallback holds it (a STOP when no setpoint is that low, else it must come down); no breach keeps the plain refusal", () => {
+  // the editor, 2000 W in force, the owner limit lowered to 300 W: no setpoint on any path is that low, so a STOP (not ACTUATOR_FIXED_RATE: the path can change)
+  const low = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 300)], inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(low.status, "STOP_RECOMMENDED");
+  assert.deepEqual(low.codes, ["CEILING_BELOW_MIN", "FORCED_BELOW_CEILING"]);
+  assert.match(low.needed.join(" "), /which is below the lowest setpoint \(500 W\), so no setpoint is safe/);
+  // the editor, 8000 W in force above 6000 W, the SOC unknown: the refusal stays (a lower setpoint is possible), with the forced decrease said
+  const tou = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 60, socPct: null, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 });
+  assert.equal(tou.status, "INPUTS_UNUSABLE");
+  assert.deepEqual(tou.codes, ["NO_SOC", "FORCED_BELOW_CEILING"]);
+  assert.equal(tou.now.ceilingW, 6000);
+  assert.equal(tou.stopRecommended, false);
+  assert.match(tou.needed.join(" "), /must come down to at most 6000 W whatever else is unknown/);
+  assert.doesNotMatch(tou.needed.join(" "), /fallback holds/);
+  // no breach: at the ceiling, the lease keeps the plain refusal and its text
+  const fine = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: null, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: { setpointW: 6000, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(fine.status, "INPUTS_UNUSABLE");
+  assert.deepEqual(fine.codes, ["NO_SOC"]);
+  assert.match(fine.needed.join(" "), /the fallback holds whatever is in force/);
+  // before the parameters and the path are known no STOP can be decided: those refusals stay as they were
+  assert.deepEqual(plan({ actuatorProfile: "FREE_POWER_LEASE", params: { setpointOvershoot: 2 }, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 }).codes, ["PARAMS_INVALID"]);
+  assert.deepEqual(plan({ actuatorProfile: "MAGIC" as unknown as "UNCONSTRAINED", ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 }).codes, ["PROFILE_INVALID"]);
+});
+
+test("confirmation survivors R05, R06, R09, R07 and MINOR: a STOP gives the needed rate at the ceiling, no finish, margin or fit, and the band of the rate in force; an off-step rate above the ceiling is forced or stopped (by hand)", () => {
+  // R05: the rate a new START would need, at or below the ceiling: 41 points x 0.346412 = 14.2029 kWh in 180 min: 4.7343 kW / 0.9 = 5260 W, so 5300 W (not 8000)
+  const stop = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 });
+  assert.equal(stop.status, "STOP_RECOMMENDED");
+  assert.equal(stop.now.neededW, 5300);
+  assert.equal(stop.now.neededMeetsDeadline, true);
+  // MINOR: nothing is recommended to finish, so no expected finish, margin or buffer that fits; the band is what happens if nothing is done
+  assert.equal(stop.expectedFinish, null);
+  assert.equal(stop.marginMin, null);
+  assert.equal(stop.bufferThatWouldFitMin, null);
+  assert.ok(stop.band !== null);
+  // R06: past the knee the band is the 8000 W in force: from 92 on the tail 0.125 x 8000 x 0.9 = 900 W, 3 points x 0.346412 = 1.03924 kWh in 69.28 min (not the
+  // 6000 W ceiling: 675 W, 92.38 min)
+  const knee = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 93, targetSocPct: 95, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 });
+  assert.equal(knee.status, "STOP_RECOMMENDED");
+  near(band(knee).pessimisticHeld.finishMin, 60 + ((3 * PK) / 0.9) * 60, 0.1, "the band of the rate in force past the knee");
+  // R09: 6050 W in force above the 6000 W ceiling is off the step yet above the ceiling: forced down on the editor, stopped on the lease (the main-path STOP,
+  // with the band of the 6050 W in force: 14.2029 kWh at 5.445 kW = 156.50 min), never IN_FORCE_INVALID
+  const tou = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: { setpointW: 6050, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(tou.now.change, "DECREASE");
+  assert.equal(tou.now.setpointW, 6000);
+  assert.ok(tou.codes.includes("FORCED_BELOW_CEILING") && !tou.codes.includes("IN_FORCE_INVALID"));
+  const free = plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: { setpointW: 6050, lastChangeAtMin: 0, changesUsed: 0 } });
+  assert.equal(free.status, "STOP_RECOMMENDED");
+  near(band(free).pessimisticHeld.finishMin, 60 + ((41 * PK) / 5.445) * 60, 0.1, "the band of 6050 W");
+  // R07: the editor with no ordinary change left by the parameters can still lower the slot power (a forced decrease ignores the budget): not a STOP
+  const none = plan({ actuatorProfile: "TOU_SLOT_EDITOR", params: { maxChanges: 0 }, elapsedMin: 60, socPct: 40, ceilings: [maxChargePowerCeiling(8000, 6000)], inForce: lease8000 });
+  assert.equal(none.status, "OK");
+  assert.equal(none.now.change, "DECREASE");
+  assert.equal(none.now.setpointW, 6000);
+  assert.equal(none.stopRecommended, false);
+});
+
+test("confirmation survivors R01, R10, R11, R12, R15, R19, R21 (by hand)", () => {
+  // R01: the expected world starts past ITS OWN knee (95) from 96 with 3000 W in force: the fall over, the tail 0.2 x 3000 x 0.95 = 570 W: 4 points x 0.317 kWh
+  // = 1.268 kWh in 133.47 min, from minute 60 (held: past the knee the policy holds)
+  const r01 = plan({ actuatorProfile: "RATE_CONTROLLER_PROPOSED", elapsedMin: 60, socPct: 96, targetSocPct: 100, inForce: { setpointW: 3000, lastChangeAtMin: 0, changesUsed: 0 } });
+  near(band(r01).expected.finishMin, 60 + ((4 * 0.317) / 0.57) * 60, 0.1, "the expected world past its own knee");
+  // R10: 0 W in force is a START that keeps the change count given: 6 of 6 used, so no later change is planned
+  const r10 = gen({ elapsedMin: 60, socPct: 40, inForce: { setpointW: 0, lastChangeAtMin: 50, changesUsed: 6 } });
+  assert.equal(r10.now.change, "START");
+  assert.equal(r10.profile?.changesLeft, 0);
+  assert.equal(r10.trajectory.length, 1);
+  // R11 (MINOR): the drain is counted in the most points per kWh, with the SMALLER of the trusted and learned capacity: 600 W for 151 min = 1.51 kWh; 25 kWh
+  // learned: / (25 x 0.94 / 1.03 / 100 = 0.228155) = 6.618 points, so 23.38; 36 kWh learned: the trusted 31.7 counts, 24.78 (not 25.40)
+  near(plan({ elapsedMin: -150, socPct: 30, targetSocPct: 90, preWindowDrainW: 600, learnedCapacityKwh: 25 }).assumptions?.socAtPlanStartPct, 30 - 1.51 / ((25 * 0.94) / 1.03 / 100), 0.006, "learned 25");
+  near(plan({ elapsedMin: -150, socPct: 30, targetSocPct: 90, preWindowDrainW: 600, learnedCapacityKwh: 36 }).assumptions?.socAtPlanStartPct, 30 - 1.51 / OPT, 0.006, "learned 36");
+  // R12: the drained SOC is clamped at 0: 30 kW for 721 min empties it, and the plan is the plan from 0 at the window start
+  const r12 = plan({ elapsedMin: -720, socPct: 10, targetSocPct: 90, preWindowDrainW: 30000 });
+  assert.equal(r12.assumptions?.socAtPlanStartPct, 0);
+  const zero = plan({ socPct: 0, targetSocPct: 90 });
+  assert.deepEqual([r12.status, r12.now.setpointW, r12.band], [zero.status, zero.now.setpointW, zero.band]);
+  // R15: the buffer that would fit is judged with the rate in force HELD: 3900 W from 19 to 60: 14.2029 kWh at 3.51 kW = 242.78 min, 57.2 min before the window
+  // end, so 55 (the planned raise would give 60)
+  const r15 = gen({ targetSocPct: 60, inForce: { setpointW: 3900, lastChangeAtMin: 0, changesUsed: 0 } });
+  near(band(r15).pessimisticHeld.finishMin, ((41 * PK) / 3.51) * 60, 0.05, "the held finish");
+  assert.equal(r15.bufferThatWouldFitMin, 55);
+  // R19: a target just above the knee (90.5, 91) is held past it like any other: 2000 W kept, no decrease
+  for (const targetSocPct of [90.5, 91]) {
+    const r19 = gen({ elapsedMin: 5, socPct: 90, targetSocPct, inForce: { setpointW: 2000, lastChangeAtMin: -60, changesUsed: 0 } });
+    assert.equal(r19.now.change, "KEEP", String(targetSocPct));
+    assert.ok(r19.codes.includes("HELD_PAST_KNEE"), String(targetSocPct));
+  }
+  // R21 (MINOR): the grid headroom caps even 94 W below the ceiling: (9358 - 1429 x 1.2) x 0.85 / 1.1 = 5906.1 W, floored to 5900 W, under the 6000 W limit
+  const r21 = plan({ ceilings: [maxChargePowerCeiling(8000, 6000)], household: { gridImportLimitW: 9358, demandPeakW: 1429, demandAgeMin: 1 } });
+  assert.equal(r21.now.ceilingW, 5900);
+  assert.equal(r21.now.ceilingName, "grid_headroom");
+  assert.equal(r21.now.setpointW, 5900);
+});
+
+test("confirmation MAJOR 3: inside the window a START counts the drain over the reading's age (continuous at the window start); a bound is needed beyond 2 min; a rate in force only for the part before the window (by hand)", () => {
+  // a 15 min old reading of 40, 3000 W: at -0.5 the drain runs 15.5 min (2.679 points), at 0 and +0.5 15 min (2.593 points); the START from 1.0 below that to
+  // 80: at 0, 43.59 points x 0.346412 = 15.100 kWh in 240 min = 4195 W: 4200 W; at -0.5, 15.131 kWh: 4203 W: 4300 W; at +0.5, 239.5 min: 4203 W: 4300 W
+  const at = (elapsedMin: number): GentleNightPlan => plan({ elapsedMin, socPct: 40, socAgeMin: 15, drainBoundW: 3000, targetSocPct: 80 });
+  near(at(-0.5).assumptions?.socAtPlanStartPct, 40 - (3000 * 15.5) / 60000 / OPT, 0.006, "-0.5");
+  near(at(0).assumptions?.socAtPlanStartPct, 40 - (3000 * 15) / 60000 / OPT, 0.006, "0");
+  near(at(0.5).assumptions?.socAtPlanStartPct, 40 - (3000 * 15) / 60000 / OPT, 0.006, "+0.5");
+  assert.deepEqual([at(-0.5).now.setpointW, at(0).now.setpointW, at(0.5).now.setpointW], [4300, 4200, 4300]);
+  // without a bound: up to 2 min not counted (and said), longer refused; the limit is a parameter
+  assert.ok(plan({ socAgeMin: 2 }).codes.includes("DRAIN_NOT_COUNTED"));
+  assert.ok(!plan({ socAgeMin: 2, drainBoundW: 0 }).codes.includes("DRAIN_NOT_COUNTED"));
+  assert.deepEqual(plan({ socAgeMin: 2.5 }).codes, ["DRAIN_UNKNOWN_AGED_READING"]);
+  assert.equal(plan({ socAgeMin: 2.5, params: { maxUncountedDrainMin: 3 } }).status, "OK");
+  assert.deepEqual(plan({ params: { maxUncountedDrainMin: 0 } }).codes, ["DRAIN_UNKNOWN_AGED_READING"]);
+  assert.deepEqual(plan({ params: { maxUncountedDrainMin: 16 } }).codes, ["PARAMS_INVALID"]);
+  // a rate in force charges: a reading taken in the window needs no bound; one taken 10 min before the window opened needs it for those 10 min (1.728 points)
+  const inForce = { setpointW: 4000, lastChangeAtMin: 0, changesUsed: 0 };
+  assert.equal(gen({ elapsedMin: 30, socPct: 40, socAgeMin: 15, inForce }).assumptions?.idleSinceReadingMin, 0);
+  assert.deepEqual(gen({ elapsedMin: 5, socPct: 40, socAgeMin: 15, inForce }).codes, ["DRAIN_UNKNOWN_AGED_READING"]);
+  near(gen({ elapsedMin: 5, socPct: 40, socAgeMin: 15, drainBoundW: 3000, inForce }).assumptions?.socAtPlanStartPct, 40 - (3000 * 10) / 60000 / OPT, 0.006, "the part before the window");
+  // the earlier name still works, and when both names are given they must agree
+  assert.deepEqual(plan({ elapsedMin: -90, preWindowDrainW: 600 }).now, plan({ elapsedMin: -90, drainBoundW: 600 }).now);
+  assert.deepEqual(plan({ elapsedMin: -90, preWindowDrainW: 600, drainBoundW: 600 }).now, plan({ elapsedMin: -90, drainBoundW: 600 }).now);
+  assert.deepEqual(plan({ elapsedMin: -90, preWindowDrainW: 600, drainBoundW: 700 }).codes, ["INPUT_INVALID"]);
+});
+
+test("confirmation MINOR: a last change after now is refused (INPUT_INVALID); one made now holds by the dwell", () => {
+  assert.deepEqual(gen({ elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 1e6, changesUsed: 0 } }).codes, ["INPUT_INVALID"]);
+  assert.deepEqual(gen({ elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 100.5, changesUsed: 0 } }).codes, ["INPUT_INVALID"]);
+  const now = gen({ elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 100, changesUsed: 0 } });
+  assert.equal(now.now.change, "KEEP");
+  assert.ok(now.codes.includes("HELD_DWELL"));
+  assert.notEqual(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: -30, drainBoundW: 0, inForce: { setpointW: 4000, lastChangeAtMin: -200, changesUsed: 0 } }).status, "INPUTS_UNUSABLE");
+});
+
+test("confirmation MINOR: what is needed on the TOU editor follows the change: a forced decrease mid-window ignores the dwell; a START before the window or now; a KEEP has nothing to change", () => {
+  const forced = plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 120, socPct: 50, ceilings: [maxChargePowerCeiling(8000, 4000)], inForce: { setpointW: 8000, lastChangeAtMin: 100, changesUsed: 1 } });
+  assert.equal(forced.now.change, "DECREASE");
+  const line = forced.needed[1] as string;
+  assert.match(line, /lowering the charge slot power to 4000 W, the safe ceiling: a forced decrease, whatever the dwell and the change budget say/);
+  assert.doesNotMatch(line, /before the window|after 60 min/);
+  assert.match(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: -30, drainBoundW: 0 }).needed[1] as string, /slot power set to \d+ W before the window/);
+  assert.match(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 30 }).needed[1] as string, /slot power set to \d+ W now/);
+  assert.match(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 30, inForce: { setpointW: 6000, lastChangeAtMin: 20, changesUsed: 0 } }).needed[1] as string, /^Nothing to change on the guarded TOU editor now: the charge slot power stays at 6000 W/);
+  assert.match(plan({ actuatorProfile: "TOU_SLOT_EDITOR", elapsedMin: 100, socPct: 40, inForce: { setpointW: 2000, lastChangeAtMin: 0, changesUsed: 0 } }).needed[1] as string, /changing the charge slot power to \d+ W now/);
+  assert.match(plan({ actuatorProfile: "FREE_POWER_LEASE", elapsedMin: 100, socPct: 40, inForce: { setpointW: 6000, lastChangeAtMin: 0, changesUsed: 0 } }).needed[1] as string, /lease in force keeps 6000 W/);
 });
