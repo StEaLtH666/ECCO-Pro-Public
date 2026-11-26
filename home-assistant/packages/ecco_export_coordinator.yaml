@@ -42,7 +42,13 @@
 # THE AUTHORISED WINDOW. The Export schedule authorises a run only inside its window: start = input_datetime.ecco_dump_to_grid_schedule_start, end = that start plus input_number.ecco_dump_to_grid_schedule_duration
 # minutes; it caps a run at min(requested, floor((window end - now + 20 s) / 60 s)) minutes and nothing runs after the window end (ecco_dump_to_grid_schedule.yaml). THE PROPOSED DURATION AND END ARE BOUNDED BY THE
 # SCHEDULE'S OWN WINDOW, computed the same way: while now is inside the window the duration is at most floor((window end - now + 20 s) / 60 s) minutes, so the proposed end is never later than the window end (plus
-# the schedule's own 20 s rounding); before the window a start at its own time may run the whole length, and after it the next window will. A re-target never moves a lease's END beyond the window.
+# the schedule's own 20 s rounding); before the window a start at its own time may run the whole length, and after it the next window will, WHEN NO LEASE RUNS. WHILE A LEASE RUNS the same bound holds at EVERY render,
+# after the window end too: a running lease gets no time past the end of the window it runs in (the duration is 0 and the proposal INVALID, BELOW_MINIMUM_DURATION, as in the last 10 minutes of any window, until the
+# lease ends: the next window is for the next start, not for a run still going; the schedule fixes a run's end at its start plus its length, so a run pressed in the first 20 s of its window ends up to 20 s after the
+# window end). For a lease the SCHEDULE started the bound is min(window end, the lease's own latched end) + 20 s: the lease's own end is the window captured at its start, so editing the schedule's duration or start
+# helper while it runs cannot move it later (an edit that brings the window end before the lease's own end moves the bound earlier, which only gives less). A re-target therefore never moves a lease's END beyond the window: for a lease the schedule started the END part of a re-target can only KEEP the end or SHORTEN it, never move it
+# later, and a shorter end is no deviation either (a lease that would end by its Stop SOC before its end time needs no change), so the END rule never fires for it; the Stop SOC raise and the export target change
+# are unaffected.
 #
 # THE RULES (each reads only measured values or the owner's own settings; a value that is missing, unavailable, unknown, not a number, not finite, negative or outside its physical range
 # can never produce a VALID state or a number: the state is INVALID and the cause is named):
@@ -64,8 +70,9 @@
 #       MIN_COMMAND_W (the least its loop commands) is above the Max Grid Export less the START headroom (PV_SURPLUS_EXPORT_GUARD: its export guard, which trips on CT samples above the limit plus max(100 W, 3 %),
 #       would end the lease), the proposal is INVALID with that cause.
 #   (4) DURATION = ENERGY / the power the dongle would command (never below MIN_COMMAND_W, which is also what keeps the division defined), bounded by the schedule's own window (see THE AUTHORISED WINDOW: the
-#       window length and, inside the window, floor((window end - now + WINDOW_END_ROUNDING_S) / 60) minutes) and rounded DOWN to the minute; shorter than MIN_DURATION_MIN is INVALID (BELOW_MINIMUM_DURATION: not worth a start,
-#       and in the last minutes of the window no start fits). An unreadable schedule start is INVALID (SCHEDULE_START_UNREADABLE): the window cannot be bounded.
+#       window length and, inside the window, floor((window end - now + WINDOW_END_ROUNDING_S) / 60) minutes; while a lease runs, the same count to the end of the window it runs in (to the smaller of that and its own
+#       latched end for a lease the schedule started), never below 0) and rounded DOWN to the minute; shorter than MIN_DURATION_MIN is INVALID (BELOW_MINIMUM_DURATION: not worth a start, and in the last minutes of the
+#       window, or after it while a lease still runs, no start fits). An unreadable schedule start is INVALID (SCHEDULE_START_UNREADABLE): the window cannot be bounded.
 #   (5) STATE: HOLD while sensor.ecco_plan_export_hold reads held (a Hold battery, Skip tonight or Prepare for power cut: no numbers at all); INVALID while any blocking cause stands (the reserve,
 #       the Stop SOC, the limits, the telemetry, the request, its window, the PV surplus or the energy cannot support a proposal); UNVERIFIED when holding the configured export would need more battery power than the
 #       proven level AND the dongle's Power Ceiling lets its loop go above that level (nobody has proven what it does there); otherwise VALID (a ceiling at or below the proven level only limits
@@ -78,7 +85,9 @@
 #       A change is not allowed within RETARGET_MIN_AGE_S of the lease start, nor within RETARGET_MIN_GAP_S of the previous would-change (the model remembers it in its own attribute), nor until that memory is itself
 #       RETARGET_MIN_GAP_S old (a template reload or a restart starts it afresh, and the previous would-change is then not known), nor while the telemetry is not fresh. The deviations that count: the floor is
 #       RETARGET_STOP_DEADBAND or more above the Stop SOC the lease latched (a raise: the floor is never below it), the net export target differs by RETARGET_EXPORT_DEADBAND_W or more in either direction, or the energy would last RETARGET_END_DEADBAND_MIN
-#       or more beyond the lease's end, inside the window (a lease that would end by its Stop SOC before its end time needs no change). An end time that reads before now or before the lease start, a skipped
+#       or more beyond the lease's end, inside the window (a lease that would end by its Stop SOC before its end time needs no change). FOR A LEASE THE SCHEDULE STARTED THE END RULE NEVER FIRES: its proposed end is
+#       bounded by min(window end, the lease's own latched end) + 20 s (see THE AUTHORISED WINDOW), which is under the deadband, so the END part of a re-target can only keep the end or shorten it; the rule stays as
+#       a second line and is pinned with the others. An end time that reads before now or before the lease start, a skipped
 #       local time or a repeated one (the second 01:xx hour when the clocks go back) cannot be read: UNKNOWN, never ALLOWED. END NOW, the lease guard rule and outside the 30 minute rules: while a lease runs and
 #       sensor.ecco_plan_export_hold reads held, or the effective reserve is above the Stop SOC the lease latched, the state is END NOW (never WAIT), for every lease whatever started it, with no age and no
 #       VALID proposal needed. Nothing acts on it: the lease guard (ecco_lease_guard_dump.yaml, not installed) is what would press END, and this file reports only. An UNKNOWN re-target lists no changes.
@@ -102,7 +111,7 @@
 #   MIN_TARGET_W = 500              the dongle's Export Power range starts at 500 W
 #   MIN_DURATION_MIN = 10           about thirteen 45 s settle periods of the dongle's loop: a shorter lease is not worth the start and the restore
 #   INFEASIBLE_LOW_DEADBAND_W = 150    the dongle loop's own deadband: a PV surplus above the target plus this is its TARGET INFEASIBLE LOW (dump_feasibility_required_w)
-#   WINDOW_END_ROUNDING_S = 20      the schedule's own rounding of the time left in its window: floor((window end - now + 20 s) / 60 s)
+#   WINDOW_END_ROUNDING_S = 20      the schedule's own rounding of the time left in its window: floor((window end - now + 20 s) / 60 s); also the 20 s of a running lease's bound, min(window end, its own end) + 20 s
 #   RETARGET_MIN_AGE_S = 1800       a lease is left alone for its first 30 minutes (and an END plus a re-START begins a new lease, so this also limits a re-target to one per 30 minutes)
 #   RETARGET_MIN_GAP_S = 1800       a would-change is not repeated within 30 minutes, and the memory that says so must itself be that old
 #   RETARGET_STOP_DEADBAND = 1      point: the SOC register's own resolution
@@ -131,6 +140,9 @@
 #   - The origin of a lease is INFERRED, not recorded: a manual or guarded start that turns on within ORIGIN_RUN_WINDOW_S after a run of the scheduled start script that started no lease (it was blocked, failed or
 #     cancelled), inside the window and ending by its end, would be taken for the schedule's lease and compared with the schedule's numbers (shadow only: nothing acts). The schedule's last-result helper would tell;
 #     it is not read here.
+#   - A running lease's bound (see THE AUTHORISED WINDOW) is the CURRENT window of the schedule's helpers, and for a lease the schedule started the smaller of that and the lease's own latched end. A lease that is not
+#     matched to the schedule (any other start, the same lease once the helpers were edited so far that it no longer fits the window, or after a restart) reads UNKNOWN and gives no END change either way; a manual
+#     start taken for the schedule's lease (above) is bounded by its own end as if it were the schedule's.
 #   - The poll text is the dongle's LOCAL time with no offset and is read as local time in Home Assistant's own zone, as in the gate and in R9: if the zones differ the text is hours away and
 #     the proposal is INVALID (TELEMETRY_STALE), never VALID. The lease's end text is read the same way and refused when it lies in a skipped or a repeated hour.
 #   - The model carries a few kB of attributes and its attribute changes at every render (every poll, about every 10 s: it holds the time of the evaluation, which the lookups need). Exclude
@@ -197,7 +209,7 @@ template:
             {%- set w_start = as_timestamp(sch_txt, none) if sch_txt not in bad else none -%}
             {%- set w_end = (w_start + win * 60) if (w_start is not none and win is not none) else none -%}
             {%- set in_win = w_end is not none and now_ts >= w_start and now_ts < w_end -%}
-            {%- set wcap = (((w_end - now_ts + 20) / 60) | round(0, 'floor')) if in_win else none -%}
+            {%- set wcap_w = (((w_end - now_ts + 20) / 60) | round(0, 'floor')) if in_win else none -%}
             {%- set pceil = rng(states('number.ecco_clock_dongle_dump_to_grid_power_ceiling'), 500, 30000) | float(none) -%}
             {%- set prov = rng(states('input_number.ecco_dump_supervised_proven_w'), 500, 30000) | float(none) -%}
             {%- set mx = rng(states('number.ecco_clock_dongle_dump_to_grid_max_grid_export'), 0, 30000) | float(none) -%}
@@ -205,6 +217,21 @@ template:
             {%- set lease = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
             {%- set lease_on = lease == 'on' -%}
             {%- set l_stop = rng(states('sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc'), 0, 100) | float(none) -%}
+            {%- set l_end_txt = states('sensor.ecco_clock_dongle_dump_to_grid_ends_at') -%}
+            {%- set l_end_dt = strptime(l_end_txt, '%Y-%m-%d %H:%M:%S', none) if l_end_txt not in bad else none -%}
+            {%- set l_end_raw = as_timestamp(l_end_dt, none) if l_end_dt is not none else none -%}
+            {%- set l_obj = states['binary_sensor.ecco_clock_dongle_dump_to_grid_active'] -%}
+            {%- set l_start_ts = as_timestamp(l_obj.last_changed, none) if (l_obj is not none and l_obj.last_changed is defined) else none -%}
+            {%- set l_end_rt = l_end_raw is not none and (l_end_raw | timestamp_custom('%Y-%m-%d %H:%M:%S', true, '')) == l_end_txt -%}
+            {%- set l_end_rep = l_end_raw is not none and (((l_end_raw + 3600) | timestamp_custom('%Y-%m-%d %H:%M:%S', true, '')) == l_end_txt or ((l_end_raw - 3600) | timestamp_custom('%Y-%m-%d %H:%M:%S', true, '')) == l_end_txt) -%}
+            {%- set l_end_ts = l_end_raw if (l_end_rt and not l_end_rep and l_end_raw > now_ts and (l_start_ts is none or l_end_raw > l_start_ts)) else none -%}
+            {%- set age = (now_ts - l_start_ts) if l_start_ts is not none else none -%}
+            {%- set sch_ts = as_timestamp(state_attr('script.ecco_dump_to_grid_start_scheduled', 'last_triggered'), none) -%}
+            {%- set since_run = (l_start_ts - sch_ts) if (l_start_ts is not none and sch_ts is not none) else none -%}
+            {%- set origin = lease_on and w_end is not none and since_run is not none and since_run >= -10 and since_run <= 900 and l_start_ts >= w_start - 60 and l_end_ts is not none and l_end_ts <= w_end + 120 -%}
+            {%- set run_end = ([w_end, l_end_ts] | min) if origin else w_end -%}
+            {%- set wcap_r = ([(((run_end - now_ts + 20) / 60) | round(0, 'floor')), 0] | max) if (lease_on and run_end is not none) else none -%}
+            {%- set wcap = wcap_r if wcap_r is not none else wcap_w -%}
             {%- set cap = ([cap_c, cap_m] | min) if (cap_c is not none and cap_m is not none) else cap_c -%}
             {%- set floor = ([stop_s, reserve, 10, (l_stop if (lease_on and l_stop is not none) else 0)] | max | round(0, 'ceil')) if (stop_s is not none and reserve >= 0) else none -%}
             {%- set nstart = (mx - ([100, 0.03 * mx] | max)) if (mx is not none and mx > 0) else none -%}
@@ -257,7 +284,7 @@ template:
             ('TARGET_INFEASIBLE_LOW', raw_p is not none and raw_p < -150, 'the measured PV (' ~ pv ~ ' W) exceeds the house load (' ~ load ~ ' W) by ' ~ surplus_i ~ ' W, more than the net export target (' ~ net ~ ' W) plus the 150 W deadband of the dongle loop: the target is already exceeded without the battery (the dongle would show TARGET INFEASIBLE LOW, and it never commands battery charging)'),
             ('PV_SURPLUS_EXPORT_GUARD', surplus is not none and nstart is not none and (surplus + 500) > nstart, 'the measured PV surplus (' ~ surplus_i ~ ' W) plus the 500 W the dongle loop never goes below is above the Max Grid Export less the START headroom (' ~ nstart_i ~ ' W): the export guard of the dongle would end the lease'),
             ('NO_ENERGY_ABOVE_FLOOR', energy is not none and energy <= 0, 'the SOC (' ~ soc ~ ' %) leaves no energy above the floor (' ~ floor ~ ' %) and the 1 point margin'),
-            ('BELOW_MINIMUM_DURATION', dur is not none and energy > 0 and dur < 10, 'the proposed duration is ' ~ dur ~ ' minutes (the energy above the floor lasts ' ~ dur_raw_i ~ ' minutes at the expected power' ~ (', the authorised schedule window leaves ' ~ wcap ~ ' minutes' if wcap is not none else '') ~ '), less than the 10 minutes worth a start')
+            ('BELOW_MINIMUM_DURATION', dur is not none and energy > 0 and dur < 10, 'the proposed duration is ' ~ dur ~ ' minutes (the energy above the floor lasts ' ~ dur_raw_i ~ ' minutes at the expected power' ~ (', the window the running lease is authorised for leaves ' ~ wcap ~ ' minutes' if (lease_on and wcap is not none) else (', the authorised schedule window leaves ' ~ wcap ~ ' minutes' if wcap is not none else '')) ~ '), less than the 10 minutes worth a start')
             ] if hit -%}
             {%- set ns.c = ns.c + [code] -%}
             {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
@@ -268,7 +295,7 @@ template:
             ('TARGET_LIMITED_BY_EXPORT_LIMIT', num and tgt > net, 'the configured target (' ~ tgt ~ ' W) is above the Max Grid Export less the START headroom, so the proposal holds ' ~ net ~ ' W'),
             ('LOW_BATTERY_POWER', num and raw_p < 500, 'holding ' ~ net ~ ' W at the meter needs only ' ~ raw_p_i ~ ' W from the battery (PV and the load nearly cover it): the dongle never commands less than 500 W, so the duration is worked out at 500 W'),
             ('POWER_LIMITED_BY_CEILING', num and raw_p > pceil and pceil <= prov, 'holding ' ~ net ~ ' W at the meter needs ' ~ raw_p_i ~ ' W from the battery, above the Power Ceiling (' ~ pceil ~ ' W): the proposal is limited to the ceiling and the export will fall short of the target'),
-            ('DURATION_LIMITED_BY_WINDOW', num and dur_raw > dlim, 'the energy would last ' ~ dur_raw_i ~ ' minutes, longer than the ' ~ ('time left in the schedule window (' ~ wcap ~ ' min, to ' ~ (w_end | timestamp_custom('%H:%M', true, '?')) ~ ')' if (wcap is not none and wcap < win) else 'schedule window (' ~ win ~ ' min)') ~ ': the duration is limited to it'),
+            ('DURATION_LIMITED_BY_WINDOW', num and dur_raw > dlim, 'the energy would last ' ~ dur_raw_i ~ ' minutes, longer than the ' ~ (('time left in the window the running lease is authorised for (' if lease_on else 'time left in the schedule window (') ~ wcap ~ ' min, to ' ~ (run_end | timestamp_custom('%H:%M', true, '?')) ~ ')' if (wcap is not none and wcap < win) else 'schedule window (' ~ win ~ ' min)') ~ ': the duration is limited to it'),
             ('CAPACITY_MEASURED', num and cap_m is not none and cap_m < cap_c, 'the battery runtime package has measured a capacity of ' ~ cap_m ~ ' kWh, below the configured ' ~ cap_c ~ ' kWh: the smaller is used'),
             ('FLOOR_FROM_RUNNING_LEASE', num and lease_on and l_stop > ([stop_s, reserve, 10] | max), 'the floor (' ~ floor ~ ' %) is the Stop SOC the running lease latched (' ~ l_stop ~ ' %), above the schedule Stop SOC and the effective reserve: the proposal never goes below what the lease enforces')
             ] if hit -%}
@@ -281,18 +308,6 @@ template:
             {%- set lp_end = (now_ts + ldur * 60) if num else none -%}
             {%- set l_exp = rng(states('sensor.ecco_clock_dongle_dump_to_grid_active_export_power'), 0, 30000) | float(none) -%}
             {%- set l_cmd = rng(states('sensor.ecco_clock_dongle_dump_to_grid_commanded_battery_ceiling'), 0, 30000) | float(none) -%}
-            {%- set l_end_txt = states('sensor.ecco_clock_dongle_dump_to_grid_ends_at') -%}
-            {%- set l_end_dt = strptime(l_end_txt, '%Y-%m-%d %H:%M:%S', none) if l_end_txt not in bad else none -%}
-            {%- set l_end_raw = as_timestamp(l_end_dt, none) if l_end_dt is not none else none -%}
-            {%- set l_obj = states['binary_sensor.ecco_clock_dongle_dump_to_grid_active'] -%}
-            {%- set l_start_ts = as_timestamp(l_obj.last_changed, none) if (l_obj is not none and l_obj.last_changed is defined) else none -%}
-            {%- set l_end_rt = l_end_raw is not none and (l_end_raw | timestamp_custom('%Y-%m-%d %H:%M:%S', true, '')) == l_end_txt -%}
-            {%- set l_end_rep = l_end_raw is not none and (((l_end_raw + 3600) | timestamp_custom('%Y-%m-%d %H:%M:%S', true, '')) == l_end_txt or ((l_end_raw - 3600) | timestamp_custom('%Y-%m-%d %H:%M:%S', true, '')) == l_end_txt) -%}
-            {%- set l_end_ts = l_end_raw if (l_end_rt and not l_end_rep and l_end_raw > now_ts and (l_start_ts is none or l_end_raw > l_start_ts)) else none -%}
-            {%- set age = (now_ts - l_start_ts) if l_start_ts is not none else none -%}
-            {%- set sch_ts = as_timestamp(state_attr('script.ecco_dump_to_grid_start_scheduled', 'last_triggered'), none) -%}
-            {%- set since_run = (l_start_ts - sch_ts) if (l_start_ts is not none and sch_ts is not none) else none -%}
-            {%- set origin = lease_on and w_end is not none and since_run is not none and since_run >= -10 and since_run <= 900 and l_start_ts >= w_start - 60 and l_end_ts is not none and l_end_ts <= w_end + 120 -%}
             {%- set cmp_ok = num and origin -%}
             {%- set d_stop = (floor - l_stop) if (cmp_ok and l_stop is not none) else none -%}
             {%- set d_exp = (net - l_exp) if (cmp_ok and l_exp is not none) else none -%}
