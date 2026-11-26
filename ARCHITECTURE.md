@@ -83,7 +83,7 @@ Several features touch overlapping registers, or registers whose *meaning* depen
 `intelligence/` is a pure-Python (standard library) pipeline: read Home Assistant statistics read-only → learn usage → predict with uncertainty → recommend a target and a safe export amount → score the prediction later. It:
 
 - imports no network, serial or process modules and has no control vocabulary (enforced by a static test; the one allow-listed exception is the developer preview tool, which runs a local Node.js process),
-- writes only a report, optional read-only Home Assistant display sensors and its own SQLite scorecard file,
+- writes only a report, optional read-only Home Assistant display sensors and its own SQLite scorecard file (which also holds the advice log the Ghost reads: one table, about 52 rows a day at most, and a small table of closed incidents of its write, see `intelligence/README.md`),
 - is **shadow-only** in this release, with synthetic-data examples and tests.
 
 The deterministic layer stays authoritative. If Intelligence is wrong, absent or turned off, nothing about the safety behaviour changes.

@@ -18,6 +18,52 @@ included, for as long as it keeps that record (it purges orphaned deleted-entity
 Home Assistant behaviour, seen on the pinned Core under L3 within minutes; the runbook's section 7 has the recovery from
 an entity-id collision). The integration talks to no device, inverter, dongle, database or network.
 
+**What it writes (a durable write).** Only under `<config>/ecco/intelligence/state/`: `store_meta.json` and the SQLite file
+`scorecard.sqlite3`. That file holds the scorecard (recorded once per schedule slot) and ONE further table, `advice_log`: the slot
+cycle's store step logs the charge-target and Dump-to-Grid advice it has just published, one row per kind per slot cycle (25 slot
+cycles a day, 26 on the day the clocks go back), so at most 52 rows a day (50 on a normal day) and, at the 400 days kept, about
+21 000 rows (a few MB); rows older than the retention are deleted at write time. Every slot cycle's advice is its own row, also when
+it is identical to the last (the one skip is the same advice published again inside the validity of its own previous row, within one
+slot cycle). The table is created by the first advice write, not at start-up, and the write is its own transaction after the
+scorecard record: a failure (a table of that name with other columns, a failing create, a full disk) is counted and affects nothing
+else, not the scorecard record, the start-up writable gate, `outcome_metrics` or any published value.
+
+*A verified write, and an incident.* After the commit, the connection that wrote the advice rows reads each of them back by its id and
+compares its kind, issue time and content hash with what it wrote (a *same-connection read-back*). That is what makes a write
+*verified*, and it proves exactly this much: the row is visible to the connection that wrote it and matches what was written. It is
+not a durability or fsync proof, and it says nothing about what a power loss would keep. A write that raises nothing but whose rows are
+not found again is *unverified* (it is not a success), and so is one whose read-back itself fails. A failed or unverified write opens an
+*incident* (kept in memory, the newest 10: when it began and when it last failed, the attempts, the slot cycles missed, the exception
+class name as the reason and the issue times of the advice that could not be written). A slot cycle whose whole store step times out or
+raises opens or extends the incident too (nothing is known about that cycle's advice write), but it is counted only inside the
+incident, in its attempts and missed slot cycles: not in `counters.advice_write_failures` or `counters.advice_unverified_writes`, which
+count the advice log's own failures, and so not in the failed/unverified-since-start count of the `STORE_RECORD` text either.
+`self_test.STORE_RECORD` is WARN, with the reason and the counts, while the latest
+attempt has failed or is unverified, and returns to PASS only after a verified write; the incident is then closed and kept. A slot
+cycle that wrote nothing (no advice to log) changes nothing. After a restart nothing is assumed: PASS shows only after that
+run's own first verified write. Look at the diagnostics download's `counters.advice_write_failures` and
+`counters.advice_unverified_writes` (history: never reset), `counters.advice_current_failure` (1 while an incident is open),
+`advice_incidents` (the open incident and the closed ones kept), `last_store.advice_error` and `self_test.STORE_RECORD`; one
+warning is logged when an incident opens and one line when it closes (class names only).
+
+*What survives, and what is lost.* Closed incidents are also written, right after the next verified write, to a second small table,
+`advice_incident` (at most 10 rows; counts, times and a class name, never a message). It is created only then: not at start-up, not when
+the scorecard is opened, not by an advice write, and not while the database cannot take the advice write. It is shown in the
+download as `advice_incidents.stored` and by `python intelligence/tools/advice_export.py <scorecard file> --incidents`. The write of an
+incident into it is a plain commit and is not read back. An incident
+that is still open when Home Assistant restarts, or that stays open because the database never takes the advice write again, is
+not in that table: it then lives only in the one warning logged when it opened (the class name only) and, until the restart,
+in memory and the diagnostics. If writing a closed incident fails or times out after a verified advice write, nothing else changes
+(`STORE_RECORD` stays PASS, no published value differs): the failure shows only in `advice_incidents.last_persist` (the class name),
+and the incident stays listed and is offered again at the next verified write. Older incidents beyond the newest 10 are dropped (counted
+in memory as `dropped`). The table keeps the newest 10 by the text of `first_failed_utc`, which is also an incident's key, so after the
+clock has been stepped backwards a new incident whose first failure is older than the 10 rows already stored is written and then pruned
+at once: it is reported as persisted but is not in the table (a known limit; diagnostics only). All of this is
+diagnostics only: it changes no published value, status, mode or advice, adds no entity, and takes effect with the Ghost update's own
+restart. To roll back: install the previous kit (the tables are then unused) and, to remove them, drop the tables `advice_log` and
+`advice_incident`, or delete `scorecard.sqlite3`, while the integration is stopped. The Ghost block of the diagnostics download only
+reads `advice_log` (SQLite `mode=ro`), and the stored incidents are read the same way. Nothing else is written.
+
 Related: the contracts it implements are in [`INTELLIGENCE_FOUNDATION_CONTRACT.md`](INTELLIGENCE_FOUNDATION_CONTRACT.md)
 (section 13 for the SHADOW v0.1 completion: the grid-charge TOU classification, configuration-poll freshness, the refresh
 margin and the raise-only reserve preference), and the install, pause, acceptance, upgrade, rollback and uninstall steps
@@ -79,6 +125,7 @@ until the entry is reloaded.
 | `SITE_ENTITY_MAP` | the `shadow_runtime` block (section 4) is strict: unknown keys, malformed specs and invalid entity ids FAIL (a `<placeholder>` left in counts as invalid). No block WARNs: nothing is mapped and every gated item BLOCKs |
 | `SITE_HISTORY_SOURCES` | the V1 `sources` / `forecasts` give the statistic ids. Invalid ids, the example's placeholders among them, are never queried (WARN) |
 | `SITE_HINT_IGNORED_*` | `site.user_reserve_soc_pct` / `technical_min_soc_pct` are ignored (INFO). Reserves come only from I-D1 / I-D2 |
+| `SITE_INVERTER_CONVERSION` | the optional inverter conversion facts of the `site` block (section 4.1; `DATA_QUALITY_METHOD.md` section 10.1). No such key: no check at all (the power balance stays lossless, exactly as before). All three valid: PASS (the balance is loss-aware). One or two of the three, a value that is not a number, or a value outside its bound: WARN, naming no value (the fact names and reasons go to the debug detail); the engine then judges the balance lossless and BLOCKs export_event and dump_to_grid with `POWER_LOSS_FACTS_INVALID`. A JSON string, true or false, list or object is carried as NaN so that it is reported and never read as absent |
 | `VENDOR_MANIFEST` | the in-package `VENDOR_MANIFEST.json` matches the sha256 of every vendored module and integration file in place. The source tree is not a kit and FAILs here by design |
 | `STORE_WRITABLE` | `state/` can be created inside an existing `ecco/intelligence/`, and `store_meta.json` and the scorecard initialise |
 | `ENGINE_IMPORT` | the vendored engine imports; its version is recorded |
@@ -86,7 +133,7 @@ until the entry is reloaded.
 | `ENTITY_IDS` | every entity was registered under its contract id. A different id, for example a `_2` suffix, FAILs. So does a contract entity that Home Assistant never added once the platforms are set up (for example one disabled in the entity registry): the status entity carries `mode` and `applies_nothing`, so a missing entity stops all computing. The text names contract keys only |
 | `ENTITY_WRITE` | a state write of one of its own entities raised (Home Assistant refuses, for example, an ENUM value outside its options). Each entity is updated in its own guard, so the others still follow the envelope; the failure FAILs the self-test and gives `SELF_TEST_FAILED` |
 | `PAUSE_CONTROL` | the pause helper is readable. A missing helper WARNs: not paused, `pause_control: MISSING` |
-| `RECORDER_READ`, `STORE_RECORD` | WARN when a statistics read or a scorecard step fails. There is then no history and the quality layer BLOCKs |
+| `RECORDER_READ`, `STORE_RECORD` | WARN when a statistics read or a scorecard step fails. There is then no history and the quality layer BLOCKs. `STORE_RECORD` is also WARN, with the reason (a class name) and the counts, while the latest advice log write attempt has failed or is unverified, or after a scorecard step that timed out or raised (it also opens an incident); it is PASS again only after a verified write (the rows read back by their ids on the writing connection: not a durability proof), and INFO, never PASS, while a run has written and verified nothing yet. A slot cycle with no advice to log changes nothing. `counters.advice_write_failures` and `counters.advice_unverified_writes` are history and are never reset; the scorecard record and every published value are unaffected |
 | `CPU_BUDGET` (at run time) | WARN while refreshes are suspended by the CPU guard (section 2.2); PASS again once the rolling hour is back within the budget |
 
 **No site value in a check text.** A check's text reaches the status entity (`self_test`, `blockers`) and the diagnostics
@@ -545,7 +592,8 @@ network. It writes:
 What goes into the kit:
 
 - **The vendor set:** the AST import closure, module level and function level, of `intelligence.shadow_cycle`,
-  `intelligence.scorecard`, `intelligence.history` and `ecco_core.bridge`, plus the package `__init__` files.
+  `intelligence.scorecard`, `intelligence.history`, `intelligence.ghost_compare` (the Ghost's read-only diagnostics block) and
+  `ecco_core.bridge`, plus the package `__init__` files.
 - **Import rewriting:** every absolute `intelligence.` / `ecco_core.` import is rewritten to a package-relative one, at any
   depth, in the vendored modules and in the integration files. Examples:
   - `bridge.py`'s lazy import becomes `from ..intelligence.inputs import ...`;
@@ -708,6 +756,10 @@ Notes on the example:
   of `home-assistant/packages/ecco_intelligence_prefs.yaml` (0-100 %, no `initial`). Map it only once that package is
   installed: a mapped helper that is missing, unavailable, non-numeric or outside
   0..100 BLOCKs the reserve items (`PREF_RESERVE_RAISE_UNKNOWN`). Unmapped means no raise.
+- `site.inverter_dc_to_ac_factor`, `site.inverter_ac_to_dc_factor` and `site.inverter_standby_w` are optional and all or nothing: the
+  calibrated inverter conversion of the live power balance (factors 0.90 to 1.0, standby 0 to 100 W; the fitting tool
+  `intelligence/tools/power_balance_fit.py` proposes them from recorded history). Without them the balance is lossless as
+  before. They are PROPOSED engineering parameters of one site, never owner decisions, and never enter a repository.
 - `reserve.ha_minimum_soc` (signal) is needed only when I-D1 takes its value from the Home Assistant reserve helper
   (`HA_RESERVE_HELPER`); the SHADOW defaults record I-D1 as the Intelligence user reserve instead.
 
@@ -790,9 +842,11 @@ It loads the file with the runtime's own loader (`runtime/gates.load_site`) and 
 `config_hash` (the first 16 hex digits: the status entity's `config_hash` attribute), every load check, each
 decision's status and provenance, and each published item's static readiness: **BLOCKED** with the reasons the file
 alone already causes (`DECISION_D<n>_OPEN` / `_INVALID`, `NOT_MAPPED:<key>`, `NO_I_D6_LIMIT:<key>`, `SITE_FACT_MISSING`,
-`NO_HISTORY_SOURCE`, `SELF_TEST_FAILED:<check>`), or **LIVE_INPUTS_DECIDE** (the file blocks
+`POWER_LOSS_FACTS_INVALID`, `NO_HISTORY_SOURCE`, `SELF_TEST_FAILED:<check>`), or **LIVE_INPUTS_DECIDE** (the file blocks
 nothing; the check can prove BLOCKED, never OK). It prints no entity id, record reference, source name or decision value.
-It exits 1 for a FAIL load check, an INVALID decision or a capacity source v0.1 leaves unmapped, otherwise 0. The example
+It exits 1 for a FAIL load check, an INVALID decision, invalid or incomplete inverter conversion facts
+(`SITE_INVERTER_CONVERSION INVALID`; export_event and dump_to_grid then read BLOCKED with `POWER_LOSS_FACTS_INVALID`) or a
+capacity source v0.1 leaves unmapped, otherwise 0. The example
 profile `intelligence/profiles/site_profile.example.json` (every I-D OPEN, no entity map) exits 0 with every published
 item BLOCKED; used as a site file in the stand-in Home Assistant it gives a BLOCKED status with no number on any item (L2
 tested).
@@ -1000,6 +1054,7 @@ bound 180 s and the configuration liveness bound 300 s (`quality.DQ_PROPOSED`), 
 | `test_runtime_sources.py` | missing never 0, raw SOC preferred, false zero, poll-text liveness (moving, frozen, replayed, first sighting, missing), the configuration-poll liveness (`online_entity`, the older of the two times, never the telemetry poll text's entity), no two boolean gate readings on one entity (A36, RR-3), no boolean gate on the configuration-online entity and no raw SOC on the canonical SOC's entity (A39), rate tables from the day events (A38 Part B: the list form and its refusals, the merge, the next day unpublished, the previous day missing, repeated rows collapsed, a conflicting repeat, an overlap, rows out of order, a non-list part and unusable row times refused, a gap kept for the engine, which refuses it (`TARIFF_GAP`), nothing contributing, the age of the oldest part, `fresh_by` per part, a future-dated part; RT4B-1: only an exactly equal rate collapses, 0.30 against 0.3001 GBP/kWh is refused, an int and a float of equal value collapse), one rate event under two tariff tables refused (A42, RT4-2: entity and attribute, every day event of a list, either key order; the same entity under another attribute accepted), the source notes (A42: every note a contract key and a `SOURCE_NOTE_CODES` code, every code produced on its refusal path, the vocabulary matched to the module's code literals, `public_notes` withholding anything else, and `engine_link.compute` putting exactly that list in the diagnostics: forged notes added to a real build are withheld and counted), the diagnostics' signal names (A45, RV9-3: `public_signals` keeps a contract signal's name and a PV forecast observation's day and position, withholds anything else, and `engine_link.compute` gives the diagnostics no source name), the schema v2 slot table, the overlay, the raise preference, `fresh_by`, attribute readings, the strict entity map, the history rows and cap, gaps |
 | `test_runtime_store.py` | writes only under `state/`, schema version, retention, scorecard once per slot, no recommendation rows, refusals |
 | `test_runtime_selftest.py` | every gate, pure and through the stand-in; a tampered kit; the source tree is not a kit; the `SITE_FILE` texts (A49): "a UTF-8 byte-order mark" whatever follows it (RR1-5), "not a JSON object" with the top level's JSON type, "a non-finite number" for NaN, Infinity and a literal beyond the double range (an integer too large for a double no longer raises out of the loader), "not valid JSON" with the exception type (a nesting too deep to read no longer raises either), each value-free and within the 80 published characters, also through the stand-in |
+| `test_runtime_site_conversion.py` | the optional inverter conversion site facts through the loader and `site-check`: absent keys change nothing (no check, None facts); a valid set PASSes and reaches the engine as a conversion; every invalid form (one or two keys, out of bounds, a string, a bool, a list, an object) WARNs without naming a value, is carried so the engine reports it (a non-number as NaN, never as absent; an integer beyond the double range anywhere in the file is the loader's own `SITE_FILE` FAIL, and the facts builder itself never raises on one), `site-check` reports PROBLEMS and export and Dump BLOCKED with `POWER_LOSS_FACTS_INVALID`, every other item unchanged; a site file's facts decide whether a loss-affected set BLOCKs in the engine; mutants killed |
 | `test_runtime_build.py` | byte-identical builds, manifest hashes, the exact closure, no absolute import at any depth, only imports changed, the built tree runs alone and gives the repository's envelope, exclusions, refusals |
 | `test_runtime_loop_steps.py` (L2) | the event-loop steps under a fake that starts tasks eagerly unless told otherwise (as the pinned Core): the import check (labelled IMPORT), the coordinator module (and most of the vendored engine) imported in the import executor through the integration's own job, nothing of the package first imported on the event loop thread during setup, the import started only after the submitting step ended; the poll-driven step and the tick, fired inside the loop, return before any cycle work runs (the task named, `eager_start=False`, not entered) and the second-run guard holds a second start back; the checks, the snapshot, the history inputs, the engine submit and the publish each in their own loop step, in that order, the tick body in the first step of a cycle the tick body did not start, and the catch-up tick body in the cycle task's last step; identical results with the yields and with them made not to suspend; the settle hold at the snapshot (A36): a poll written between the start and the snapshot step holds the snapshot once to its settle delay's end (in the cycle task, counted), which reads it with that moment as the cycle time and no future observation, a partial poll (the text alone, the SOC 1 s later) is read whole, the held cycle covers that poll (its own step, after the hold, or due during it and so armed at the cycle's end, starts no second cycle and is not deferred), the residual (a second poll during the hold) is counted and its step refreshes at the floor's end, a residual held start is not held again, the hold is cut to the deadline, a SLOT cycle reads its history inputs at the cycle time; a tick body run between the snapshot and the engine job (inside a cycle: the deadline run) leaves the job the snapshot's liveness; an unload and a cancel at each step (before the first, after the checks, during the settle hold, after the snapshot, after the history inputs, during the recorder read, the engine and the store write) end the cycle once as `cancelled`, release the guard and write nothing after an unload (a cancelled hold covers no poll); the job names, the tick's slow-callback text with its timer laid out as the pinned Core's `_TrackTimeInterval`; the release of executor jobs (started only after the submitting step, the flag set by the next handle, the cap) and the cool-down after the target |
 | `test_runtime_quiet_cycle.py` (L2) | the quiet cycle: a cycle's start detaches the tick and cancels a pending step (its due time kept), a poll during the cycle is noted but arms nothing (its due time only earlier, A33), no timer or one-shot is created until the end; the end releases the guard, runs the catch-up tick body in the cycle task, attaches the tick again (its phase following the end) and arms the held step at max(its due time, now), where the floor still defers it; a slot that fell due during a cycle starts from the catch-up, and while that slot cycle runs no timer or one-shot is active or created and the held step stays held; the tick body at the first step of a cycle it did not start (63 s and 2 s after its last run; not in a cycle the tick started), so the deadline comes `TICK_S` after the cycle's start; the tick body at its deadline inside an engine job held 140 s (twice, `TICK_S` after each last run), each deadline run the whole `PROPOSED_TICK_MARGIN_S` before the horizon of the publish before it; the real job wait; the tick body never more than `TICK_S` + `PROPOSED_TICK_MARGIN_S` without running over 90 simulated minutes of polls with jobs that take time on the stand-in's clock (snapshot holds, slot reads, a 110 s engine job), and no deadline run in steady poll-driven operation; the cool-down on every executor job (the import, the start-up gates, the recorder read, the metrics, the engine, the store) and on a raising target, and `cycle_stats` naming the timings that include it; an unload during a cycle (nothing left armed or attached, no catch-up after it), a cancel (the catch-up, the tick and the step back), Home Assistant's shutdown (Core stopping, the entry not unloaded: the catch-up runs and publishes, no cycle starts although a slot is due, the tick and the step back), an engine thread abandoned at the time budget, through the real job wait (the job not cancelled, the tick back at once, no step armed until the thread ends, none after an unload); RR-N1, a snapshot hold cut short by the deadline counted as a residual and covering nothing; the end of a cycle that ended `self_test_failed` (an entity write that raised in its start run) or `discarded_failed` (one that raised at its deadline run): the catch-up, the tick and the step back; a settle hold's step held through a cycle armed unheld at its end, so it is held once more inside the settle delay of a poll seen in the cycle's last 3 s; a `_finish` that raises at the end: the guard released, the catch-up, the tick and the step back; a catch-up whose tick body raises: the exception leaves the cycle task, the tick and the step back |
