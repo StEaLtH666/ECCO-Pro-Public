@@ -139,6 +139,7 @@ import _ptt1_scope as _ptt1  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
+import _sgt1_scope as _sgt1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
 import _ttr1_scope as _ttr1  # noqa: E402
 import _wsc1_scope as _wsc1  # noqa: E402
@@ -1485,7 +1486,24 @@ TTR1 = Entry(
          "entities that read eight entities the dongle already publishes and write nothing; an input that is missing, unavailable, unknown or not a finite number is never TRUSTED; nothing is wired to a "
          "gate yet; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, TTR1)
+# sgt1 (the shared START GATE for Charge Battery and Export to Grid, a GUARDED FREE POWER START and the IN-LEASE END GUARDS; offline, nothing installed, the gate is SOFT; _sgt1_scope.py): made on the export after
+# ttr1. ADDED: the two packages, their suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (two stanzas with their comment blocks). Measured, not declared: no delta, no
+# op path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; no existing package, card or dashboard is edited (the start bypass detector, smr1 and the schedules are untouched). The guarded
+# start stages and presses the dongle's EXISTING Free Power start button as the scheduled start and the card do, and the guards only press the two EXISTING End buttons: no register operation of its own.
+SGT1 = Entry(
+    id="sgt1", pr="SGT1", commit="unmerged",
+    reverts=dict(_sgt1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after sgt1
+        HA_MANIFEST: "11ed594ce9ca6df8398b02b4b37216602fb5db868339d8650b0113417ccfb356",
+    },
+    added_files=_sgt1.ADDED_FILES,
+    # _pex.fingerprint(SGT1): hashes its parent ttr1's fingerprint and every declaration above
+    fingerprint="3d38e2d36a3786cef85d19e10308e75511e97c238ffd85f647b418ee4467ff8c",
+    note="the shared start gate (two template binary sensors, the grid-import ceiling helper with no initial value, a guarded Free Power start script) and three in-lease END guards, each its own automation needing "
+         "the owner's separate install authorisation; the gate is soft (the dongle's own Start button bypasses it), the card is not changed, a missing or unreadable input closes the gate, the guards only press "
+         "an existing End button and never act at a restart, a reload or a reconnect; ZERO firmware, registry data, Intelligence or ecco_core change, no register operation of its own",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, TTR1, SGT1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
