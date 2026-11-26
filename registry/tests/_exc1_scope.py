@@ -75,9 +75,9 @@ dashboard:
 
 
   # Export coordinator - exc1 (READ-ONLY SHADOW; NOT installed, NOT LIVE-PROVEN). Item N3 of the architecture reconciliation. Nine template sensors and nothing else: from MEASURED values (no forecast entity is read)
-  # a proposal for an Export to Grid start on the schedule path (the Stop SOC floor, the usable energy above it, the expected battery power, the net export target and the duration, bounded by the schedule's own window, with a
+  # a proposal for an Export to Grid start on the schedule path (the Stop SOC floor, the usable energy above it, the expected battery power, the net export target and the duration, bounded by the schedule's own window (a running lease gets no time past the end of the window it runs in), with a
   # state VALID / INVALID / UNVERIFIED / HOLD and every blocking cause named), a re-target shadow (would a change be allowed now: an END plus a guarded re-START, at most one per 30 minutes, only reported, only for a lease the
-  # schedule started; END NOW is the lease guard's rule) and a comparison with that lease's latched values. No automation, script, helper, trigger or service call, and nothing reads the sensors yet. THE GATES ARE SOFT: the
+  # schedule started, whose END it can only keep or shorten; END NOW is the lease guard's rule) and a comparison with that lease's latched values. No automation, script, helper, trigger or service call, and nothing reads the sensors yet. THE GATES ARE SOFT: the
   # dongle's own Start button bypasses them. It does not read the start gate or the time trust input and is not wired to them (both packages pin who may read them: that wiring is a separate step with its own approval).
   # Install = copy the file, check the configuration and reload the template entities (Developer tools, YAML): no restart, which is why restart_required is false; it needs the owner's go, and ONLY with NO Dump to Grid or
   # Free Power lease running and outside any armed scheduled Export or charge run (from its start to its window end plus 10 minutes): the reload re-creates every template entity, the plan's hold and effective reserve

@@ -1562,11 +1562,11 @@ EXC1 = Entry(
     id="exc1", pr="EXC1", commit="unmerged",
     reverts=dict(_exc1.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after exc1
-        HA_MANIFEST: "f8c9b95a43f898aedbf105e24c504900b5a9318684af0e5b8d63b341827a0a05",
+        HA_MANIFEST: "c775aa79b786b9175628b4733362ef0d3401284e54fd431da2031e98886fdd35",
     },
     added_files=_exc1.ADDED_FILES,
     # _pex.fingerprint(EXC1): hashes its parent sgt1's fingerprint and every declaration above
-    fingerprint="878874b749c904e45dd4d7cbd7dffea84ff1f314dc08bfa99ffce1f38aa95cc5",
+    fingerprint="6bd59c521ccfdb3b1a1f4d5cb18d0ff1a0650d09ae1029b3f96a1c7e4a03d849",
     note="the export coordinator v0 (nine template sensors: a proposal for an Export to Grid start from measured values, a re-target shadow and a comparison with the running lease); a read-only shadow, "
          "nothing reads it yet, the gates are soft, it reads neither the start gate nor the time trust input (their packages pin who may read them), every missing or implausible input makes it INVALID; "
          "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
