@@ -37,6 +37,8 @@ Grid (B), working through the inverter's own TOU controls and import/export limi
 
 ## Relation to existing work
 
+**Update 26 Nov 2026:** R9, Stage 3, the start-bypass detector, the Power Flow tooltip, the live-only dashboard entries, Ghost, U3, U1, the Energy Actions card corrections, the assurance lab and the Gentle night planner are now squash-merged to `main` (the statements below that name a branch for them were written before that and describe where the files were). The guarded charge-rate controller design (`dev/gentle-rate-controller`) and the per-clock time trust package (`dev/ecco-time-trust`) are NOT on `main`.
+
 - The guarded charge-rate controller (GRC) design, reference model and proofs: branch `dev/gentle-rate-controller`
   (`docs/dev/gentle-rate-controller/`), not on main. This folder adopts its actuator choice and its proof ladder for Gentle.
 - The Gentle night planner: `frontend/ecco-plan-core/src/gentleNight.ts` on branch `dev/gentle-on-card-fixes` (read only, actuates
