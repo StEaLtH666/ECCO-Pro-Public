@@ -1,0 +1,199 @@
+{
+  "actions": [
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 60,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "minutes": 1,
+        "power_w": 1400,
+        "stop_soc": 56
+      },
+      "at_s": 60,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "seconds": 400
+      },
+      "at_s": 60,
+      "do": "run_for"
+    },
+    {
+      "args": {
+        "arm": true,
+        "minutes": 27,
+        "power_w": 3800
+      },
+      "at_s": 460,
+      "do": "fp_start"
+    },
+    {
+      "args": {
+        "down_s": 52,
+        "keep_prefs": true,
+        "nvs_fault": [
+          "read_error",
+          "dump.valid"
+        ]
+      },
+      "at_s": 460,
+      "do": "reboot"
+    },
+    {
+      "args": {
+        "seconds": 120
+      },
+      "at_s": 514,
+      "do": "run_for"
+    }
+  ],
+  "classification": "FINDING-KNOWN:N17",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "names": [
+          "INV-LOCKOUT-QUIET"
+        ]
+      },
+      "observe": "invariants",
+      "op": "!=",
+      "value": []
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "corrupt",
+      "op": "==",
+      "value": true
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "status",
+      "op": "startswith",
+      "value": "RESTORED OK"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status",
+      "op": "contains",
+      "value": "UNKNOWN"
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "CLEAR"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "CLEAR"
+    },
+    {
+      "args": {
+        "addrs": [
+          244,
+          256,
+          261
+        ]
+      },
+      "observe": "bank",
+      "op": "==",
+      "value": {
+        "244": 2,
+        "256": 8000,
+        "261": 5000
+      }
+    },
+    {
+      "args": {
+        "form": "summary"
+      },
+      "observe": "invariants",
+      "op": "==",
+      "value": [
+        {
+          "boot": 1,
+          "inv": "INV-LOCKOUT-QUIET",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "failure_outcome": "accepted residual N17: P1 restores carry no cross-domain terms, so with the other domain corrupt / UNKNOWN a trusted restore writes 256-261 over a possibly-existing (UNKNOWN) or, with a ghost, genuine obligation (write direction: the restoring domain's own verified ORIGINAL)",
+  "finding_priority": "P3",
+  "grade": "VERIFIED",
+  "id": "PB-01-b",
+  "invariant": "INV-LOCKOUT-QUIET",
+  "notes": "F-PB01-2, DUPLICATE of F-FW05-2 (its UNKNOWN form), signature restore-over-corrupt-holder; sibling F-FW03-1. Severity: low: an ownership-integrity (R1 policy) residual, not a hazardous write: the restoring domain writes its own verified ORIGINAL; in the single-fault form the other domain holds no obligation (UNKNOWN only), so the bank ends at the owner's ORIGINAL and Dump stays visibly UNKNOWN-locked ('do NOT reboot'); overwriting a genuine obligation needs a second independent fault (a PR41-GHOST phantom: START refuses while the other snapshot is valid). Reachability: INFERRED: a PER-KEY boot load failure of the other domain's marker on a stored key (READ_ERROR when the length probe succeeds but the data read fails, or WRONG_SIZE / MALFORMED) while this domain holds a lease across the reboot; a whole-NVS failure makes both domains UNKNOWN and nothing is written; rate UNKNOWN. The Dump marker key holds CLEAR from the first lease, so the boot READ_ERROR is on a stored key (the firmware's length probe reports ABSENT for a key never stored). The bank ends at the owner's ORIGINAL. MODEL: boot fault read_error. Synthetic values only.",
+  "ownership": "one dongle; Free Power and Dump to Grid leases, register 244 and the manual TOU owner domains as the firmware defines them; the synthetic SITE is the owner's ORIGINAL; an owner change outside any lease is the new ORIGINAL, a change while a domain holds the register is foreign (excluded until ECCO rewrites it)",
+  "scenario_priority": "P1",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 153,
+  "smallest_safe_repair_scope": "none required: S4 records N17 as an accepted residual. A bare '!other_corrupt' term is NOT a safe standalone change: the gate is the wrapper restore_free_power_snapshot (not the dispatch), shared by the automatic watchdog (P1) and the owner's End (P2, always admissible per S4); the term would strand the live grid-charge override (FP) or leave 244 = 0 uncontained (Dump) until an operator resolves the other domain (FW-03 / FW-05 mutants). The root cause is the boot arbitration being skipped when either side is corrupt; any R1 enforcement belongs to the boot lockout under an owner decision. Description only",
+  "source_anchors": [
+    {
+      "line_at_record": 913,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "export containment not armed - do NOT reboot: a reboot may make the record read as absent"
+    },
+    {
+      "line_at_record": 169,
+      "path": "docs/architecture/fallback/design/S4_domains_decisions_final.md",
+      "text": "| **N17** | P1 restores (FP and Dump) carry no cross-domain terms."
+    },
+    {
+      "line_at_record": 81,
+      "path": "docs/architecture/fallback/design/S4_domains_decisions_final.md",
+      "text": "An UNKNOWN or corrupt domain counts as holding an unresolved obligation on everything it owns."
+    }
+  ],
+  "source_digests": {
+    "docs/architecture/fallback/design/S4_domains_decisions_final.md": "06263342ae40c6af72f05c77520d3214789417c4261e028ac345fa98a635b220",
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "After one completed Dump lease (stored CLEAR marker), a Free Power lease and a reboot whose Dump marker read fails (UNKNOWN lockout): the trusted Free Power restore writes the shared 256-261 while Dump is corrupt-locked",
+  "trace_digest": "7a208981c9dfc9e31c2d18fd0100eb2e8fa9a82101c7ce62e3aa8a9014d62a62",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {
+    "warmup_s": 60
+  }
+}
