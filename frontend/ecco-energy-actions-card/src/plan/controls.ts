@@ -24,6 +24,13 @@ const KIND_BLURB: Record<string, string> = {
   prepare_power_cut: "Sets the reserve ECCO's plan uses to the larger of your own reserve and the power-cut reserve, and holds back ECCO's own export starts. It does not change the inverter's own reserve and does not stop the house using the battery. It does not charge the battery.",
 };
 
+// One short line per kind, always visible (the longer KIND_BLURB sits behind "What it does", closed by default).
+const KIND_SHORT: Record<string, string> = {
+  hold_battery: "Holds back ECCO's own export starts.",
+  skip_tonight: "Holds back ECCO's own export starts tonight.",
+  prepare_power_cut: "Raises the reserve ECCO's plan uses and holds back its export starts. Never charges.",
+};
+
 // The stated limitation of Stage 3 (release gate RG-ST3), always visible beside the controls. Plain text only: it adds no button, handler or
 // service call. The same sentence stands in the card README, the plan-core README and the Stage 3 package headers; a static test
 // (home-assistant/tests/test_ecco_stage3_limitation.py) requires it, word for word, in each of those places and in the built bundle.
@@ -41,7 +48,10 @@ function kindView(k: KindControlVM, dispatch: (call: PlanServiceCall) => void): 
             : html`<span class="plan-setting-value" data-control-active>${k.activeText}</span>`
           : nothing}
       </div>
-      <p class="plan-reason">${KIND_BLURB[k.kind] ?? ""}</p>
+      <p class="plan-reason plan-effect" data-effect>${KIND_SHORT[k.kind] ?? ""}</p>
+      ${k.reserve
+        ? html`<p class="plan-reason plan-reserve-line" data-reserve-line><span data-reserve-now>${k.reserve.nowText}</span>${k.reserve.planText !== null ? html` &middot; <span data-reserve-plan>${k.reserve.planText}</span>` : nothing} &middot; <span data-reserve-target>${k.reserve.targetText}</span></p>`
+        : nothing}
       ${k.note ? html`<p class="plan-reason" data-control-note role="note">${k.note}</p>` : nothing}
       ${k.belowReserve ? html`<p class="plan-reason plan-below-reserve" data-below-reserve role="note">${k.belowReserve}</p>` : nothing}
       ${k.blockedReason ? html`<p class="plan-reason" data-control-blocked>${k.blockedReason}</p>` : nothing}
@@ -55,6 +65,10 @@ function kindView(k: KindControlVM, dispatch: (call: PlanServiceCall) => void): 
           ? html`<button type="button" class="plan-control-btn is-cancel" data-cancel aria-label=${"Cancel " + k.label} @click=${() => dispatch(k.cancel as PlanServiceCall)}>Cancel</button>`
           : nothing}
       </div>
+      <details class="plan-why plan-fold plan-kind-more" data-fold="kind-more">
+        <summary>What ${k.label} does</summary>
+        <p class="plan-reason">${KIND_BLURB[k.kind] ?? ""}</p>
+      </details>
       ${k.readback ? html`<p class="plan-reason plan-readback" data-readback=${k.readback.outcome} role="status">${k.readback.text}</p>` : nothing}
     </div>
   `;
@@ -63,11 +77,17 @@ function kindView(k: KindControlVM, dispatch: (call: PlanServiceCall) => void): 
 export function controlsView(vm: ControlsVM, dispatch: (call: PlanServiceCall) => void): TemplateResult {
   return html`
     <div class="plan-controls" data-block="controls">
-      <h3 class="plan-heading">Quick overrides</h3>
-      <p class="plan-reason">They hold back ECCO's own export starts and, for Prepare for power cut, set the reserve ECCO's plan uses. They do not change the inverter's own reserve or any inverter setting, do not stop the house using the battery and never charge it. Home Assistant checks every one against your limits again and may refuse it.</p>
+      <div class="plan-controls-head">
+        <h3 class="plan-heading">Quick overrides</h3>
+        ${vm.readiness.kind !== "not_installed" && vm.readiness.kind !== "partial" ? html`<span class="plan-readiness" data-readiness=${vm.readiness.kind} role="status">${vm.readiness.text}</span>` : nothing}
+      </div>
+      <details class="plan-why plan-fold plan-intro" data-fold="overrides-intro">
+        <summary>What quick overrides do</summary>
+        <p class="plan-reason">They hold back ECCO's own export starts and, for Prepare for power cut, set the reserve ECCO's plan uses. They do not change the inverter's own reserve or any inverter setting, do not stop the house using the battery and never charge it. Home Assistant checks every one against your limits again and may refuse it.</p>
+      </details>
       <p class="plan-reason plan-limitation" data-plan-limitation role="note">${START_BUTTON_LIMITATION}</p>
       ${vm.missingScripts.length
-        ? html`<p class="plan-reason" data-controls-missing>The guarded scripts were not found (${vm.missingScripts.join(", ")}), so no override can be started or cancelled here.</p>`
+        ? html`<p class="plan-reason" data-controls-missing data-readiness=${vm.readiness.kind}>${vm.readiness.kind === "partial" ? vm.readiness.text : "The guarded scripts were not found (" + vm.missingScripts.join(", ") + "), so the overrides are not installed here and no override can be started or cancelled."}</p>`
         : vm.kinds.map((k) => kindView(k, dispatch))}
       ${vm.lastResult ? html`<p class="plan-reason plan-result" data-plan-result role="status">Last answer: ${vm.lastResult}</p>` : nothing}
     </div>
@@ -82,8 +102,8 @@ const cancelLedger: CancelLedger = {};
 
 /** The renderer the card hands to the plan section. `nothing` when the plan helper entities are not configured. */
 export function renderPlanControls(send: (call: PlanServiceCall) => void): ControlsRenderer {
-  return ({ snap, states, nowMs }) => {
-    const vm = buildControlsVM({ snap, states, nowMs, clock: localClockContext(nowMs), cancels: cancelLedger });
+  return ({ snap, states, nowMs, guardedStart }) => {
+    const vm = buildControlsVM({ snap, states, nowMs, clock: localClockContext(nowMs), cancels: cancelLedger, guardedStart });
     return vm
       ? controlsView(vm, (call) => {
           noteCall(cancelLedger, call, vm.lastResult);
@@ -95,11 +115,52 @@ export function renderPlanControls(send: (call: PlanServiceCall) => void): Contr
 
 export const controlStyles = css`
   .plan-controls {
-    margin-top: 12px;
+    margin-top: 8px;
     min-width: 0;
   }
+  .plan-controls-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 10px;
+  }
+  .plan-controls-head .plan-heading {
+    margin: 0;
+  }
+  .plan-readiness {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--eaa-ok);
+  }
+  .plan-readiness[data-readiness="needs_confirmation"],
+  .plan-readiness[data-readiness="confirmation_unreadable"],
+  .plan-readiness[data-readiness="limits_unusable"],
+  .plan-readiness[data-readiness="ready_with_gaps"],
+  .plan-readiness[data-readiness="revision_unreadable"] {
+    color: var(--eaa-warning);
+  }
+  .plan-effect,
+  .plan-reserve-line {
+    margin: 2px 0 0;
+  }
+  .plan-reserve-line {
+    font-weight: 600;
+    color: inherit;
+  }
+  .plan-kind-more,
+  .plan-intro {
+    margin-top: 2px;
+    border-top: 0;
+  }
+  .plan-kind-more > summary,
+  .plan-intro > summary {
+    min-height: 28px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--eaa-text-muted);
+  }
   .plan-control {
-    padding: 8px 0;
+    padding: 6px 0;
     border-top: 1px solid var(--eaa-border);
     min-width: 0;
   }

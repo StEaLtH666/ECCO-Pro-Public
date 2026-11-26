@@ -120,6 +120,8 @@ export interface FieldInfo {
   observed: number | null;
   /** An Intelligence proposal that differs from the value, if any (never adopted here). */
   proposal: number | null;
+  /** A plain-words remark the presenter shows beside a known value (for example why the plan's settings model holds no figure for it). */
+  note?: string;
 }
 
 export interface TouSnapshot {
@@ -144,6 +146,8 @@ export interface PlanSnapshot {
   /** The advice entities were readable and fresh. */
   adviceAvailable: boolean;
   adviceNote: string | null;
+  /** The owner's CURRENT backup reserve as the installed backend reads it (a finite number from 0 to 100), never the plan's own 10 % floor. */
+  currentReserve: CurrentReserve;
 }
 
 // ---- Tomorrow's Plan from the Intelligence advice entities ---------------------------------------------------------------
@@ -228,6 +232,38 @@ export function readTouTable(states: StatesLike, prefix: string): { table: Nativ
   return { table: slots, reason: null };
 }
 
+// ---- the owner's CURRENT backup reserve -----------------------------------------------------------------------------------------
+/**
+ * The owner's current backup reserve, read the way the installed backend reads it (home-assistant/packages/ecco_plan_helpers.yaml: the owner's
+ * reserve helper is usable when it is a finite number from 0 to 100; the effective-reserve sensor rounds it up and takes the larger of it and
+ * the running power-cut reserve). It is NOT the plan settings model's own reserve field (10 to 100, whole percents), which describes what the
+ * planner may INTEND, and it is NOT the override's TARGET reserve (the policy value, 10 to 100): an override may only raise the current reserve
+ * to its target, never lower it. A reserve of 5 % is a real, valid current reserve.
+ */
+export interface CurrentReserve {
+  known: boolean;
+  /** The reserve in percent when known, else null. */
+  value: number | null;
+  /** Why it is unknown, in plain words ("" when known). */
+  reason: string;
+}
+
+export const CURRENT_RESERVE_MIN = 0;
+export const CURRENT_RESERVE_MAX = 100;
+
+export function readCurrentReserve(states: StatesLike, id: string | undefined): CurrentReserve {
+  if (!id) return { known: false, value: null, reason: "No backup reserve entity is configured (plan.reserve)." };
+  if (states[id] === undefined) return { known: false, value: null, reason: "The backup reserve entity was not found, so the reserve now is not known." };
+  const text = stateText(states, id);
+  if (text === null) return { known: false, value: null, reason: "The backup reserve cannot be read." };
+  const n = stateNumber(states, id);
+  if (n === null) return { known: false, value: null, reason: "The backup reserve (" + text.trim().slice(0, 24) + ") is not a number, so it is not used." };
+  if (n < CURRENT_RESERVE_MIN || n > CURRENT_RESERVE_MAX) {
+    return { known: false, value: null, reason: "The backup reserve reads " + n + ", which is not a percentage from " + CURRENT_RESERVE_MIN + " to " + CURRENT_RESERVE_MAX + ", so it is not used." };
+  }
+  return { known: true, value: n, reason: "" };
+}
+
 // ---- settings ---------------------------------------------------------------------------------------------------------------------
 interface Raw {
   value: number | null;
@@ -288,7 +324,13 @@ export function buildPlanSnapshot(config: EccoEnergyActionsCardConfig, states: S
   raw["export.durationMin"] = checked("export.durationMin", dgDur, "The export duration cannot be read.");
 
   // Reserve: the backup reserve helper has no read-back, so it is never called verified. The planning reserve has no entity here.
-  raw["reserve.backupPct"] = checked("reserve.backupPct", plan.reserve ? stateNumber(states, plan.reserve) : null, plan.reserve ? "The backup reserve cannot be read." : "No backup reserve entity is configured (plan.reserve).");
+  // The CURRENT reserve is read by the backend's rule (0 to 100), not by the planner's own field rule (10 to 100, whole percents). The planner's
+  // settings model can only hold a value its own field accepts; a current reserve outside that (for example 5 %) is kept apart in
+  // `currentReserve`, shown as it is, and the model keeps its inert placeholder for it.
+  const currentReserve = readCurrentReserve(states, plan.reserve);
+  raw["reserve.backupPct"] = currentReserve.known
+    ? checked("reserve.backupPct", currentReserve.value, currentReserve.reason)
+    : { value: null, reason: currentReserve.reason, observed: null };
   raw["reserve.planningPct"] = { value: null, reason: "Intelligence's planning reserve is not read by this card.", observed: null };
 
   // Canonical settings. A field this card cannot read holds the field's minimum as an inert placeholder; `known` is authoritative
@@ -341,6 +383,20 @@ export function buildPlanSnapshot(config: EccoEnergyActionsCardConfig, states: S
     const r = raw[p];
     const rec = settings.fields[p];
     const def = FIELD_DEFS[p];
+    if (p === "reserve.backupPct" && r.value === null && currentReserve.known && currentReserve.value !== null) {
+      return {
+        path: p,
+        label: def.label,
+        unit: def.unit,
+        known: true,
+        value: currentReserve.value,
+        state: rec.state,
+        source: rec.source,
+        observed: null,
+        proposal: null,
+        note: "Read from your backup reserve helper. The plan's own settings model holds whole percents from " + def.min + " to " + def.max + " only, so it keeps no figure for this value; the installed overrides accept any reserve from " + CURRENT_RESERVE_MIN + " to " + CURRENT_RESERVE_MAX + " %.",
+      };
+    }
     return {
       path: p,
       label: def.label,
@@ -402,6 +458,7 @@ export function buildPlanSnapshot(config: EccoEnergyActionsCardConfig, states: S
     overrides: [],
     adviceAvailable: read.available,
     adviceNote: read.note,
+    currentReserve,
   };
 }
 
@@ -412,19 +469,26 @@ export function buildPlanSnapshot(config: EccoEnergyActionsCardConfig, states: S
  */
 function reconcileTomorrow(t: TomorrowPlan, fields: FieldInfo[], read: AdviceRead): TomorrowPlan {
   const known = (p: FieldPath) => fields.find((f) => f.path === p)?.known === true;
-  const why = t.why.filter((w) => {
-    if (w.origin !== "settings") return true;
-    if (w.text.startsWith("Charge target ")) return known("charge.targetSoc");
-    if (w.text.startsWith("Export stops at ")) return known("export.stopSoc");
-    if (w.text.startsWith("Backup reserve ")) return known("reserve.backupPct");
-    return true;
-  });
+  const reserveField = fields.find((f) => f.path === "reserve.backupPct");
+  // A current reserve the planner's model cannot hold (outside its own 10 to 100 whole-percent field) is carried by the field, not by the model.
+  const reserveOutsideModel = reserveField !== undefined && reserveField.known && reserveField.note !== undefined;
+  const why = t.why
+    .filter((w) => {
+      if (w.origin !== "settings") return true;
+      if (w.text.startsWith("Charge target ")) return known("charge.targetSoc");
+      if (w.text.startsWith("Export stops at ")) return known("export.stopSoc");
+      if (w.text.startsWith("Backup reserve ")) return known("reserve.backupPct");
+      return true;
+    })
+    .map((w) => (w.origin === "settings" && w.text.startsWith("Backup reserve ") && reserveOutsideModel ? { ...w, text: "Backup reserve " + (reserveField as FieldInfo).value + " % (owner's helper, no read-back)." } : w));
   if (!known("charge.targetSoc")) why.push({ origin: "settings", text: "Charge target: unknown (no single grid-charge slot to read it from)." });
   if (!known("export.stopSoc")) why.push({ origin: "settings", text: "Export Stop SOC: unknown (not readable)." });
   if (!known("reserve.backupPct")) why.push({ origin: "settings", text: "Backup reserve: unknown (no entity configured or readable)." });
   const withhold = (item: TomorrowPlan["importKwh"]): TomorrowPlan["importKwh"] => (!item.known && read.note ? { ...item, reason: read.note } : item);
   const reserve: TomorrowPlan["reservePct"] = t.reservePct.known && !known("reserve.backupPct")
     ? { known: false, reason: fields.find((f) => f.path === "reserve.backupPct")?.reason ?? "Unknown.", state: "PROPOSED" }
-    : t.reservePct;
+    : t.reservePct.known && reserveOutsideModel
+      ? { ...t.reservePct, value: (reserveField as FieldInfo).value }
+      : t.reservePct;
   return { ...t, why, importKwh: withhold(t.importKwh), exportKwh: withhold(t.exportKwh), solarKwh: withhold(t.solarKwh), chargeFinishMin: withhold(t.chargeFinishMin), reservePct: reserve };
 }

@@ -126,6 +126,7 @@ import _isp1_scope as _isp1  # noqa: E402
 import _epc1_scope as _epc1  # noqa: E402
 import _epc2_scope as _epc2  # noqa: E402
 import _epc3_scope as _epc3  # noqa: E402
+import _ecf1_scope as _ecf1  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -1468,7 +1469,30 @@ OVW5 = Entry(
          "only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core "
          "change, ZERO Modbus operation, no service call, no entity",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5)
+# ecf1 (the Energy Actions card corrections found on the first live install: the CURRENT backup reserve against the power-cut TARGET reserve, what
+# "installed" means, the compact guarded view; offline, nothing installed by this entry; _ecf1_scope.py): made on the export after epc3. FROZEN edits
+# (PEX): the card's README.md (one added paragraph) and the rebuilt dist/ecco-energy-actions-card.js. The src/plan files and the card tests that exist
+# already are epc1 / epc2 ADDED files (no reverter needed). ADDED: the new card suite and its probe. Measured, not declared: no chain-pinned reverter,
+# no delta, no op path; ZERO firmware, Home Assistant package, deployment, registry data, Intelligence, ecco_core, config.ts, ecco-energy-actions-card.ts
+# or VERSION.yaml byte; ZERO Modbus operation; no new service call (the allow-list, the two click handlers and the three declared ids are unchanged).
+ECF1 = Entry(
+    id="ecf1", pr="ECF1", commit="unmerged",
+    added_files=_ecf1.ADDED_FILES,
+    frozen_reverts=dict(_ecf1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after ecf1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _ecf1.README_REL: "d799ff82d0a6227018a37bec59adb5a40e489cb9ac20d813de0fad8cfab3aa12",
+        _ecf1.DIST_REL: "2270a0bec2ceda208c3d8677c7449d94d26615016b225de3b0be9137d7e8ccea",
+    },
+    # _pex.fingerprint(ECF1): hashes its parent epc3's fingerprint and every declaration above
+    fingerprint="136ea0d788a86411cf1258b199ef3f109fb785578fd2ee9c6c389c289f2a51bd",
+    note="the Energy Actions card corrections after the first install: the current backup reserve is read by the installed scripts' rule (a number from 0 "
+         "to 100, so 5 percent is valid) and kept apart from the power-cut target (10 to 100, offered only while above the reserve now), installed is "
+         "derived from the entities that exist instead of a static line (ready only when nothing is missing and the plan revision can be read), and the "
+         "guarded Plan section is compact (folded text with one-line summaries); the owner's reserve is labelled apart from the reserve the plan uses, "
+         "and a target must be above the owner's reserve rounded up; the card README and the rebuilt bundle: ZERO firmware, Home Assistant package, deployment, registry data, Intelligence or ecco_core change, "
+         "ZERO Modbus operation, no new service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

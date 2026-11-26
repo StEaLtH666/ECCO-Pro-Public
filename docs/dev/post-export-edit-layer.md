@@ -352,3 +352,4 @@ Solar with `fill: 'null'` for the other four series is not possible). The option
 `sensor.<slug>_last_telemetry_update` is no older than about 180 s. An outage and stale telemetry would then both draw a gap. It costs one new
 Home Assistant package entity and a dashboard series-entity edit, that is another gated dashboard change and another post-export entry. It is not
 built, not part of ovw5, and needs the owner's go like any dashboard change.
+
