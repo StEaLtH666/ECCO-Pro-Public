@@ -7,8 +7,9 @@ Writes, under <out>:
 
     custom_components/ecco_intelligence/            the integration sources (no tests, no README) plus _vendor/
     custom_components/ecco_intelligence/_vendor/    the AST import closure (module level AND function level) of
-                                                    intelligence.shadow_cycle, intelligence.scorecard, intelligence.history
-                                                    and ecco_core.bridge, plus the package __init__ files on the path
+                                                    intelligence.shadow_cycle, intelligence.scorecard, intelligence.history,
+                                                    intelligence.ghost_compare and ecco_core.bridge, plus the package
+                                                    __init__ files on the path
     custom_components/ecco_intelligence/VENDOR_MANIFEST.json   (a copy, read by the integration's start-up self-test)
     VENDOR_MANIFEST.json                            per module: source path, sha256 of the source (LF), output path and
                                                     sha256; per integration file the same; the git sha when given
@@ -39,7 +40,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PKG_REL = "custom_components/ecco_intelligence"
 SRC_PKG = REPO / "custom_components" / "ecco_intelligence"
-ROOT_MODULES = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "ecco_core.bridge")
+ROOT_MODULES = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "intelligence.ghost_compare",
+                "ecco_core.bridge")
 VENDOR_TOPS = ("intelligence", "ecco_core")
 NEVER_VENDOR_MODULES = frozenset({"ecco_core.authority", "ecco_core.capability"})
 NEVER_VENDOR_PARTS = frozenset({"tests", "tools", "prototypes", "profiles"})

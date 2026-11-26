@@ -5,7 +5,7 @@
   * VENDOR_MANIFEST.json: every vendored module's source sha256 (LF) matches the repository file, every output sha256 matches
     the kit file; the integration files likewise; the git sha is recorded only when given; the in-package copy is identical;
   * the vendored set is exactly the AST import closure (module AND function level) of intelligence.shadow_cycle,
-    intelligence.scorecard, intelligence.history and ecco_core.bridge plus the package __init__ files (recomputed here
+    intelligence.scorecard, intelligence.history, intelligence.ghost_compare and ecco_core.bridge plus the package __init__ files (recomputed here
     independently);
   * no absolute intelligence / ecco_core import remains at any depth, in _vendor or in the integration files (AST);
     ecco_core/bridge.py's function-level import is rewritten; apart from imports every vendored module is unchanged (AST);
@@ -48,7 +48,8 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 PREFIX = "ecco_intel_build_"
 PKG_REL = "custom_components/ecco_intelligence"
-ROOTS = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "ecco_core.bridge")
+ROOTS = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "intelligence.ghost_compare",
+         "ecco_core.bridge")
 
 
 def sha(b: bytes) -> str:
@@ -143,7 +144,7 @@ try:
     print("== the vendor closure")
     want = closure()
     got = {m["module"] for m in man["modules"]}
-    check(f"the vendored set is exactly the AST import closure of the four roots ({len(want)} modules)", got == want,
+    check(f"the vendored set is exactly the AST import closure of the five roots ({len(want)} modules)", got == want,
           f"extra {sorted(got - want)} missing {sorted(want - got)}")
     check("the closure reaches the function-level import of ecco_core.bridge (intelligence.inputs)", "intelligence.inputs" in got)
     vend = sorted((pkg / "_vendor").rglob("*.py"))

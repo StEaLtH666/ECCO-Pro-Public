@@ -115,6 +115,17 @@ export const BLOCK_KEYS_READ = Object.freeze({
   blockers: Object.freeze(['code', 'text']),
 });
 
+// The OPTIONAL Ghost entity ("Advice versus reality"): NOT part of the eleven-entity contract. Absent = the card is unchanged.
+// Its attributes are the summary of intelligence/ghost_feed.py (schema GHOST_SCHEMA). The names below are read through att() in
+// addition to ATTRIBUTES_READ (the Python suite pins them disjoint from the contract's attributes).
+export const DEFAULT_GHOST_ENTITY = 'sensor.ecco_intel_ghost';
+export const GHOST_SCHEMA = 'ecco-intel-ghost-feed/1';
+export const GHOST_ATTRIBUTES_READ = Object.freeze([
+  'schema', 'simulated', 'intelligence_controlled_nothing', 'money_available', 'totals', 'days', 'ready_for_assisted_evidence',
+  'uncertainty', 'days_dropped',
+]);
+export const GHOST_MAX_DAYS = 14;
+
 const ENTITY_ID_RE = /^[a-z0-9_]+\.[a-z0-9_]+$/;
 const PROTOTYPE_ID_RE = /\.ecco_intelligence_/; // the frozen V1 prototype's ids: never read
 
@@ -126,7 +137,7 @@ export function validateConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error(`${TAG}: invalid configuration`);
   }
-  const known = new Set(['type', 'title', 'entities']);
+  const known = new Set(['type', 'title', 'entities', 'ghost_entity']);
   for (const k of Object.keys(config)) {
     if (!known.has(k)) throw new Error(`${TAG}: ${k} is not a known option`);
   }
@@ -153,7 +164,13 @@ export function validateConfig(config) {
     seen.set(v, k);
     out[k] = v;
   }
-  return Object.freeze({ title: config.title === undefined ? DEFAULT_TITLE : config.title, entities: Object.freeze(out) });
+  const gid = config.ghost_entity === undefined || config.ghost_entity === null || config.ghost_entity === '' ? DEFAULT_GHOST_ENTITY : config.ghost_entity;
+  if (typeof gid !== 'string' || !ENTITY_ID_RE.test(gid) || gid.split('.')[0] !== 'sensor') {
+    throw new Error(`${TAG}: ghost_entity must be a sensor entity id such as ${DEFAULT_GHOST_ENTITY}`);
+  }
+  if (PROTOTYPE_ID_RE.test(gid)) throw new Error(`${TAG}: ghost_entity: the ecco_intelligence_* ids belong to the frozen V1 prototype`);
+  if (seen.has(gid)) throw new Error(`${TAG}: ghost_entity repeats entities.${seen.get(gid)}`);
+  return Object.freeze({ title: config.title === undefined ? DEFAULT_TITLE : config.title, entities: Object.freeze(out), ghost: gid });
 }
 
 // ===========================================================================
@@ -475,6 +492,180 @@ export function deriveModel(states, ids = DEFAULT_ENTITIES, nowMs = Date.now()) 
   return vm;
 }
 
+// ---------------------------------------------------------------------------
+// the optional Ghost entity: advice versus reality (a SIMULATION; read-only; evidence, never a decision)
+// ---------------------------------------------------------------------------
+export const GHOST_TEXT = Object.freeze({
+  title: 'Advice versus reality (Ghost)',
+  banner: 'SIMULATION. Intelligence controlled nothing: the real battery did what it did. The Ghost replays the recorded week as if the advice had been followed. It is evidence for the assisted-mode decision, not a decision.',
+  unavailable: 'Ghost not available',
+  insufficient: 'The Ghost has too little usable recorded data yet to compare a week. Nothing is compared and nothing is applied.',
+  scoreboard: 'Week scoreboard',
+  scoreMoney: 'Ghost minus actual per day, net before battery wear, closing battery stock valued (pence). Ahead means the Ghost would have done better; behind means worse.',
+  noMoney: 'Behaviour only, no money (no verified tariff)',
+  scoreBehaviour: 'No verified tariff, so there is no money anywhere here: behaviour only. Each bar is the extra grid import of the Ghost against the real day (kWh).',
+  ahead: 'ahead',
+  behind: 'behind',
+  level: 'level',
+  headline: 'Whole week, Ghost minus actual',
+  noiseWithin: 'Within the noise: this difference is no bigger than the model\'s own uncertainty, so it shows no real gain or loss.',
+  noiseOutside: 'Larger than the model\'s own uncertainty, but still a simulation on recorded hourly data.',
+  noiseTitle: 'How sure is the number',
+  baseline: 'No-advice model baseline',
+  baselineNote: 'how far the Ghost is from reality with no advice at all (0 means the recorded flows replay exactly)',
+  rules: 'Closing battery stock valued two ways',
+  rulesNote: 'the less favourable to the Ghost is used',
+  eff: 'If the battery round-trip efficiency were',
+  socTitle: 'Battery low point',
+  actual: 'actual',
+  ghost: 'Ghost',
+  reserve: 'reserve',
+  breach: 'Ghost went BELOW the reserve',
+  noBreach: 'Ghost stayed at or above the reserve',
+  advice: 'Advice',
+  followed: 'followed',
+  notFollowed: 'not followed',
+  noAdvice: 'no advice recorded',
+  evidence: 'Evidence for the assisted decision',
+  decides: 'This decides nothing. Whether to move to assisted mode stays the owner\'s decision.',
+  quality: 'Data quality',
+  noFlags: 'no data-quality flags',
+  dropped: 'older days left out to keep the summary small',
+});
+export const GHOST_REASON_TEXT = Object.freeze({
+  BLOCKED: 'the advice was blocked (nothing to follow)',
+  FALLBACK_EXCLUDED: 'it was only a conservative fallback, which the Ghost leaves out',
+  NO_WINDOW: 'it had no time window, so the Ghost could not act on it',
+  NO_TARGET: 'it had no target level',
+  NOT_ADVISABLE: 'it advised against exporting',
+  WINDOW_SHORTER_THAN_SLOT: 'its window was shorter than half an hour, so it reached no hourly slot',
+});
+export const GHOST_UNUSABLE_TEXT = Object.freeze({
+  missing_hour: 'hours missing',
+  missing_energy: 'hours with a missing energy reading',
+  negative_energy: 'hours with a negative energy reading',
+  flagged_energy: 'hours with a stalled or implausible reading',
+  missing_soc: 'hours with no battery level',
+});
+
+const gnum = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const gcount = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+const gobj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : null);
+const gtexts = (v, max) => (Array.isArray(v) ? v.filter((t) => typeof t === 'string' && t.trim().length > 0).slice(0, max) : []);
+const GDATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function ghostDay(r) {
+  if (!gobj(r) || typeof r.date !== 'string' || !GDATE_RE.test(r.date)) return null;
+  const nf = [];
+  const nfo = gobj(r.advice_not_followed);
+  if (nfo) for (const [code, n] of Object.entries(nfo)) if (gcount(n) !== null && n > 0) nf.push({ code, n });
+  return {
+    date: r.date,
+    delta: gnum(r.delta_stock_adjusted_p),
+    actualMin: gnum(r.actual_min_soc_pct),
+    ghostMin: gnum(r.ghost_min_soc_pct),
+    breach: r.ghost_below_reserve === true,
+    followed: gcount(r.advice_followed),
+    notFollowed: nf,
+    extraImport: gnum(r.extra_import_kwh_in_ghost),
+    hours: gcount(r.hours),
+  };
+}
+
+function ghostTriple(o, key) {
+  const s = gobj(o);
+  const pick = (k) => (s && gobj(s[k]) ? gnum(s[k][key]) : null);
+  return { minus: pick('minus'), base: pick('base'), plus: pick('plus') };
+}
+
+/**
+ * The view model of the optional Ghost entity: null when there is no such entity (the card renders nothing and is unchanged),
+ * {kind: 'unavailable'} when it is unavailable, unknown or malformed, {kind: 'insufficient'} for a feed with too little data,
+ * else {kind: 'ok', ...}. Never throws. Money appears only for money_available === true; otherwise every pence field is ignored.
+ */
+export function deriveGhost(states, id) {
+  const st = states && typeof states === 'object' && id ? states[id] : undefined;
+  if (st === undefined || st === null) return null;
+  try {
+    if (!live(st)) return { kind: 'unavailable' };
+    if (att(st, 'mode') !== MODE || att(st, 'applies_nothing') !== true || att(st, 'kind') !== 'ghost' || att(st, 'schema') !== GHOST_SCHEMA
+      || att(st, 'simulated') !== true || att(st, 'intelligence_controlled_nothing') !== true) return { kind: 'unavailable' };
+    const status = att(st, 'status');
+    if (status === 'INSUFFICIENT_HISTORY' && st.state === status) return { kind: 'insufficient' };
+    if (status !== 'OK' || st.state !== 'OK') return { kind: 'unavailable' };
+    const rawDays = att(st, 'days');
+    const ready = gobj(att(st, 'ready_for_assisted_evidence'));
+    if (!Array.isArray(rawDays) || !ready) return { kind: 'unavailable' };
+    const money = att(st, 'money_available') === true;
+    const days = rawDays.slice(-GHOST_MAX_DAYS).map(ghostDay).filter((d) => d !== null);
+    if (!days.length) return { kind: 'unavailable' };
+    const unc = gobj(att(st, 'uncertainty'));
+    const tot = gobj(att(st, 'totals')) || {};
+    const dq = gobj(att(st, 'data_quality')) || {};
+    const worst = gobj(ready.worst_ghost_day);
+    const vm = {
+      kind: 'ok',
+      money,
+      days,
+      dropped: gcount(att(st, 'days_dropped')) || 0,
+      evidence: {
+        compared: gcount(ready.days_compared),
+        diverged: gcount(ready.days_diverged),
+        ahead: money ? gcount(ready.days_ghost_ahead) : null,
+        behind: money ? gcount(ready.days_ghost_behind) : null,
+        level: money ? gcount(ready.days_level) : null,
+        worstDate: money && worst && typeof worst.date === 'string' && GDATE_RE.test(worst.date) ? worst.date : null,
+        worstDelta: money && worst ? gnum(worst.delta_p) : null,
+        breachSlots: gcount(ready.ghost_below_reserve_slots),
+        breachDays: gcount(ready.ghost_below_reserve_days),
+        reservePct: gnum(ready.effective_reserve_pct),
+      },
+      totals: { actualMin: gnum(tot.actual_min_soc_pct), ghostMin: gnum(tot.ghost_min_soc_pct), closing: gnum(tot.closing_stored_difference_kwh) },
+      quality: {
+        flags: gtexts(dq.ghost_model_flags, 12),
+        notes: gtexts(dq.notes, 8),
+        approximations: gtexts(dq.approximations, 6),
+        unusable: gobj(dq.unusable_by_reason) ? Object.entries(dq.unusable_by_reason).filter(([, n]) => gcount(n) > 0).map(([code, n]) => ({ code, n })) : [],
+        repaired: gcount(dq.hours_with_repaired_or_flagged_energy),
+        invalid: gcount(dq.advice_rows_invalid),
+        dumpNoWindow: gcount(dq.dump_advice_without_window),
+        periodHours: gcount(dq.period_hours),
+        usableHours: gcount(dq.usable_hours),
+      },
+      eff: unc && gobj(unc.round_trip_efficiency_pct)
+        ? { minus: gnum(unc.round_trip_efficiency_pct.minus), base: gnum(unc.round_trip_efficiency_pct.base), plus: gnum(unc.round_trip_efficiency_pct.plus) }
+        : { minus: null, base: null, plus: null },
+      headline: null,
+      noise: null,
+      rules: null,
+      sens: null,
+    };
+    if (money) {
+      const sens = ghostTriple(unc && unc.sensitivity, 'delta_stock_adjusted_p');
+      const rules = unc && gobj(unc.stock_rules_p) ? { cost: gnum(unc.stock_rules_p.cost_basis), mean: gnum(unc.stock_rules_p.mean_import_price) } : null;
+      const value = gnum(ready.delta_stock_adjusted_p);
+      const baseline = gnum(ready.model_baseline_delta_p);
+      vm.headline = value === null ? null : { value, realised: gnum(ready.delta_realised_p), stock: gnum(tot.stock_adjustment_p), baseline };
+      vm.sens = sens;
+      vm.rules = rules;
+      const spread = [sens.minus, sens.base, sens.plus].filter((x) => x !== null);
+      const bands = [];
+      if (baseline !== null) bands.push(Math.abs(baseline));
+      if (spread.length > 1) bands.push(Math.max(...spread) - Math.min(...spread));
+      if (rules && rules.cost !== null && rules.mean !== null) bands.push(Math.abs(rules.cost - rules.mean));
+      vm.noise = vm.headline && bands.length ? { band: Math.max(...bands), within: Math.abs(value) <= Math.max(...bands) } : null;
+    } else {
+      vm.sens = {
+        slots: ghostTriple(unc && unc.sensitivity, 'ghost_below_reserve_slots'),
+        closing: ghostTriple(unc && unc.sensitivity, 'closing_stored_difference_kwh'),
+      };
+    }
+    return vm;
+  } catch (e) {
+    return { kind: 'unavailable' };
+  }
+}
+
 // ===========================================================================
 // 5. HTML renderers (pure functions returning strings)
 // ===========================================================================
@@ -649,6 +840,248 @@ function renderFooter(vm) {
     + `<span data-pause="${esc(vm.paused)}">${esc(TEXT.pause)}: ${esc(pz)}${hint}</span></footer>`;
 }
 
+// ---------------------------------------------------------------------------
+// the optional Ghost section (renderGhost*): every text from an attribute goes through esc(); no markup comes from data
+// ---------------------------------------------------------------------------
+const GHOST_STATE = Object.freeze({
+  ahead: Object.freeze({ glyph: '▲', word: GHOST_TEXT.ahead, cls: 'tone-ok' }),
+  behind: Object.freeze({ glyph: '▼', word: GHOST_TEXT.behind, cls: 'tone-bad' }),
+  level: Object.freeze({ glyph: '=', word: GHOST_TEXT.level, cls: 'tone-idle' }),
+});
+const GHOST_STEPS = Object.freeze(['minus', 'base', 'plus']);
+const NO_BAR = '<span class="ghalf neg"></span><span class="ghalf pos"></span>';
+
+const gj = (...parts) => parts.join('');
+const ghostRound = (v) => Math.round(v * 10) / 10;
+/** A signed figure with one decimal and its unit; a value that rounds to zero is shown as 0.0 (never -0.0). */
+function ghostSigned(v, unit) {
+  const r = ghostRound(v);
+  if (r === 0) return gj('0.0 ', unit);
+  return gj(r > 0 ? '+' : '-', Math.abs(r).toFixed(1), ' ', unit);
+}
+const ghostPlain = (v, unit) => gj(ghostRound(v).toFixed(1), unit);
+const ghostPct = (v) => (v === null ? '?' : gj(String(Math.round(v)), '%'));
+function ghostStateOf(v) {
+  const r = ghostRound(v);
+  return r > 0 ? 'ahead' : r < 0 ? 'behind' : 'level';
+}
+function ghostLabel(date) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(gj(date, 'T00:00:00Z')));
+  } catch (e) {
+    return date;
+  }
+}
+const ghostStep = (v, max) => (max > 0 ? Math.max(0, Math.min(100, Math.round((Math.abs(v) / max) * 100))) : 0);
+const ghostClamp = (v) => (v === null ? 0 : Math.max(0, Math.min(100, Math.round(v))));
+
+function renderGhostBar(pct, cls) {
+  return `<span class="gbar ${cls}" style="width:${pct}%"></span>`;
+}
+
+function renderGhostTag(cls, text) {
+  return `<span class="gtag ${cls}">${esc(text)}</span>`;
+}
+
+function renderGhostText(text) {
+  return `<span class="gpart">${esc(text)}</span>`;
+}
+
+function renderGhostSocBar(pct, rpct, cls) {
+  return `<span class="gsoc ${cls}" aria-hidden="true"><span class="gsf" style="width:${pct}%"></span><span class="gres" style="left:${rpct}%"></span></span>`;
+}
+
+function renderGhostRows(rows, cls) {
+  return `<ul class="glist ${cls}">${rows.join('')}</ul>`;
+}
+
+/** The two halves of a diverging bar: behind (or less) to the left of the middle, ahead (or more) to the right. */
+function renderGhostTrack(sign, step, cls) {
+  const neg = sign < 0 ? renderGhostBar(step, cls) : '';
+  const pos = sign > 0 ? renderGhostBar(step, cls) : '';
+  return `<span class="ghalf neg">${neg}</span><span class="ghalf pos">${pos}</span>`;
+}
+
+function ghostValueCell(d, g, scale) {
+  if (g.money) {
+    if (d.delta === null) return { track: NO_BAR, tag: renderGhostTag('tone-idle', 'no figure') };
+    const s = GHOST_STATE[ghostStateOf(d.delta)];
+    return {
+      track: renderGhostTrack(ghostRound(d.delta), ghostStep(d.delta, scale), s.cls),
+      tag: renderGhostTag(s.cls, gj(s.glyph, ' ', s.word, ' ', ghostSigned(d.delta, 'p'))),
+    };
+  }
+  if (d.extraImport === null) return { track: NO_BAR, tag: renderGhostTag('tone-idle', 'no figure') };
+  const more = ghostRound(d.extraImport);
+  return {
+    track: renderGhostTrack(more, ghostStep(d.extraImport, scale), 'tone-idle'),
+    tag: renderGhostTag('tone-idle', more === 0 ? 'same grid import' : gj(ghostSigned(d.extraImport, 'kWh'), ' grid import in the Ghost')),
+  };
+}
+
+function ghostReasonText(code) {
+  return Object.prototype.hasOwnProperty.call(GHOST_REASON_TEXT, code) ? GHOST_REASON_TEXT[code] : code;
+}
+
+function renderGhostSoc(d, res) {
+  const out = [];
+  if (d.actualMin !== null || d.ghostMin !== null) {
+    const line = gj(GHOST_TEXT.socTitle, ': ', GHOST_TEXT.actual, ' ', ghostPct(d.actualMin), ', ', GHOST_TEXT.ghost, ' ', ghostPct(d.ghostMin),
+      res === null ? '' : gj(', ', GHOST_TEXT.reserve, ' ', ghostPct(res)));
+    out.push(renderGhostText(line));
+    out.push(renderGhostSocBar(ghostClamp(d.actualMin), ghostClamp(res), 'act'));
+    out.push(renderGhostSocBar(ghostClamp(d.ghostMin), ghostClamp(res), 'gst'));
+  }
+  if (d.breach) out.push(renderGhostTag('tone-bad', gj('▼ ', GHOST_TEXT.breach)));
+  else if (res !== null && d.ghostMin !== null) out.push(renderGhostTag('tone-ok', gj('✓ ', GHOST_TEXT.noBreach)));
+  return out.join('');
+}
+
+function renderGhostAdvice(d) {
+  const out = [];
+  const head = gj(GHOST_TEXT.advice, ': ');
+  if (!d.followed && !d.notFollowed.length) out.push(renderGhostText(gj(head, GHOST_TEXT.noAdvice)));
+  else out.push(renderGhostText(gj(head, String(d.followed || 0), ' ', GHOST_TEXT.followed)));
+  for (const nf of d.notFollowed) out.push(renderGhostText(gj(String(nf.n), ' ', GHOST_TEXT.notFollowed, ': ', ghostReasonText(nf.code))));
+  return out.join('');
+}
+
+/** One day: the scoreboard bar, the battery low point of the real day and of the Ghost against the reserve, and the advice
+ * followed or not with the reasons. */
+function renderGhostDay(d, g, scale) {
+  const cell = ghostValueCell(d, g, scale);
+  const hrs = d.hours !== null && d.hours !== 24 ? renderGhostText(gj(' (', String(d.hours), ' h compared)')) : '';
+  return `<li class="gday" data-gday="${esc(d.date)}"><div class="grow"><span class="gdate">${esc(ghostLabel(d.date))}${hrs}</span>`
+    + `<span class="gtrack" aria-hidden="true">${cell.track}</span><span class="gval">${cell.tag}</span></div>`
+    + `<div class="gsub">${renderGhostSoc(d, g.evidence.reservePct)}</div><div class="gsub">${renderGhostAdvice(d)}</div></li>`;
+}
+
+function renderGhostHeadline(g) {
+  const title = `<h4>${esc(GHOST_TEXT.headline)}</h4>`;
+  if (!g.money) {
+    const t = g.totals;
+    const bits = [
+      t.actualMin !== null && t.ghostMin !== null
+        ? gj(GHOST_TEXT.socTitle, ' over the week: ', GHOST_TEXT.actual, ' ', ghostPct(t.actualMin), ', ', GHOST_TEXT.ghost, ' ', ghostPct(t.ghostMin)) : '',
+      t.closing !== null ? gj('battery contents at the end, Ghost minus actual: ', ghostSigned(t.closing, 'kWh')) : '',
+    ].filter((b) => b !== '');
+    const sub = bits.length ? renderGhostText(bits.join('. ')) : '';
+    return `<div class="ghero" data-ghost="headline">${title}<p class="gbig tone-idle">${esc(GHOST_TEXT.noMoney)}</p><p class="sub">${sub}</p></div>`;
+  }
+  const hl = g.headline;
+  if (!hl) return `<div class="ghero" data-ghost="headline">${title}<p class="gbig tone-idle">no figure</p></div>`;
+  const key = ghostStateOf(hl.value);
+  const st = GHOST_STATE[key];
+  const big = gj(st.glyph, ' ', st.word, ' ', ghostSigned(hl.value, 'p'));
+  const split = hl.realised !== null && hl.stock !== null
+    ? renderGhostText(gj('Realised ', ghostSigned(hl.realised, 'p'), ', closing battery stock ', ghostSigned(hl.stock, 'p'))) : '';
+  return `<div class="ghero" data-ghost="headline" data-gstate="${esc(key)}">${title}<p class="gbig ${st.cls}">${esc(big)}</p><p class="sub">${split}</p></div>`;
+}
+
+function renderGhostVerdict(g) {
+  if (!g.money || !g.noise) return '';
+  const w = g.noise.within;
+  const text = gj(w ? '≈ ' : '', w ? GHOST_TEXT.noiseWithin : GHOST_TEXT.noiseOutside, ' (uncertainty about ', ghostPlain(g.noise.band, ' p'), ')');
+  return `<p class="gverdict ${w ? 'tone-warn' : 'tone-idle'}" data-ghost="verdict" data-within="${w ? 'yes' : 'no'}">${esc(text)}</p>`;
+}
+
+function renderGhostNoise(g) {
+  const rows = [];
+  const e = g.eff;
+  if (g.money) {
+    const hl = g.headline;
+    if (hl && hl.baseline !== null) rows.push(renderGhostText(gj(GHOST_TEXT.baseline, ' ', ghostSigned(hl.baseline, 'p'), ': ', GHOST_TEXT.baselineNote)));
+    if (g.rules && g.rules.cost !== null && g.rules.mean !== null) {
+      rows.push(renderGhostText(gj(GHOST_TEXT.rules, ': ', ghostSigned(g.rules.cost, 'p'), ' and ', ghostSigned(g.rules.mean, 'p'), ' (', GHOST_TEXT.rulesNote, ')')));
+    }
+    for (const k of GHOST_STEPS) {
+      if (e[k] !== null && g.sens[k] !== null) rows.push(renderGhostText(gj(GHOST_TEXT.eff, ' ', ghostPct(e[k]), ': ', ghostSigned(g.sens[k], 'p'))));
+    }
+  } else {
+    for (const k of GHOST_STEPS) {
+      const sl = g.sens.slots[k];
+      const cl = g.sens.closing[k];
+      if (e[k] === null || (sl === null && cl === null)) continue;
+      const a = sl === null ? '' : gj(String(sl), ' slots below the reserve');
+      const b = cl === null ? '' : gj('battery contents at the end ', ghostSigned(cl, 'kWh'));
+      rows.push(renderGhostText(gj(GHOST_TEXT.eff, ' ', ghostPct(e[k]), ': ', a, a && b ? ', ' : '', b)));
+    }
+  }
+  const verdict = renderGhostVerdict(g);
+  if (!rows.length && !verdict) return '';
+  return `<div class="gnoise" data-ghost="noise"><h4>${esc(GHOST_TEXT.noiseTitle)}</h4>${verdict}${list(rows)}</div>`;
+}
+
+function renderGhostBreach(ev) {
+  const where = ev.reservePct === null ? '' : gj(' (', ghostPct(ev.reservePct), ')');
+  if (ev.breachSlots > 0) {
+    const days = ev.breachDays === null ? '?' : String(ev.breachDays);
+    return renderGhostTag('tone-bad', gj('▼ Reserve breaches: ', days, ' days, ', String(ev.breachSlots), ' hourly slots with the Ghost below the reserve', where));
+  }
+  return renderGhostTag('tone-ok', gj('✓ Reserve breaches: none, the Ghost never went below the reserve', where));
+}
+
+function ghostEvidenceRows(g) {
+  const ev = g.evidence;
+  const rows = [];
+  if (ev.compared !== null) rows.push(renderGhostText(gj('Days compared: ', String(ev.compared))));
+  if (g.money) {
+    if (ev.ahead !== null && ev.compared) {
+      rows.push(renderGhostText(gj('Days the Ghost was ahead: ', String(ev.ahead), ' of ', String(ev.compared), ' (', String(Math.round((ev.ahead / ev.compared) * 100)), '%)')));
+    }
+    if (ev.behind !== null) rows.push(renderGhostText(gj('Days the Ghost was behind: ', String(ev.behind), ev.level === null ? '' : gj(', level: ', String(ev.level)))));
+    if (ev.worstDate !== null && ev.worstDelta !== null) rows.push(renderGhostText(gj('Worst day for the Ghost: ', ghostLabel(ev.worstDate), ', ', ghostSigned(ev.worstDelta, 'p'))));
+  } else if (ev.diverged !== null) {
+    rows.push(renderGhostText(gj('Days the Ghost differed from the real day: ', String(ev.diverged))));
+  }
+  if (ev.breachSlots !== null) rows.push(renderGhostBreach(ev));
+  return rows;
+}
+
+function ghostQualityRows(g) {
+  const q = g.quality;
+  const rows = [];
+  for (const f of q.flags) rows.push(renderGhostTag('gflag', f));
+  for (const u of q.unusable) {
+    const why = Object.prototype.hasOwnProperty.call(GHOST_UNUSABLE_TEXT, u.code) ? GHOST_UNUSABLE_TEXT[u.code] : u.code;
+    rows.push(renderGhostText(gj(String(u.n), ' ', why)));
+  }
+  if (q.repaired) rows.push(renderGhostText(gj(String(q.repaired), ' hours with repaired or flagged energy readings')));
+  if (q.invalid) rows.push(renderGhostText(gj(String(q.invalid), ' advice records could not be read')));
+  if (q.dumpNoWindow) rows.push(renderGhostText(gj(String(q.dumpNoWindow), ' Dump to Grid advice with no time window, counted as not followed')));
+  for (const n of q.notes) rows.push(renderGhostText(n));
+  if (g.dropped) rows.push(renderGhostText(gj(String(g.dropped), ' ', GHOST_TEXT.dropped)));
+  return rows;
+}
+
+function renderGhostEvidence(g) {
+  const rows = ghostEvidenceRows(g);
+  const qrows = ghostQualityRows(g);
+  const approx = g.quality.approximations.length ? `<p class="muted">${esc(gj('Approximations: ', g.quality.approximations.join('; ')))}</p>` : '';
+  const quality = qrows.length ? list(qrows) : `<p class="muted">${esc(GHOST_TEXT.noFlags)}</p>`;
+  return `<div class="gevid" data-ghost="evidence"><h4>${esc(GHOST_TEXT.evidence)}</h4>${list(rows)}`
+    + `<h4>${esc(GHOST_TEXT.quality)}</h4>${quality}${approx}`
+    + `<p class="gdecides" data-ghost="decides"><strong>${esc(GHOST_TEXT.decides)}</strong></p></div>`;
+}
+
+/** The Ghost section for deriveGhost()'s view model: nothing for null (no such entity), one quiet line when unavailable. */
+export function renderGhost(g) {
+  if (!g) return '';
+  if (g.kind === 'unavailable') {
+    return `<section class="block ghost" data-sec="ghost" data-ghost-kind="unavailable"><p class="muted" data-ghost="unavailable">${esc(GHOST_TEXT.unavailable)}</p></section>`;
+  }
+  const head = `<h3>${esc(GHOST_TEXT.title)}</h3><p class="gbanner" role="note" data-ghost="banner">${esc(GHOST_TEXT.banner)}</p>`;
+  if (g.kind === 'insufficient') {
+    return `<section class="block ghost" data-sec="ghost" data-ghost-kind="insufficient">${head}<p class="muted" data-ghost="insufficient">${esc(GHOST_TEXT.insufficient)}</p></section>`;
+  }
+  const vals = g.days.map((d) => (g.money ? d.delta : d.extraImport)).filter((v) => v !== null);
+  const scale = vals.length ? Math.max(...vals.map((v) => Math.abs(v))) : 0;
+  const days = renderGhostRows(g.days.map((d) => renderGhostDay(d, g, scale)), 'gdays');
+  const how = g.money ? GHOST_TEXT.scoreMoney : GHOST_TEXT.scoreBehaviour;
+  return `<section class="block ghost" data-sec="ghost" data-ghost-kind="ok" data-money="${g.money ? 'yes' : 'no'}">${head}${renderGhostHeadline(g)}${renderGhostNoise(g)}`
+    + `<h4>${esc(GHOST_TEXT.scoreboard)}</h4><p class="muted">${esc(how)}</p>${days}${renderGhostEvidence(g)}</section>`;
+}
+
 /** The card's markup for a view model. `open` is the set of details keys to keep open. */
 export function renderCard(vm, cfg = validateConfig({}), env = makeFormatters(), open = new Set()) {
   const banner = `<div class="banner" data-sec="banner">${esc(BANNER_TEXT)}</div>`;
@@ -669,7 +1102,7 @@ export function renderCard(vm, cfg = validateConfig({}), env = makeFormatters(),
       parts.push(`<section class="block" data-sec="selftest"><h3>${esc(TEXT.selfTest)}</h3>${list(vm.selfTest.map((c) => `<code>${esc(c.code)}</code> ${esc(c.result)}`))}</section>`);
     }
     if (vm.blockers.length && vm.status !== 'SELF_TEST_FAILED') parts.push(`<section class="block" data-sec="blockers">${list(vm.blockers.map((b) => esc(b.text || b.code)))}</section>`);
-    parts.push(renderHistory(vm, env, open), renderDrill(vm, open), renderFooter(vm));
+    parts.push(renderHistory(vm, env, open), renderDrill(vm, open), renderGhost(vm.ghost), renderFooter(vm));
     return `<ha-card class="eic" data-kind="null" data-status="${esc(vm.status)}">${parts.join('')}</ha-card>`;
   }
   if (vm.withheld) {
@@ -684,7 +1117,7 @@ export function renderCard(vm, cfg = validateConfig({}), env = makeFormatters(),
   parts.push(`<section class="block grid" data-sec="items">${rows.filter((v) => ADVICE_ITEMS.includes(v.key)).map(itemRow).join('')}</section>`);
   parts.push(`<section class="block grid" data-sec="forecasts"><h3>Forecasts</h3>${rows.filter((v) => FORECAST_ITEMS.includes(v.key)).map(itemRow).join('')}`
     + `${renderTariff(vm, env)}</section>`);
-  parts.push(renderValue(vm), renderQuality(vm), renderDrill(vm, open), renderFooter(vm));
+  parts.push(renderValue(vm), renderQuality(vm), renderDrill(vm, open), renderGhost(vm.ghost), renderFooter(vm));
   return `<ha-card class="eic" data-kind="live" data-status="${esc(vm.status)}">${parts.join('')}</ha-card>`;
 }
 
@@ -749,7 +1182,34 @@ summary:focus-visible { outline: 2px solid var(--eic-pred); outline-offset: 2px;
   .grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
   .grid h3 { grid-column: 1 / -1; }
 }
-@media (forced-colors: active) { .badge, .pill, .hero, .callout { border-color: CanvasText; } }
+/* the optional Ghost section: bars are decoration (every figure is also text); ahead / behind never rely on colour alone */
+.ghost h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; color: var(--eic-fg2); }
+.gbanner { margin: 4px 0 8px; padding: 6px 10px; font-size: 13px; font-weight: 600; color: var(--eic-rec); border: 1px dashed var(--eic-rec); border-radius: 8px; }
+.ghero { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--eic-line); border-radius: 10px; }
+.ghero h4 { margin-top: 0; }
+.gbig { margin: 0; font-size: 20px; font-weight: 700; }
+.gverdict { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.glist { list-style: none; margin: 4px 0; padding: 0; }
+.gday { padding: 6px 0; border-bottom: 1px solid var(--eic-line); }
+.grow { display: grid; grid-template-columns: minmax(4.5em, 7em) 1fr; gap: 2px 10px; align-items: center; }
+.gval { grid-column: 1 / -1; font-weight: 600; }
+.gtrack { display: flex; height: 14px; }
+.ghalf { display: flex; flex: 1 1 50%; align-items: stretch; background: color-mix(in srgb, var(--eic-fg2) 10%, transparent); }
+.ghalf.neg { justify-content: flex-end; border-right: 2px solid var(--eic-fg2); }
+.gbar { display: block; min-width: 2px; background: currentColor; border-radius: 2px; }
+.gsub { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin-top: 3px; font-size: 12px; color: var(--eic-fg2); }
+.gpart { white-space: normal; }
+.gtag { font-weight: 700; }
+.gsoc { position: relative; display: inline-block; width: 60px; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--eic-fg2) 18%, transparent); }
+.gsf { display: block; height: 100%; border-radius: 3px; background: var(--eic-pred); }
+.gsoc.gst .gsf { background: var(--eic-rec); }
+.gres { position: absolute; top: -2px; width: 2px; height: 10px; background: var(--eic-fg); }
+.gdecides { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--eic-line); border-radius: 8px; }
+@container (min-width: 480px) {
+  .grow { grid-template-columns: minmax(5em, 8em) 1fr minmax(10em, 16em); }
+  .gval { grid-column: auto; text-align: right; }
+}
+@media (forced-colors: active) { .badge, .pill, .hero, .callout, .gbanner, .ghero { border-color: CanvasText; } .gbar, .gsf, .gres { background: CanvasText; forced-color-adjust: none; } }
 `;
 
 // ===========================================================================
@@ -819,7 +1279,7 @@ export class EccoIntelligenceCard extends Base {
    * changes, so identity is the change test (no serialisation of attributes on every hass update). */
   _fingerprint() {
     const s = this._states();
-    return Object.values(this._config.entities).map((id) => s[id]);
+    return [...Object.values(this._config.entities), this._config.ghost].map((id) => s[id]);
   }
 
   _render() {
@@ -829,6 +1289,7 @@ export class EccoIntelligenceCard extends Base {
       if (d.hasAttribute('open')) open.add(d.getAttribute('data-k'));
     }
     const vm = deriveModel(this._states(), this._config.entities, this._now());
+    vm.ghost = deriveGhost(this._states(), this._config.ghost);
     this._root.innerHTML = `<style>${STYLE}</style>${renderCard(vm, this._config, this._env, open)}`;
   }
 }

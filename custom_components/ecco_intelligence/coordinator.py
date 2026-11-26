@@ -4,7 +4,9 @@ What it touches in Home Assistant (the complete list; the runtime boundary suite
 
   * hass.states.get(...)                     read the mapped entities and the pause helper (never a write)
   * recorder get_instance(hass).async_add_executor_job(statistics_during_period, ...)   read statistics, recorder executor
-  * hass.async_add_executor_job(...)         the start-up gates, the engine and the state store, never on the event loop
+  * hass.async_add_executor_job(...)         the start-up gates, the engine and the state store, never on the event loop;
+                                             and, only when the diagnostics are downloaded, the Ghost block (read-only,
+                                             one job at a time, with a time budget: runtime/ghost_link.py)
   * hass.async_add_import_executor_job(...)  in __init__.py: this module (and through it most of the vendored engine) is
                                              imported in the import executor, never on the event loop
   * hass.loop.call_soon(...)                 the release of each executor job above (__init__.release_after_step): a job
@@ -186,7 +188,7 @@ import logging
 import math
 import time as time_mod
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
@@ -219,9 +221,34 @@ from .runtime import store as rstore
 from .runtime.selftest import FAIL, PASS, WARN, SelfTest
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ghost_fallback(reason: str, error_type: str | None = None) -> dict:
+    """A small Ghost block built WITHOUT importing any Ghost code, for the one case where that import itself failed (the Ghost modules
+    are imported lazily, in async_ghost_diagnostics, so an import-time fault there can only affect the download, never the setup).
+    Same schema, flags and reason vocabulary as intelligence.ghost_compare.small_block (a test pins that); no banner."""
+    out = {"schema": "ecco-intel-ghost-diagnostics/1", "simulated": True, "read_only": True, "intelligence_controlled_nothing": True,
+           "status": "ERROR" if error_type else "UNAVAILABLE", "reason": reason, "money_available": False}
+    if error_type:
+        out["error_type"] = error_type if error_type.isidentifier() and len(error_type) <= 40 else "UNKNOWN"
+    return out
+
+
+STORED_INCIDENTS_BUDGET_S = 5.0     # the download waits at most this long for the stored advice-log incidents (a small read)
+
+
+def _retrieve_exception(fut: asyncio.Future) -> None:
+    """Done callback of a read nobody may be waiting for any more: its exception is retrieved, so it is never logged as unhandled."""
+    if not fut.cancelled():
+        fut.exception()
+
+
 UTC = timezone.utc
 LONDON = ZoneInfo(SITE_TZ)
 PAUSE_ENTITY = ENTITY_IDS["paused"]
+# The intended Dump-to-Grid duration for the advice log: the engine builds DumpInputs without duration_min, so there is none to
+# pass (the dump advice is then logged without a window; the Ghost treats that as an unknown window).
+DUMP_DURATION_MIN: float | None = None
 SLOT, REFRESH = "SLOT", "REFRESH"                       # the two cycle kinds
 # The engine's per-item code for an OK item valid for less than REFRESH_MARGIN_S at compute time (FOUNDATION CONTRACT
 # section 13.4): the item is withheld until the inputs are refreshed, so its presence asks for a refresh at the next tick.
@@ -424,7 +451,11 @@ class EccoIntelCoordinator:
                          "settle_holds": 0, "settle_held_starts": 0, "settle_residual_starts": 0,
                          "snapshot_holds": 0, "snapshot_residual_reads": 0,
                          "history_parses": 0, "history_reuses": 0, "ticks_deferred": 0, "catchup_ticks": 0,
-                         "tick_start_runs": 0, "tick_deadline_runs": 0, "poll_steps_held_busy": 0}
+                         "tick_start_runs": 0, "tick_deadline_runs": 0, "poll_steps_held_busy": 0,
+                         # the advice log since start (diagnostics only): write failures and unverified writes are history and are
+                         # never reset; advice_current_failure is 1 while the latest write attempt has failed or is unverified
+                         "advice_write_failures": 0, "advice_unverified_writes": 0, "advice_current_failure": 0}
+        self.advice_health = rstore.AdviceHealth()        # the advice log's health and incidents since start (runtime/store.py)
         self._run_cycle: Callable | None = None           # None = the vendored shadow_cycle.run_cycle (tests inject)
         self._listeners: list[tuple[str | None, Callable[[], None]]] = []
         self._in_write_failure = False
@@ -461,6 +492,8 @@ class EccoIntelCoordinator:
         self._history_reuse = engine_link.HistoryReuse()  # the parsed history, reused while the statistics are unchanged
         self._metrics: Any = None
         self._metrics_ok = False
+        self._ghost_job: engine_link.EngineJob | None = None   # the last cycle's job without its rows (the Ghost block, diagnostics)
+        self._ghost_busy = False                          # a Ghost block job is running (one at a time)
         self._entity_mismatch: dict[str, str] = {}
         self._entities_seen: set[str] = set()
         self._closed = False
@@ -534,6 +567,7 @@ class EccoIntelCoordinator:
             self._task.cancel()
         self._listeners.clear()
         self._hist = None
+        self._ghost_job = None
         self._history_reuse.clear()
         self.store.close()
 
@@ -1362,6 +1396,10 @@ class EccoIntelCoordinator:
                 self._publish(env, pub_now)
                 outcome = "published"
             self.counters["runs_published"] += 1
+            # the Ghost's reference copy of this cycle's job (no rows), kept only now that its result is published: a cycle that
+            # failed, timed out or was discarded leaves the previous published cycle's job, so the download never pairs new
+            # states with older statistics from a cycle that published nothing
+            self._ghost_job = replace(job, statistics=None, history_reuse=None, previous=None)
             if env.status not in SystemStatus.NULL:
                 self._last_computed = env
             if kind != SLOT:                                    # a refresh writes nothing to the state store
@@ -1370,12 +1408,15 @@ class EccoIntelCoordinator:
             try:
                 self.last_store = await self._bounded(self._submit(
                     self.hass.async_add_executor_job, self.store.record_cycle, env.scorecard_report, slot, at, history,
-                    self.site.base_cfg), deadline)
-                self.selftest.record("STORE_RECORD", PASS, "the scorecard step completed")
+                    self.site.base_cfg, self.payloads, DUMP_DURATION_MIN), deadline)
+                if self._note_advice_store(slot, at, env.generated_at) == rstore.OUTCOME_VERIFIED:
+                    await self._persist_incidents(at, deadline)
             except asyncio.TimeoutError:
                 self.selftest.record("STORE_RECORD", WARN, "the scorecard step exceeded the time budget")
+                self._note_store_step_failed("TimeoutError", slot, at, env.generated_at)
             except Exception as exc:  # noqa: BLE001 - the published result stands; the scorecard is only diagnostics
                 self.selftest.record("STORE_RECORD", WARN, f"the scorecard step failed: {type(exc).__name__}")
+                self._note_store_step_failed(type(exc).__name__, slot, at, env.generated_at)
             finally:
                 timing["store_s"] += time_mod.perf_counter() - t0
         except asyncio.CancelledError:
@@ -1399,6 +1440,65 @@ class EccoIntelCoordinator:
                 self._publish_failed(now, {"RUNTIME_EXCEPTION": type(exc).__name__})
         finally:
             self._cycle_end(now, kind, outcome, timing, time_mod.perf_counter() - t_start, trigger, poll_age_s)
+
+    def _note_advice_store(self, slot: datetime, at: datetime, issued: datetime | None) -> str:
+        """After a slot cycle's store step: feed the advice log's result to its health ledger (runtime/store.py AdviceHealth),
+        keep the cumulative counters (write failures and unverified writes: history, never reset), the current-failure flag and
+        STORE_RECORD. STORE_RECORD is WARN, with the reason and the counts, while the latest write attempt has failed or is
+        unverified (an incident is open), and PASS again only after a VERIFIED write (the rows just written were read back by
+        their ids after the commit); a cycle that wrote nothing changes nothing. One warning is logged when an incident opens
+        (the class name only) and one line when it closes. The scorecard record and every published value are unaffected: the
+        advice write is isolated in the store (runtime/store.py, intelligence/scorecard.py record_advice). Returns the outcome."""
+        ls = self.last_store if isinstance(self.last_store, Mapping) else {}
+        was_failing = self.advice_health.failing
+        outcome = self.advice_health.note_store_result(ls, slot=slot, issued=issued or at, now=at)
+        for key, source in (("advice_write_failures", "advice_write_failures"), ("advice_unverified_writes", "advice_unverified")):
+            n = ls.get(source)
+            if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+                self.counters[key] += n
+        self._after_advice_note(was_failing)
+        check = self.advice_health.store_check(self.counters["advice_write_failures"] + self.counters["advice_unverified_writes"])
+        if check is not None:
+            self.selftest.record("STORE_RECORD", check[0], check[1])
+        return outcome
+
+    def _note_store_step_failed(self, reason: str, slot: datetime, at: datetime, issued: datetime | None) -> None:
+        """The whole store step timed out or raised (its own WARN text is already recorded): it also opens or extends the advice
+        log's incident, because nothing is known about that cycle's advice write. The cumulative advice counters are not touched
+        (they count the advice log's own failures)."""
+        was_failing = self.advice_health.failing
+        self.advice_health.note_step_failure(reason, slot=slot, issued=issued or at, now=at)
+        self._after_advice_note(was_failing)
+
+    def _after_advice_note(self, was_failing: bool) -> None:
+        """The current-failure flag and the log lines: a warning when an incident opens, one line when it closes."""
+        failing = self.advice_health.failing
+        self.counters["advice_current_failure"] = 1 if failing else 0
+        snap = self.advice_health.snapshot()
+        if failing and not was_failing:
+            _LOGGER.warning("ECCO Intelligence: the advice log write failed or could not be verified (%s); the scorecard and the "
+                            "published advice are unaffected; see the diagnostics (counters, advice_incidents)",
+                            (snap["open"] or {}).get("reason", "UnknownError"))
+        elif was_failing and not failing:
+            last = (snap["closed"] or [{}])[0]
+            _LOGGER.info("ECCO Intelligence: the advice log write is verified again after %s missed slot cycle(s)",
+                         last.get("missed_slots"))
+
+    async def _persist_incidents(self, at: datetime, deadline: float) -> None:
+        """Right after a VERIFIED advice write (the database has just shown that it takes the write): hand the closed incidents that
+        are not persisted yet to the store (its own isolated call; the table is created by the first one). Never raises, and a
+        failure or a timeout of this call is not a failure of the store step: the incidents stay offered for the next verified write."""
+        pending = self.advice_health.pending_incidents()
+        if not pending:
+            return
+        try:
+            res = await self._bounded(self._submit(self.hass.async_add_executor_job, self.store.log_advice_incidents, pending, at),
+                                      deadline)
+            self.advice_health.note_persisted(res.get("persisted") or [], error=res.get("error"), now=at)
+        except asyncio.TimeoutError:
+            self.advice_health.note_persisted([], error="TimeoutError", now=at)
+        except Exception as exc:  # noqa: BLE001 - diagnostics only; the class name is all that is kept
+            self.advice_health.note_persisted([], error=type(exc).__name__, now=at)
 
     # --- diagnostics -------------------------------------------------------------------------------------------------
     def _cycle_stats_summary(self) -> dict:
@@ -1438,7 +1538,8 @@ class EccoIntelCoordinator:
             "counters": dict(self.counters), "busy": self._busy, "started": self._started_at is not None,
             "last_slot": iso(self._last_slot),
             "time_budget_s": self.time_budget_s, "grace_s": self.grace_s, "last_cycle": dict(self.last_diag),
-            "last_store": dict(self.last_store), "entities": sorted(self.site.entity_map.entity_ids()),
+            "last_store": dict(self.last_store), "advice_incidents": self.advice_health.snapshot(),
+            "entities": sorted(self.site.entity_map.entity_ids()),
             "decisions": dict(self.decisions.status_map()),
             "last_cycle_timing": dict(self.last_timing), "cycle_duration_s": self.last_timing.get("total_s"),
             "cycle_stats": self._cycle_stats_summary(),
@@ -1475,3 +1576,59 @@ class EccoIntelCoordinator:
                                    "PROPOSED_HISTORY_ROW_CAP": history_source.PROPOSED_HISTORY_ROW_CAP,
                                    "PROPOSED_HISTORY_LOOKBACK_DAYS": history_source.PROPOSED_HISTORY_LOOKBACK_DAYS},
         }
+
+    async def async_stored_advice_incidents(self) -> dict:
+        """The advice-log incidents the store holds (its advice_incident table), for the diagnostics download: read in the executor,
+        read-only (SQLite mode=ro), waiting at most STORED_INCIDENTS_BUDGET_S. It shows what survived a restart (the incidents of
+        earlier runs); the current run's own incidents are in `advice_incidents`. Never raises: a failure is a small block with a
+        status and, for an exception, its class name only. It touches no cycle state."""
+        try:
+            if self._closed:
+                return {"status": "UNAVAILABLE", "reason": "CLOSED", "incidents": []}
+            fut = self._submit(self.hass.async_add_executor_job, self.store.advice_incidents)
+            fut.add_done_callback(_retrieve_exception)
+            rows = await asyncio.wait_for(asyncio.shield(fut), STORED_INCIDENTS_BUDGET_S)
+            return {"status": "OK", "incidents": rows}
+        except asyncio.TimeoutError:
+            return {"status": "UNAVAILABLE", "reason": "TIME_BUDGET", "incidents": []}
+        except Exception as exc:  # noqa: BLE001 - the download never fails for this; only the class name is kept
+            return {"status": "ERROR", "error_type": type(exc).__name__, "incidents": []}
+
+    async def async_ghost_diagnostics(self) -> dict:
+        """The Ghost block of the diagnostics download (runtime/ghost_link.py): the existing schedule against Intelligence's
+        advice, a read-only simulation computed only now, in the executor, from the last cycle's inputs and the cached recorder
+        rows. One job at a time (a request while one runs, or one that outlived its time budget, gets BUSY), at most
+        PROPOSED_GHOST_BUDGET_S of waiting (then TIME_BUDGET; the thread, which only reads, runs to its end and its result is
+        discarded). Never raises: any failure is a small block with a constant reason. It touches no cycle state. The Ghost code is
+        imported HERE, not when this module is imported: an import-time fault of any of its modules (the Ghost's engine and
+        comparison modules, runtime/ghost_link) can then only turn the Ghost block into a small ERROR block, never stop the
+        integration's setup."""
+        try:
+            from intelligence import ghost_compare                  # lazy on purpose (see the docstring)
+            from .runtime import ghost_link
+        except Exception as exc:  # noqa: BLE001 - the Ghost code cannot be imported: a block built without it, the class name only
+            return _ghost_fallback("FEED_EXCEPTION", type(exc).__name__)
+        try:
+            job, hist = self._ghost_job, self._hist
+            if self._closed or job is None:
+                return ghost_link.unavailable(ghost_compare.R_NO_CYCLE)
+            stats = None if hist is None else hist.get("stats")
+            if stats is None:
+                return ghost_link.unavailable(ghost_compare.R_NO_STATISTICS)
+            if self._ghost_busy:
+                return ghost_link.unavailable(ghost_compare.R_BUSY)
+            fut = self._submit(self.hass.async_add_executor_job, ghost_link.ghost_block, replace(job, statistics=stats), self.store)
+            self._ghost_busy = True                      # only once the job exists (a submit that raises leaves it free)
+            fut.add_done_callback(self._ghost_done)
+            try:
+                return await asyncio.wait_for(asyncio.shield(fut), ghost_link.PROPOSED_GHOST_BUDGET_S)
+            except asyncio.TimeoutError:
+                return ghost_link.unavailable(ghost_compare.R_BUDGET)
+        except Exception as exc:  # noqa: BLE001 - the download never fails for the Ghost; only the class name is kept
+            return ghost_compare.error_block(exc)
+
+    def _ghost_done(self, fut: asyncio.Future) -> None:
+        """The Ghost job's thread has ended (also after its wait timed out): one job at a time is free again."""
+        self._ghost_busy = False
+        if not fut.cancelled():
+            fut.exception()                              # retrieved, so it is never logged as unhandled
