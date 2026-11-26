@@ -70,6 +70,15 @@ L4 objectives  ->  L3 KERNEL (this folder, kernel.py)  ->  L2 hard limits / L1 l
 * **The export loop is the proven Dump V1.1 law** as modelled from the firmware source: error = grid - target, step = error x 0.5 clamped to
   1000 W, rounded half away from zero to 100 W, floor 500 W, ceiling the lease's, 150 W deadband, 45 s settle, 120 writes a lease, the
   anti-windup counters, the one bounded retry, the stale-grid, Max Grid Export and runaway guards.
+* **The measured-power guard follows the firmware's per-sample rules** (`runaway_limits`, `export_tick`; finding F08 of the review, which found
+  that the first version counted one stale reading twice and ended healthy leases about 2 percent of the time): one count per NEW battery
+  power reading (a repeated reading in a telemetry gap is not another sample); ONE settling grace, from the lease start (a write no longer
+  re-arms it); for 30 s after a verified write the higher of the old and the new ceiling is the command; above 3000 W the absolute
+  backstop's 750 W margin grows by 12 percent of the command above it (the battery's DC power includes the conversion loss); and a grid
+  sample used to judge or propose a correction must postdate the last write (the firmware's fence, a soft wait). Pinned to the firmware
+  text. NOT modelled, and only ever making the firmware stricter: its windowed criteria (4 of the last 8 samples above the ordinary
+  threshold or the backstop, 3 of 8 above the gross level), the 300 W windowed-mean criterion, and its frozen-telemetry and cross-checks;
+  a lease that passes here can still be ended by those on the real dongle. The review's night is `e22`.
 * **Measured solar enters only the loop**, never the energy plan: the export duration is sized from house + target with no solar credit
   (REQ-B15), and the floor, not the duration, is what protects the reserve.
 
@@ -141,7 +150,7 @@ A constant that is also written somewhere else is compared with that place, so a
 
 | Kernel constant | Pinned to | How |
 |---|---|---|
-| export loop: settle 45 s, deadband 150 W, gain 0.5, step 1000 W, round 100 W, floor 500 W, 120 writes a lease, feed-forward start 2000 W, response samples 3, response margin 100 W, wrong direction 300 W, recovery hold 60 s and one attempt, grid and SOC stale 90 s, runaway margin 750 W / 3 samples / 30 s grace, absolute backstop 750 W / 2 samples / 3000 W floor, export trip 500 W / 100 W, reboot timeout 15 min, setpoint bound 8000 W | `firmware/ecco_clock_dongle_stage3_4_free_power.yaml` (the substitutions block) | parsed; each value compared |
+| export loop: settle 45 s, deadband 150 W, gain 0.5, step 1000 W, round 100 W, floor 500 W, 120 writes a lease, feed-forward start 2000 W, response samples 3, response margin 100 W, wrong direction 300 W, recovery hold 60 s and one attempt, grid and SOC stale 90 s, runaway margin 750 W / 3 samples / 30 s grace, transition window 30 s, DC allowance 12 percent, absolute backstop 750 W / 2 samples / 3000 W floor, export trip 500 W / 100 W, reboot timeout 15 min, setpoint bound 8000 W | `firmware/ecco_clock_dongle_stage3_4_free_power.yaml` (the substitutions block) | parsed; each value compared |
 | the 15 s guard tick and the 1 s export trip | the same file's `interval:` blocks | the block that runs `dump_controller_tick` and the one that acts on `dump_export_trip` |
 | the loop law and the Stop SOC rule (`reading <= latched stop` ends the lease) | the same file's `dump_controller_tick` and watchdog text | the lines the model copies must still be present |
 | charge: step 100 W, minimum 500 W, dwell 30 min, 6 changes, decrease hysteresis 500 W, slack 15 min, pessimistic efficiency 0.90, capacity band 6 %, scale error 3 %, SOC resolution and noise, knee 90 %, tail 0.125, drop 5 min, demand margin 20 %, efficiency maximum 0.97, buffer 60 min, the 500 W and 8000 W limits | `frontend/ecco-plan-core/src/gentleNight.ts` (`DEFAULT_NIGHT_PARAMS`, the buffer default) and `settings.ts` | parsed; each value compared |
@@ -290,6 +299,7 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `e14_unit_wrong_x10` | export | Export unit wrong by 10x with no Max Grid Export set: the measured-power guard ends the lease within a few samples. | REQ-B18, REQ-D3 |
 | `e15_runaway_anomaly` | export | The 22 Sept 2026 anomaly: the battery ignores its ceiling mid-lease. The runaway guard ends the lease. | REQ-D3 |
 | `e15b_runaway_between_thresholds` | export | The battery ignores a 500 W ceiling and gives 2.6 kW: above the ordinary runaway bound (1250 W) and under the absolute backstop (3750 W), so only the ordinary measured-power guard can end the lease, and it does within its samples. | REQ-D3 |
+| `e22_healthy_export_across_a_step_down_and_a_gap` | export | The review's night (sweep seed 23076789): a healthy export whose ceiling is stepped down while the battery is still at the old level and whose telemetry then has a 45 s gap. The first version of the guard counted one 4.7 kW reading twice and ended the healthy lease 'runaway'; the guard counts each NEW reading once and compares with the higher of the old and the new ceiling for 30 s after the write, so the lease runs to its planned end. | REQ-D3, REQ-B13 |
 | `e16_export_time_untrusted` | export | The dongle's NTP time is untrusted for the first 10 minutes: no start until it is trusted. | REQ-D1, REQ-B21 |
 | `e17_grid_loss_export` | export | Grid lost during the export: the session ends first and the pre-session values are restored. | REQ-B21 |
 | `e18_export_over_limit` | export | The house load falls away under a 2.5 kW Max Grid Export: one sample far over ends the lease at once. | REQ-B21, REQ-C10 |

@@ -1259,6 +1259,16 @@ add(export("e15b_runaway_between_thresholds", "The battery ignores a 500 W ceili
            target_export_w=500.0, house=P.Series([(0.0, 500.0)]), events=((900.0, "plant", {"ignore_ceiling_w": 2600.0}),), max_export_w=None, duration_s=3600.0),
     X_lease_ended("runaway"), X_lease_ends_within(900.0, 200.0),
     covers=("REQ-D3",))
+add(export("e22_healthy_export_across_a_step_down_and_a_gap", "The review's night (sweep seed 23076789): a healthy export whose ceiling is stepped down while the battery is still at the old level and whose telemetry then has a 45 s gap. The first version of the guard counted one 4.7 kW reading twice and ended the healthy lease 'runaway'; the guard counts each NEW reading once and compares with the higher of the old and the new ceiling for 30 s after the write, so the lease runs to its planned end.",
+           plant=P.PlantParams(capacity_kwh=37.982262768974216), soc0_pct=67.7217374159024, duration_s=7200.0, plan_s=60.0, react_s=300.0, cmd_delay_s=15.0, noise_w=25.0,
+           tel_gaps=((1880.2382309817908, 1925.2382309817908), (5581.448138693851, 5596.448138693851)), seed=23076789,
+           house=P.Series([(0.0, 2082.092832575358), (2791.969278992564, 2333.89715858882), (4032.0130880664396, 4491.518419090585)],
+                          spikes=[(2268.87186176289, 89.61831931356431, 2791.4051528350683), (1551.453442448083, 264.1559764422543, 2637.5119482352684),
+                                  (4220.47133091815, 258.7001468767756, 3330.621339558529), (2464.0339951486494, 196.31747293075364, 1637.135810548098)]),
+           pv=P.Series([(0.0, 128.12162807657594), (807.2965628243055, 977.6613447278385)]), target_export_w=1485.5072308027648, stop_soc_pct=29.64832674816891,
+           reserve_pct=34.99228445053126, lease_ceiling_w=8000.0, max_export_w=6000.0, trusted_capacity_kwh=37.982262768974216, export_len_s=6300.0),
+    X_lease_ended("lease_end"), X_leases_count(1),
+    covers=("REQ-D3", "REQ-B13"))
 add(export("e16_export_time_untrusted", "The dongle's NTP time is untrusted for the first 10 minutes: no start until it is trusted.", trust=((0.0, 600.0, "ntp"),), duration_s=3600.0),
     X_first_write_after(600), X_saw("ha", "blocked", "time_untrusted"),
     covers=("REQ-D1", "REQ-B21"))
@@ -1388,6 +1398,8 @@ def sweep(K, n_per_kind, base_seed=20261126, kinds=("gentle", "charge_fixed", "e
             for fnd in res.findings:
                 st.setdefault("findings", {})
                 st["findings"][fnd] = st["findings"].get(fnd, 0) + 1
+            if kind == "export" and any(l["reason"] == "runaway" for l in run.leases) and not any(e[1] == "plant" for e in spec.sc.events):
+                st["healthy_runaway"] = st.get("healthy_runaway", 0) + 1       # a 'runaway' end with no fault injected: the model cried wolf (F08)
             if kind != "export":
                 dl = deadline_s(spec.sc)
                 t_reach = next((x.t for x in run.rows if x.read >= spec.sc.target_soc_pct - 1e-9), None)

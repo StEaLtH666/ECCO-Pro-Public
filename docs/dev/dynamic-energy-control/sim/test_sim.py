@@ -116,6 +116,7 @@ FW_PINS = {
     "ecco_dump_runaway_absolute_samples": K.RUNAWAY_ABS_SAMPLES, "ecco_dump_runaway_backstop_floor_w": K.RUNAWAY_BACKSTOP_FLOOR_W,
     "ecco_dump_export_far_min_w": K.EXPORT_FAR_MIN_W, "ecco_dump_export_margin_min_w": K.EXPORT_MARGIN_MIN_W,
     "ecco_failback_shadow_assumed_reboot_timeout_ms": K.REBOOT_TIMEOUT_S * 1000, "ecco_inverter_tou_power_ceiling_w": K.CHARGE_MAX_W,
+    "ecco_dump_runaway_transition_ms": K.RUNAWAY_TRANSITION_S * 1000, "ecco_dump_runaway_dc_allowance_pct": K.RUNAWAY_DC_ALLOWANCE_PCT,
 }
 check("the firmware substitutions block was found and parsed", len(subs) > 50, str(len(subs)))
 for name, want in FW_PINS.items():
@@ -133,6 +134,16 @@ check("the firmware's loop law is still the one the kernel models: error = grid 
                             "if (rounded < ${ecco_dump_controller_min_ceiling_w}.0f) rounded = ${ecco_dump_controller_min_ceiling_w}.0f;",
                             "if (error <= ${ecco_dump_controller_deadband_w}.0f && error >= -${ecco_dump_controller_deadband_w}.0f)",
                             "id(dump_controller_writes_this_lease) >= ${ecco_dump_controller_max_writes_per_lease}")))
+check("the firmware's measured-power guard is still the one the kernel models (F08): per sample, ONE start grace, the higher of the old and the new ceiling after a write, "
+      "the 12 percent DC allowance above the backstop floor, and a grid sample must postdate the last write",
+      all(s_ in fw for s_ in ("(uint32_t) (millis() - id(dump_active_since_ms)) < ${ecco_dump_runaway_grace_ms}UL",
+                              "id(dump_runaway_ceiling_ref) = std::max(", "(float) id(dump_controller_pending_prior_ceiling),",
+                              "abs_margin += (backstop_ref - ${ecco_dump_runaway_backstop_floor_w}.0f) * (float) ${ecco_dump_runaway_dc_allowance_pct} / 100.0f;",
+                              "if (backstop_ref < backstop_floor) backstop_ref = backstop_floor;",
+                              "(int32_t) (id(dump_grid_last_update_ms) - id(dump_last_controller_update_ms)) <= 0",
+                              "this window no longer ZEROES the sample", "id(dump_overpower_samples)++;")))
+check("the firmware has the windowed (4 of the last 8, gross 3 of 8) and mean criteria the kernel does NOT model; they only ever make the firmware stricter (README, F08)",
+      all(s_ in fw for s_ in ("ecco_dump_runaway_window_k", "ecco_dump_runaway_gross_k", "ecco_dump_runaway_mean_margin_w")))
 check("the firmware's Stop SOC rule is still 'reading at or below the latched stop ends the lease'",
       "id(ecco_battery_soc).state <= (float) id(dump_target_stop_soc)" in fw)
 
@@ -327,6 +338,9 @@ def u_export_loop(Km):
     assert es(Km, -1190.0, st=Km.State(**pend, wrong_dir=2))[1:3] == ("GRID RESPONSE SANITY FAILED", "response_failed")
     edge2 = es(Km, -1200.0, st=Km.State(**pend, wrong_dir=2))       # error 800: improvement -300 is wrong direction
     assert edge2[1:3] == ("GRID RESPONSE SANITY FAILED", "response_failed")
+    assert es(Km, -1700.0, now=1000.0, age=50.0, st=Km.State(phase="active", v_w=2000.0, last_update_s=955.0))[1:3] == ("WAITING FOR FRESH GRID", None), "a grid sample that predates the last write is not used (the firmware's fence, F08)"
+    assert es(Km, -1700.0, now=1000.0, age=40.0, st=Km.State(phase="active", v_w=2000.0, last_update_s=955.0))[0] == 2200.0 and \
+        es(Km, -1700.0, now=1000.0, age=45.0, st=Km.State(phase="active", v_w=2000.0, last_update_s=955.0))[1] == "WAITING FOR FRESH GRID", "the sample must be strictly newer than the write"
     stuck = es(Km, -1590.0, st=Km.State(**pend, ineffective=2))
     assert stuck[1] == "NO RESPONSE" and stuck[3].no_resp_since_s == 1000.0
     flipped = es(Km, -2100.0, st=Km.State(**pend, ineffective=2))   # the error crossed zero: the counters reset
@@ -341,6 +355,8 @@ def u_export_loop(Km):
     assert es(Km, -1700.0, house=1000.0, pv=0.0, ceil=2900.0)[3].high_streak == 1 and es(Km, -1700.0, house=1000.0, pv=0.0)[3].high_streak == 0
     nst = Km.note_export_write(Km.State(writes=3), 77.0, 2500.0)
     assert (nst.v_w, nst.last_update_s, nst.writes, nst.response_pending) == (2500.0, 77.0, 4, True)
+    assert Km.note_export_write(Km.State(v_w=3400.0), 77.0, 2500.0).ref_w == 3400.0 and Km.note_export_write(Km.State(v_w=2000.0), 77.0, 2500.0).ref_w == 2500.0, \
+        "the transition reference is the higher of the old and the new ceiling"
 
 
 def u_runaway(Km):
@@ -353,6 +369,15 @@ def u_runaway(Km):
     assert Km.runaway_check(Km.State(over_samples=0), 1151.0, 400.0, "export")[0].over_samples == 1 and Km.runaway_check(Km.State(), 1150.0, 400.0, "export")[0].over_samples == 0
     assert Km.runaway_check(Km.State(over_samples=2), 5101.0, 4000.0, "charge")[1] and not Km.runaway_check(Km.State(over_samples=2), 5100.0, 4000.0, "charge")[1]
     assert Km.runaway_check(Km.State(over_samples=1), 3001.0, 2000.0, "export")[0].over_samples == 2
+    # the two thresholds for one sample as the firmware computes them: ordinary, absolute with the DC allowance above 3000 W, the transition (F08)
+    lim_ = lambda st_, ceil_, now_: Km.runaway_limits(st_, ceil_, now_)
+    base_ = Km.State(phase="active", v_w=2000.0, last_update_s=0.0, ref_w=2000.0)
+    assert lim_(base_, 3000.0, 1000.0) == (2000.0, 3000.0, 3750.0), lim_(base_, 3000.0, 1000.0)
+    assert lim_(replace(base_, v_w=5000.0, ref_w=5000.0), 5000.0, 1000.0) == (5000.0, 7500.0, 5990.0), "above 3000 W the 750 W margin grows by 12 percent of the command above it"
+    assert lim_(replace(base_, v_w=1000.0, ref_w=1000.0), 2000.0, 1000.0)[2] == 2750.0, "the backstop floor is the lease's own ceiling when that is lower than 3000 W"
+    tr = replace(base_, v_w=3400.0, ref_w=4200.0, last_update_s=600.0)
+    assert lim_(tr, 8000.0, 629.0)[0] == 4200.0 and lim_(tr, 8000.0, 630.0)[0] == 3400.0, "30 s after a write the higher of the old and the new ceiling is the command"
+    assert abs(lim_(tr, 8000.0, 629.0)[2] - (4200.0 + 750.0 + 1200.0 * 0.12)) < 1e-9 and abs(lim_(tr, 8000.0, 630.0)[2] - (3400.0 + 750.0 + 400.0 * 0.12)) < 1e-9
     assert Km.runaway_check(Km.State(), None, 2000.0, "export") == (Km.State(), False)
     assert Km.export_over_limit(-6251.0, 5000.0, False) == (True, True) and Km.export_over_limit(-6250.0, 5000.0, False) == (False, True)
     assert Km.export_over_limit(-5151.0, 5000.0, False) == (False, True) and Km.export_over_limit(-5151.0, 5000.0, True) == (True, True)
@@ -622,6 +647,23 @@ def u_export_tick(Km):
     assert (d.detail, d.end) == ("runaway", True), "the absolute backstop trips on the second sample, grace or not"
     d, _ = Km.export_tick(inputs(Km, 600.0, f(batt=3750.0)), eo, lim, replace(st3, abs_over=1))
     assert d.end is False
+    # one count per NEW reading: the same 3751 W reading seen again 15 s later, in a telemetry gap, is not a second sample (F08)
+    d, st4 = Km.export_tick(inputs(Km, 615.0, f(age=15.0, batt=3751.0)), eo, lim, st3)
+    assert d.end is False and st4.abs_over == 1, "a repeated reading does not advance the counters"
+    d, _ = Km.export_tick(inputs(Km, 630.0, f(age=0.0, batt=3751.0)), eo, lim, st4)
+    assert (d.detail, d.end) == ("runaway", True), "the next NEW reading does"
+    # the transition window: 4667 W after a step from 4200 to 3400 W is under the old ceiling's threshold for 30 s, over the new one's after it
+    wr = Km.State(phase="active", v_w=3400.0, ref_w=4200.0, stop_soc_pct=21.3, last_update_s=600.0, active_since_s=0.0)
+    eo8, lim8 = Km.ExportObjective(2000.0, 20.0, 9000.0, 35.0, 8000.0), Km.Limits()
+    fb = lambda batt, age=0.0: Km.Frame(soc_pct=60.0, age_s=age, grid_w=-2000.0, inv_ac_w=3000.0, pv_w=0.0, batt_w=batt)
+    assert Km.export_tick(inputs(Km, 615.0, fb(4667.0)), eo8, lim8, wr)[1].abs_over == 0, "inside the transition the higher ceiling is the reference"
+    assert Km.export_tick(inputs(Km, 645.0, fb(4667.0)), eo8, lim8, wr)[1].abs_over == 1, "after it the new, lower ceiling is"
+    # ONE grace, from the lease start: a write does not re-arm it, the start does (F08)
+    gr = replace(wr, last_update_s=590.0, ref_w=3400.0, active_since_s=0.0, over_samples=2, abs_over=1)
+    st_g = Km.export_tick(inputs(Km, 600.0, fb(9000.0)), eo8, lim8, gr)
+    assert st_g[0].detail == "runaway", "a write 10 s ago does not silence the guard"
+    st_h = Km.export_tick(inputs(Km, 20.0, fb(9000.0)), eo8, lim8, replace(gr, last_update_s=0.0, active_since_s=0.0))
+    assert st_h[0].end is False and st_h[1].over_samples == 0 and st_h[1].abs_over == 0, "inside the 30 s after the START the counters stay at zero"
     d, _ = Km.export_tick(inputs(Km, 615.0, f(age=91.0)), eo, lim, st)
     assert (d.detail, d.end) == ("stale_telemetry", True)
     d, _ = Km.export_tick(inputs(Km, 615.0, f(), time_ok=False), eo, lim, st)
@@ -999,6 +1041,8 @@ sweep_stats = {}
 bad = S.sweep(K, SWEEP_N, stats=sweep_stats)
 check(f"{3 * SWEEP_N} seeded random plants and inputs (gentle, charge fixed, export): every applicable invariant holds ({time.time() - t1:.0f} s)", not bad,
       "; ".join("%s %s" % (n, f[0][:80]) for n, f in bad[:3]))
+check(f"no export run of the sweep ends 'runaway' on a healthy plant ({sweep_stats.get('healthy_runaway', 0)} of {SWEEP_N}; the review found 15 of 700 with the first version of the guard model)",
+      sweep_stats.get("healthy_runaway", 0) == 0)
 ALARM = sweep_stats["alarm"]["below_knee"]
 check(f"false alarms are counted: {ALARM[1]} of the {ALARM[0]} nights that reach a target at or below the pessimistic knee with {S.FALSE_ALARM_MARGIN_S / 60:.0f} min to spare carried a report "
       f"({100.0 * ALARM[1] / ALARM[0]:.1f} percent; the stated bound is {100.0 * S.FALSE_ALARM_MAX_RATE:.0f} percent)", ALARM[0] >= 100 and ALARM[1] <= S.FALSE_ALARM_MAX_RATE * ALARM[0])
@@ -1084,7 +1128,7 @@ MUTANTS = [
     ("M59 progress tracker credits better progress", "scale = min(st.eff_scale, max(EFF_SCALE_MIN, k)) if k < EFF_FLAG_BELOW else st.eff_scale", "scale = max(EFF_SCALE_MIN, k) if k < EFF_FLAG_BELOW else k"),
     ("M60 writes not counted", "return replace(st, v_w=value_w, last_write_s=now_s, writes=st.writes + 1, changes=st.changes + (1 if ordinary else 0),", "return replace(st, v_w=value_w, last_write_s=now_s, writes=st.writes, changes=st.changes + (1 if ordinary else 0),"),
     ("M61 house peak takes the minimum", "best = max(best, sum(win) / len(win))", "best = min(best if best else 1e9, sum(win) / len(win))"),
-    ("M62 absolute runaway backstop removed", "tripped = tripped or abs_over >= RUNAWAY_ABS_SAMPLES", "tripped = tripped"),
+    ("M62 absolute runaway backstop removed", "    tripped = st.over_samples >= RUNAWAY_SAMPLES or st.abs_over >= RUNAWAY_ABS_SAMPLES\n", "    tripped = st.over_samples >= RUNAWAY_SAMPLES\n"),
     ("M63 grid-lost reason code lost on the export path", 'if g == "grid_lost":\n        return make("stop", "grid_lost", end=True)\n    if g == "owner_end":\n        return make("stop", "owner_end", end=True)\n    if g == "time_untrusted":\n        return make("stop", "time_untrusted", end=True)\n    if g == "stale":\n        return make("stop", "stale_telemetry", end=True, **ages)\n    if g == "floor":',
      'if g == "grid_lost":\n        return make("hold", "tracking", wanted_w=st.v_w, v_w=st.v_w, export_w=0.0, target_w=0.0, band_w=0.0)\n    if g == "owner_end":\n        return make("stop", "owner_end", end=True)\n    if g == "time_untrusted":\n        return make("stop", "time_untrusted", end=True)\n    if g == "stale":\n        return make("stop", "stale_telemetry", end=True, **ages)\n    if g == "floor":'),
     ("M64 target guard ignores the import ceiling", "    if headroom is not None and st.original_w * st.gain > headroom:\n        return False", "    if False:\n        return False"),
@@ -1094,6 +1138,12 @@ MUTANTS = [
     ("M69 the target guard trips with the reading at the target", "    if inp.frame.soc_pct is not None and inp.frame.soc_pct >= obj.target_soc_pct:\n        return False        # the reading is at the target: nothing is at risk (the pessimistic start sits below the reading, which must not trip a false report)\n", ""),
     ("N08 the target guard never trips once its margin has passed", "    if until <= 0:\n        return inp.frame.soc_pct < obj.target_soc_pct\n", "    if until <= 0:\n        return False\n"),
     ("N09 the target guard margin is 5 minutes instead of 15", "GUARD_MARGIN_S = 900 ", "GUARD_MARGIN_S = 300 "),
+    ("M70 the backstop ignores the DC allowance above 3000 W", "    margin = RUNAWAY_ABS_MARGIN_W + max(0.0, ref - RUNAWAY_BACKSTOP_FLOOR_W) * RUNAWAY_DC_ALLOWANCE_PCT / 100.0\n", "    margin = RUNAWAY_ABS_MARGIN_W\n"),
+    ("M71 no transition window after a write", "    if st.last_update_s is not None and now_s - st.last_update_s < RUNAWAY_TRANSITION_S and st.ref_w is not None and st.ref_w > requested:\n", "    if False:\n"),
+    ("M72 a repeated reading counts again", "    if frame_fresh(f, (\"batt\",)) and (st.last_sample_s is None or sample_s > st.last_sample_s + EPS):\n", "    if frame_fresh(f, (\"batt\",)):\n"),
+    ("M73 the grid sample need not postdate the write", "    if st.last_update_s is not None and now_s - grid_age_s <= st.last_update_s + EPS:\n        return None, \"WAITING FOR FRESH GRID\", None, st\n", ""),
+    ("M74 a write re-arms the lease-start grace", "        began = st.active_since_s if st.active_since_s is not None else st.last_update_s\n", "        began = st.last_update_s\n"),
+    ("M75 the transition reference is the new ceiling only", "ref_w=max(prior, value_w))", "ref_w=value_w)"),
     ("M65 forced reduction taken from the planning peak", "write, _why = ramp_charge(st, inp.now_s, want, lim.power_ceiling_w, forced=True)\n    if write is None:\n        return make(\"stop\", \"write_budget\", end=True)", "write, _why = ramp_charge(st, inp.now_s, want, lim.power_ceiling_w, forced=False)\n    if write is None:\n        return make(\"stop\", \"write_budget\", end=True)"),
     # ---- the independent review's mutants (labels BI.. and N.. are the reviewer's), each of which survived the first version ----
     ('BI03 Gentle dongle guard ignores the import ceiling', '        "ceiling": active and lim.import_ceiling_w is not None and import_w is not None and import_w > lim.import_ceiling_w,\n', '        "ceiling": False,\n'),
@@ -1104,7 +1154,7 @@ MUTANTS = [
     ('BI12a feasibility forgets the finish-early buffer (plans to the window end)', '    dl_min = (obj.deadline_s - inp.now_s) / 60.0\n', '    dl_min = (obj.window_end_s - inp.now_s) / 60.0\n'),
     ("BI12b BI12a plus a spurious 'at risk' report at every start (cry wolf)", (('    dl_min = (obj.deadline_s - inp.now_s) / 60.0\n', '    dl_min = (obj.window_end_s - inp.now_s) / 60.0\n'), ('    if starting:\n        goal = max(CHARGE_MIN_W, min(need_sp, st.original_w))', '    if starting:\n        unreach = unreach or "at_risk"\n        goal = max(CHARGE_MIN_W, min(need_sp, st.original_w))')), None),
     ('BI13 import-breach reduction has the wrong sign (raises)', '    want = _floor_step(st.v_w - excess_ac / gain, CHARGE_STEP_W)\n', '    want = _floor_step(st.v_w + excess_ac / gain, CHARGE_STEP_W)\n'),
-    ('N01 export_tick never runs the ordinary measured-power runaway guard', '    if since >= RUNAWAY_GRACE_S and frame_fresh(f, ("batt",)):\n', '    if False:\n'),
+    ('N01 export_tick never runs the ordinary measured-power runaway guard', '            st, _t = runaway_check(st, f.batt_w, requested, "export")\n', ''),
     ('N02 reserve_rose reported as floor_reached when the latched Stop SOC trips first', '            if g.detail == "floor_reached" and st.stop_soc_pct is not None and floor > st.stop_soc_pct + EPS:\n', '            if False:\n'),
     ('N03 a reserve rise is not relayed (RAISE_STOP) while the export is infeasible high', 'stop_soc_pct=floor if not active else raise_to, house_w=house_w(f)', 'stop_soc_pct=floor if not active else None, house_w=house_w(f)'),
     ('N04 progress tracker keeps judging up to 95 percent (past the pessimistic knee)', 'f.soc_pct >= KNEE_PESSIMISTIC_PCT - 2.0', 'f.soc_pct >= KNEE_PESSIMISTIC_PCT + 5.0'),

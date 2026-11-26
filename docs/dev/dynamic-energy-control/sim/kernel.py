@@ -88,7 +88,9 @@ GRID_STALE_S = 90                 # ecco_dump_grid_stale_ms: a fresh CT is neede
 SOC_STALE_S = 90                  # ecco_dump_soc_stale_ms: a fresh SOC is needed, else the lease ends (fail closed)
 RUNAWAY_MARGIN_W = 750            # ecco_dump_runaway_margin_w
 RUNAWAY_SAMPLES = 3               # ecco_dump_runaway_samples
-RUNAWAY_GRACE_S = 30              # ecco_dump_runaway_grace_ms 30000: settling after a start or a write
+RUNAWAY_GRACE_S = 30              # ecco_dump_runaway_grace_ms 30000: settling after the lease START (the only grace left: a write no longer re-arms it)
+RUNAWAY_TRANSITION_S = 30         # ecco_dump_runaway_transition_ms 30000: for this long after a verified write the guard compares with the HIGHER of the old and the new command
+RUNAWAY_DC_ALLOWANCE_PCT = 12     # ecco_dump_runaway_dc_allowance_pct: above RUNAWAY_BACKSTOP_FLOOR_W the backstop's margin grows by this share of the command above it
 RUNAWAY_ABS_MARGIN_W = 750        # ecco_dump_runaway_absolute_margin_w: the absolute backstop, never reset by a controller write
 RUNAWAY_ABS_SAMPLES = 2           # ecco_dump_runaway_absolute_samples
 RUNAWAY_BACKSTOP_FLOOR_W = 3000   # ecco_dump_runaway_backstop_floor_w: the backstop follows the command only above this
@@ -233,6 +235,9 @@ class State:
     low_streak: int = 0
     high_streak: int = 0
     export_over: bool = False
+    active_since_s: Optional[float] = None   # export: the lease START (the runaway guard's one settling grace runs from it)
+    ref_w: Optional[float] = None            # export: the command the guard compares with during the transition: the higher of the old and the new ceiling (dump_runaway_ceiling_ref)
+    last_sample_s: Optional[float] = None    # export: the timestamp of the last battery power sample the runaway counters have counted (one count per NEW sample)
 
 
 @dataclass(frozen=True)
@@ -721,6 +726,10 @@ def export_step(st, now_s, grid_w, grid_age_s, target_export_w, v_w, lease_ceili
     st = replace(st, low_streak=low, high_streak=high)
     if st.last_update_s is not None and now_s - st.last_update_s < EXPORT_SETTLE_S:
         return None, "SETTLING", None, st
+    # the freshness fence of the firmware (dump_controller_tick): a grid sample used to judge or to propose a correction must POSTDATE the last
+    # controller write (or the start); a soft wait, not a fault
+    if st.last_update_s is not None and now_s - grid_age_s <= st.last_update_s + EPS:
+        return None, "WAITING FOR FRESH GRID", None, st
     error = grid_w - (-target_export_w)
     if st.response_pending:
         prev = st.pending_err_w if st.pending_err_w is not None else 0.0
@@ -768,8 +777,10 @@ def export_step(st, now_s, grid_w, grid_age_s, target_export_w, v_w, lease_ceili
 
 
 def note_export_write(st, now_s, value_w):
-    """A controller write was verified in force: the settle clock restarts and the response of this write is judged once."""
-    return replace(st, v_w=value_w, last_update_s=now_s, writes=st.writes + 1, response_pending=True)
+    """A controller write was verified in force: the settle clock restarts, the response of this write is judged once and the runaway guard's
+    reference becomes the higher of the old and the new ceiling for the transition window (the firmware's dump_runaway_ceiling_ref)."""
+    prior = st.v_w if st.v_w is not None else value_w
+    return replace(st, v_w=value_w, last_update_s=now_s, writes=st.writes + 1, response_pending=True, ref_w=max(prior, value_w))
 
 
 def runaway_check(st, measured_w, expected_w, kind):
@@ -783,6 +794,20 @@ def runaway_check(st, measured_w, expected_w, kind):
         limit = expected_w * (1.0 + CHARGE_RUNAWAY_PCT / 100.0) + CHARGE_RUNAWAY_MARGIN_W
     over = st.over_samples + 1 if measured_w > limit else 0
     return replace(st, over_samples=over), over >= RUNAWAY_SAMPLES
+
+
+def runaway_limits(st, lease_ceiling_w, now_s):
+    """The two thresholds of the measured-power guard for ONE battery power sample, as the firmware computes them (ecco_battery_power on_value).
+    The command is the ceiling in force, or for RUNAWAY_TRANSITION_S after a verified write the higher of the old and the new one. ORDINARY:
+    command + max(command / 2, 750 W). ABSOLUTE: max(command, min(3000 W, the lease's ceiling)) + 750 W, and above 3000 W the 750 W grows
+    by the profile's 12 percent DC allowance of the part of the command above 3000 W (the battery's DC power includes the conversion loss).
+    Returns (requested, ordinary_limit, absolute_limit)."""
+    requested = st.v_w
+    if st.last_update_s is not None and now_s - st.last_update_s < RUNAWAY_TRANSITION_S and st.ref_w is not None and st.ref_w > requested:
+        requested = st.ref_w
+    ref = max(requested, min(float(RUNAWAY_BACKSTOP_FLOOR_W), lease_ceiling_w))
+    margin = RUNAWAY_ABS_MARGIN_W + max(0.0, ref - RUNAWAY_BACKSTOP_FLOOR_W) * RUNAWAY_DC_ALLOWANCE_PCT / 100.0
+    return requested, requested + max(requested / 2.0, RUNAWAY_MARGIN_W), ref + margin
 
 
 def export_over_limit(grid_w, max_export_w, previous_over):
@@ -1210,20 +1235,23 @@ def export_guards(inp, obj, lim, st, over_trip=False, runaway_trip=False):
 def export_tick(inp, obj, lim, st):
     """One tick of a RUNNING export session (the dongle's 15 s guard tick): the guards in GUARD_ORDER, then the closed loop (the model
     of dump_controller_tick). Returns (Decision, state). A Decision with write_w is a ceiling write for the caller to verify; with end
-    the session is to be restored. The measured-power guard waits RUNAWAY_GRACE_S after a start or a write."""
+    the session is to be restored. The measured-power guard counts ONE sample per NEW battery power reading (a repeated reading in a telemetry gap
+    is not another sample), is silent only for RUNAWAY_GRACE_S after the lease START, and compares with the higher of the old and the new
+    ceiling for RUNAWAY_TRANSITION_S after a write; its counters are never reset by a write (runaway_limits)."""
     f = inp.frame
     over_trip, over_flag = export_over_limit(f.grid_w, lim.max_export_w, st.export_over)
     st = replace(st, export_over=over_flag)
-    tripped = False
-    since = inp.now_s - (st.last_update_s if st.last_update_s is not None else inp.now_s)
-    if since >= RUNAWAY_GRACE_S and frame_fresh(f, ("batt",)):
-        st, tripped = runaway_check(st, f.batt_w, st.v_w, "export")
-    elif since < RUNAWAY_GRACE_S:
-        st = replace(st, over_samples=0)
-    abs_limit = max(st.v_w, min(obj.lease_ceiling_w, RUNAWAY_BACKSTOP_FLOOR_W)) + RUNAWAY_ABS_MARGIN_W
-    abs_over = st.abs_over + 1 if (frame_fresh(f, ("batt",)) and f.batt_w > abs_limit) else 0
-    st = replace(st, abs_over=abs_over)
-    tripped = tripped or abs_over >= RUNAWAY_ABS_SAMPLES
+    sample_s = inp.now_s - f.age_s
+    if frame_fresh(f, ("batt",)) and (st.last_sample_s is None or sample_s > st.last_sample_s + EPS):
+        st = replace(st, last_sample_s=sample_s)
+        began = st.active_since_s if st.active_since_s is not None else st.last_update_s
+        if began is not None and inp.now_s - began < RUNAWAY_GRACE_S:
+            st = replace(st, over_samples=0, abs_over=0)
+        else:
+            requested, _ordinary, absolute = runaway_limits(st, obj.lease_ceiling_w, inp.now_s)
+            st, _t = runaway_check(st, f.batt_w, requested, "export")
+            st = replace(st, abs_over=st.abs_over + 1 if f.batt_w > absolute else 0)
+    tripped = st.over_samples >= RUNAWAY_SAMPLES or st.abs_over >= RUNAWAY_ABS_SAMPLES
     g = export_guards(inp, obj, lim, st, over_trip=over_trip, runaway_trip=tripped)
     if g is not None:
         return g, st
@@ -1249,7 +1277,7 @@ def export_tick(inp, obj, lim, st):
         if new > st.v_w:
             return make("increase", "export_short", wanted_w=new, write_w=new, want_w=new, **nums), st
         return make("reduce", "export_over", wanted_w=new, write_w=new, want_w=new, **nums), st
-    if label == "SETTLING":
+    if label in ("SETTLING", "WAITING FOR FRESH GRID"):
         since_s = inp.now_s - (st.last_update_s if st.last_update_s is not None else inp.now_s)
         return make("hold", "settling", wanted_w=st.v_w, v_w=st.v_w, since_s=since_s, settle_s=EXPORT_SETTLE_S), st
     if label == "SATURATED LOW":

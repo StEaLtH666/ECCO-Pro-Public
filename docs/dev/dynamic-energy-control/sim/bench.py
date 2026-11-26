@@ -375,7 +375,7 @@ class Bench:
             self.do_write(t, lease, "fp_rate_w", p["first_w"], "start")
             lease.pending = (t, "fp_rate_w", p["first_w"], "start", None)
         else:
-            st = replace(K.State(), phase="active", v_w=p["first_w"], stop_soc_pct=p["stop_soc"], last_update_s=t)
+            st = replace(K.State(), phase="active", v_w=p["first_w"], stop_soc_pct=p["stop_soc"], last_update_s=t, active_since_s=t, ref_w=p["first_w"])
             lease = Lease(self.lease_id, kind, p["owner"], {"allow_export": regs.allow_export, "dump_ceiling_w": regs.dump_ceiling_w},
                           st, p["obj"], p["lim"], t, t, self.plant.soc())
             self.lease = lease
