@@ -185,16 +185,19 @@ Every run is judged by `scenarios.check_invariants` with the REAL kernel's const
 | Invariant | Holds when |
 |---|---|
 | RESERVE_FLOOR | an export never discharges below the larger of the Stop SOC and the effective reserve in force one reaction time earlier |
-| IMPORT_CEILING | with an import ceiling configured, no breach the charger causes lasts longer than the reaction bound while ECCO holds the session |
-| POWER_CEILING | every setpoint written is inside 500 W and the ceiling and, for a lease, never above the pre-session value |
+| IMPORT_CEILING | with an import ceiling configured, ECCO answers for every breach (grid import over the ceiling, charger drawing, house alone under it) that began while it held a session, before its first one, between two, or within two ticks after its last END, and keeps answering until the import falls: at most the dongle's guard reaction while a session is open (3 ticks plus one per 2000 W step the peak excess needs, plus the longest telemetry gap), the declared reaction before a session, NOTHING after the last END (the restore is ECCO's write: finding F01), at most as many episodes as the night has exogenous causes plus one, and no episode opened by ECCO's own start or change raising the charge power |
+| POWER_CEILING | every setpoint written is inside 500 W and the ceiling and, for a lease, never above the pre-session value; and with a Gentle session open the setpoint IN FORCE stays above a lowered Power Ceiling for no longer than a plan period plus the command |
 | BUDGETS | dwell, change count, write count (charge), settle and write count (export) are never exceeded, and the dongle never has to refuse a request |
 | REACHES_OR_REPORTS | the SOC reading reached the target by the deadline, or 'unreachable' was reported at least 15 minutes before it |
 | NEVER_WORSE_THAN_TODAY | (Gentle, REQ-A12) the same night is run beside it with no ECCO at all; whenever today's fixed rate reaches the target 25 minutes before the window end, the Gentle night reaches it by the window end |
 | NO_UNTRUSTED_ACTUATION | no start, change or loop write while the clock it depends on is untrusted |
-| ONE_WRITER | at most one lease at a time and every write belongs to the lease that is open |
+| NO_REWRITE | no setpoint write repeats the value already in force (a saturated loop that rewrites the same ceiling spends the flash-wear budget on nothing) |
+| NO_STALE_DRIVE | no plan-driven change (a raise or a lowering from the plan, not a safety reduction) is decided on a frame older than 45 s (STALE_HOLD_S): an old reading may end a session, never drive a change |
+| COMMAND_FOLLOWED | (export) the measured battery power stays within the ordinary runaway bound of the command in force (the higher of the last three commands, command + max(command / 2, 750 W)) for no longer than the lease-start grace, the guard's consecutive samples and two ticks of slack: judged on the plant, so it fails when the measured-power guard is missing |
+| ONE_WRITER | **bench sanity check, not a controller property**: at most one lease at a time and every write belongs to the lease that is open (the dongle model's own arbiter enforces it; no kernel edit can break it, so `g31` and `e19` test the bench's arbiter, and only the bench mutants of the self-check can fail it) |
 | EXPLAINED | every decision has a reason from the closed list, a detail from its list and a complete sentence |
 | RESTORED_OR_ALERTED | at the end no lowered or overriding value is left silently: the owner's values are back or an alert was raised |
-| PHYSICAL | the battery stays between 0 and 100 percent and every number is finite |
+| PHYSICAL | **plant sanity check, not a controller property**: the battery stays between 0 and 100 percent and every number is finite (the plant clamps the stored energy, so it cannot fail unless the plant is edited) |
 
 ### Scenarios
 
@@ -207,11 +210,12 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `g01_nominal` | gentle | Nominal night: 25 to 90 percent, light house load; the lowest practical rate, re-planned from the measured SOC. | REQ-A1, REQ-A2, REQ-A5, REQ-A8, REQ-A12, REQ-B4, REQ-B7, REQ-B8, REQ-B10, REQ-B11, REQ-C9 |
 | `g02_heavy_overnight_load` | gentle | A heavy overnight house load (4.5 kW for 90 minutes) with no import ceiling: the grid carries it, progress is unaffected, so the rate is held. | REQ-A3, REQ-A10, REQ-B5 |
 | `g03_heavy_load_import_ceiling` | gentle | The same load with an 11 kW import ceiling: import would pass it, so the setpoint is lowered at once and the target reported at risk. | REQ-A4, REQ-A7, REQ-A9, REQ-B5, REQ-C10, REQ-D2 |
+| `g03b_restore_into_breach` | gentle | FINDING F01 (the review's variant of g03): the house load ramps up to 6 kW and stays; the lease holds the 11 kW import ceiling for hours, ends at its deadline and the restore writes the owner's 8000 W into a 14.98 kW import for the last 14 minutes of the window. The restore is ECCO's write, so the breach is ECCO's; the design does not yet say what an end should write into a known breach. | REQ-A4, REQ-C10, REQ-D2 |
 | `g04_load_removal` | gentle | A heavy load for 30 minutes then sudden removal, with an import ceiling: the forced reduction is undone only after the dwell and hysteresis. | REQ-A6, REQ-A10 |
-| `g05_kettle_spikes` | gentle | Kettle-sized bursts (3 kW for 3 minutes every 25 minutes) with a roomy import ceiling: no rate change follows a burst. | REQ-A6 |
+| `g05_kettle_spikes` | gentle | Bursts of 3 kW for 7 minutes every 25 minutes (off the plan grid, so the planner sees each at one plan tick) under a binding 11 kW import ceiling: the planner lowers the rate once and then plans on the half-hour peak, so the later bursts cause no further change and the dongle's guard never has to act; a planner that forgot the peak would change the rate after every burst. | REQ-A6 |
 | `g06_high_start_soc` | gentle | High starting SOC: 80 to 95 percent, so the plan is gentle and short. | REQ-A5, REQ-A10 |
 | `g07_low_start_soc_tight` | gentle | Low starting SOC and a short window: 8 to 100 percent in four hours cannot make a 60 minute buffer; 'unreachable' is said at the first plan tick. | REQ-A9, REQ-A10, REQ-B8 |
-| `g08_efficiency_drop` | gentle | Charging efficiency falls from 0.945 to 0.70 after 30 minutes: the SOC lags the pessimistic projection, the progress tracker flags it and the rate is raised in bounded steps; any shortfall is reported. | REQ-A3, REQ-A4, REQ-A10 |
+| `g08_efficiency_drop` | gentle | Charging efficiency falls from 0.945 to 0.70 after 30 minutes: the SOC lags the pessimistic projection, the progress tracker flags it, so the plan sees the real shortfall at once and raises by a large step at the first change the 30 minute dwell allows (about 70 minutes in); without the tracker the raises come late and small and the night misses its deadline. | REQ-A3, REQ-A4, REQ-A10 |
 | `g09_efficiency_gain` | gentle | Efficiency better than assumed (0.97) and a smaller battery (30 kWh): ahead of the plan, the rate is lowered. | REQ-A5, REQ-A10 |
 | `g10_taper_cliff_98` | gentle | Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) says 'at risk' where the real knee (98) lets the night reach, so the plan is conservative and never optimistic. | REQ-A7, REQ-A12, REQ-B6 |
 | `g11_unit_ac_watts` | gentle | Unit alternative: the setpoint is AC grid watts (scale 1.0). The plan measures the gain; it never assumes it. | REQ-A7, REQ-B18 |
@@ -224,7 +228,8 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `g17_delayed_commands` | gentle | Every command takes 90 seconds to reach the dongle: budgets and dwell still hold. | REQ-B22, REQ-C5 |
 | `g18_start_command_lost` | gentle | The first command (the start) is lost in transit: Home Assistant sees no lease and sends it again. | REQ-B22, REQ-C12 |
 | `g19_inverter_ignores_write` | gentle | From 10 minutes in the inverter takes no new value: the next change fails its readback, the restore fails three times and the owner is alerted (FAULT). | REQ-C7, REQ-C12, REQ-D5 |
-| `g20_telemetry_short_gap` | gentle | A 60 second telemetry gap (under the 90 second bound): nothing stops, nothing is raised on stale data. | REQ-B3 |
+| `g20_telemetry_short_gap` | gentle | A 75 second telemetry gap that straddles a plan tick (the plan sees a frame 90 s old, under the 90 second bound): nothing stops, and the plan holds instead of deciding on stale data. | REQ-B3 |
+| `g20b_stale_frame_while_a_raise_is_due` | gentle | The first raise of a lagging night is due at the 4200 s plan tick, but the frame the plan sees is 90 s old: the plan holds (stale_short) and raises at the next tick on a fresh frame, never on the old one. | REQ-B3, REQ-A3 |
 | `g21_telemetry_long_gap` | gentle | A 5 minute telemetry gap: beyond the bound the lease ends and today's rate takes over. | REQ-B3, REQ-B9 |
 | `g22_soc_unavailable_at_start` | gentle | No telemetry for the first 12 minutes: nothing is started on missing data. | REQ-B3 |
 | `g23_restart_in_lease` | gentle | The dongle restarts in the middle of the lease: the snapshot is restored at boot and the lease is never resumed. | REQ-B9, REQ-B22, REQ-C7, REQ-C12 |
@@ -235,7 +240,9 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `g27b_stale_and_untrusted_together` | gentle | The telemetry goes stale and the inverter clock becomes untrusted on the same tick: the guard order decides, and time comes before staleness. | REQ-B21, REQ-D1 |
 | `g28_rtc_untrusted_at_start` | gentle | The inverter clock is untrusted for the first 15 minutes: no start until it is trusted. | REQ-D1, REQ-B21 |
 | `g29_grid_loss_in_lease` | gentle | Grid lost mid-lease (and a lowered slot may cap the battery off grid): the lease ends first and the original value is restored at once. | REQ-B21, REQ-D7 |
-| `g30_import_ceiling_drop` | gentle | The owner's import ceiling is applied mid-lease (9 kW) with 2 kW of house load: the forced reduction does not wait for the dwell. | REQ-B21, REQ-C10, REQ-D2 |
+| `g30_import_ceiling_drop` | gentle | The owner's import ceiling is applied mid-lease (9 kW) with 2 kW of house load: the forced reduction does not wait for the dwell. FINDING F01: when the lease ends at the target the restore writes the owner's 8000 W back and the import stays over the ceiling until the inverter's own slot target stops the charge. | REQ-B21, REQ-C10, REQ-D2 |
+| `g30b_breach_inside_the_dwell` | gentle | A heavy load arrives 10 minutes into the lease, inside the 30 minute dwell after the start write, under an 11 kW import ceiling: the forced reduction does not wait for the dwell, and neither the session nor the owner's import is left to the restore. | REQ-B21, REQ-C10, REQ-D2 |
+| `g35_power_ceiling_lowered` | gentle | The owner lowers the Power Ceiling to 4000 W mid-lease (the setpoint in force is 6300 W): the plan's forced reduction takes the setpoint to the new ceiling within one plan period and every later write stays under it; the shortfall that follows is reported. | REQ-A7, REQ-C10, REQ-B21 |
 | `g31_two_policies` | gentle | Another controller tries to start an export while the Gentle lease owns the setpoint: refused, one writer per setting. | REQ-B19, REQ-B20, REQ-C11 |
 | `g32_hold_pressed_charge` | gentle | The owner presses Hold mid-lease: the session ends, the pre-session values are back, nothing restarts while Hold is on. | REQ-C12, REQ-B21 |
 | `g33_plan_catches_up_alone` | gentle | The real battery is far larger than the plan (46 kWh against 35): the plan falls behind, raises the rate itself to today's and reaches the target in good time; the target guard has nothing to do and stays quiet. | REQ-A12 |
@@ -260,12 +267,14 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `e09_stop_soc_reached` | export | A rising house load drains the battery faster than planned: the Stop SOC (staged above the effective reserve) ends the lease before the reserve. | REQ-B14 |
 | `e10_reserve_rises` | export | The effective reserve rises from 20 to 60 percent during the export: Home Assistant asks for a raise-only Stop SOC and the lease ends above the new reserve. | REQ-B14, REQ-B21 |
 | `e10b_reserve_above_soc` | export | The reserve jumps above the battery's own SOC: the discharge stops within the declared reaction time. | REQ-B14, REQ-B21 |
+| `e10c_reserve_rise_then_ha_outage` | export | The reserve rises to 64 percent, Home Assistant relays the raise-only Stop SOC and then goes down for good: the dongle alone ends the export at the raised floor, above the new reserve (its own Stop SOC is the only floor left). | REQ-B14, REQ-B21, REQ-D4 |
 | `e11_hold_pressed` | export | The owner presses Hold during the export: Home Assistant ends the session within a plan tick and the pre-session values are restored. | REQ-B21, REQ-C12 |
 | `e11b_hold_end_command_lost` | export | Hold is pressed and the first End command is lost in transit: Home Assistant sends it again at the next plan tick and the session still ends. | REQ-B22, REQ-C12 |
 | `e12_restart_in_lease` | export | The dongle restarts during the export: the lease is ended and restored at boot, never resumed. | REQ-B9, REQ-B22, REQ-C7 |
 | `e13_dead_dongle` | export | The dongle dies mid-export: no firmware guard runs, the last ceiling stays in force, ECCO's reserve is NOT protected. The backstops are the inverter's own shutdown SOC and the owner alert. | REQ-D4 |
 | `e14_unit_wrong_x10` | export | Export unit wrong by 10x with no Max Grid Export set: the measured-power guard ends the lease within a few samples. | REQ-B18, REQ-D3 |
 | `e15_runaway_anomaly` | export | The 22 Sept 2026 anomaly: the battery ignores its ceiling mid-lease. The runaway guard ends the lease. | REQ-D3 |
+| `e15b_runaway_between_thresholds` | export | The battery ignores a 500 W ceiling and gives 2.6 kW: above the ordinary runaway bound (1250 W) and under the absolute backstop (3750 W), so only the ordinary measured-power guard can end the lease, and it does within its samples. | REQ-D3 |
 | `e16_export_time_untrusted` | export | The dongle's NTP time is untrusted for the first 10 minutes: no start until it is trusted. | REQ-D1, REQ-B21 |
 | `e17_grid_loss_export` | export | Grid lost during the export: the session ends first and the pre-session values are restored. | REQ-B21 |
 | `e18_export_over_limit` | export | The house load falls away under a 2.5 kW Max Grid Export: one sample far over ends the lease at once. | REQ-B21, REQ-C10 |
@@ -286,10 +295,20 @@ These are results of the model, not observations of the inverter; each has a sce
    HIGHER pre-lease value; an import breach caused by a heavy house load would be made worse by that restore. The kernel's forced reduction
    (`g03`, `g04`, `g30`: it ignores the dwell and the change count, moves at most 2000 W, and always leaves one write for the restore)
    needs a counterpart in the firmware design; today none exists. This is a design decision for the owner and the independent review.
-3. **A configured import ceiling is only enforced while ECCO holds the session.** With no lease the owner's own table charges at the owner's
-   own rate; the kernel starts a session only to lower it (the safety start of `plan_gentle`), so the reaction is the plan period plus the
-   command and one dongle tick (about 5 to 10 minutes in the sweep), a soft gate. A firmware import guard (N6) would cut that to one tick.
-   After a session has ended the restore writes the owner's value back; the invariant does not count a breach from that value as ECCO's.
+3. **A configured import ceiling is only enforced while ECCO holds the session, and the END restores into whatever the import is: FINDING F01**
+   (`g03b_restore_into_breach`, `g30_import_ceiling_drop`; pinned, see "Pinned findings"). With no lease the owner's own table charges at the
+   owner's own rate; the kernel starts a session only to lower it (the safety start of `plan_gentle`), so the reaction before a session is
+   the plan period plus the command and one dongle tick (about 5 to 10 minutes in the sweep), a soft gate. A firmware import guard (N6)
+   would cut that to one tick. When the session ENDS (deadline, target, stale telemetry, plan lost, restart, Hold, grid loss) the restore
+   writes the owner's pre-session value back (REQ-C12: the exact value, never a computed one), and if the house load is such that this rate
+   breaches the owner's ceiling the breach is ECCO's: the restore is its write. The first version of this simulator did not count it; the
+   independent review did (F01), and the invariant now counts it until the import falls. In `g03b` the lease holds an 11 kW ceiling for
+   hours and the restore at the deadline writes 8000 W into a 14.98 kW import for the last 14 minutes of the window; in `g30` the
+   restore at the target leaves 75 s over a 9 kW ceiling until the inverter's own slot target stops the charge; the sweep meets it in
+   about 2 percent of the Gentle nights with a ceiling. The kernel is NOT changed to hide it: the options are (a) an END restores
+   min(original, headroom) (then the owner's table is lowered after the session: a deviation from REQ-C12's exact restore and a new
+   write-ownership question), or (b) the owner accepts that the ceiling ends with the session and the plan says so. That is an owner
+   decision (listed in the review hand-over); until it is taken the finding stays pinned.
 4. **"Never worse than today" yields to the import ceiling.** The target guard hands the charge back to the pre-session rate only when that
    rate fits under the ceiling; otherwise the lease continues at the limited rate and the shortfall is reported (`unreachable`).
 5. **A dead dongle leaves ECCO's reserve unprotected** (`e13_dead_dongle`, a documented gap): the export continues at the last ceiling
@@ -304,6 +323,18 @@ These are results of the model, not observations of the inverter; each has a sce
    points (a one-point reading error is then at most 12 percent), so a collapse of the charging efficiency is flagged about an hour after it
    starts at the rates used here (`g08`); a shortfall beyond the pessimistic envelope is reported when the projection at the highest allowed
    rate says so (`g33`), not before.
+
+## Pinned findings (defects of the design the bench found)
+
+A scenario may declare `known_finding=((invariant, id, reason),)` in `scenarios.py`: that invariant MUST fail, exactly with the pinned
+failure class and no other, and `run_sim.py` prints FINDING for the row. `run_sim.py` exits 0 only when the set of failing (scenario,
+invariant) pairs equals the set the catalogue pins (documented gaps and findings), so a fix flips its pin red (the pin must then be
+removed) and any NEW failure fails as well. A finding is not a documented physical gap (`known_gap`, a dead dongle: a backstop applies);
+it is a place where the design as written does the wrong thing and an owner decision is open.
+
+| Id | Scenarios | What | Open decision |
+|---|---|---|---|
+| F01 | `g03b_restore_into_breach`, `g30_import_ceiling_drop` (and about 2 percent of the sweep's Gentle nights with a ceiling) | the END of a session restores the owner's pre-session value into a house load that puts it over the owner's import ceiling; the breach lasts until the owner's own table stops charging | an END restores min(original, headroom), or the owner accepts that the ceiling ends with the session |
 
 ## What this does not prove
 

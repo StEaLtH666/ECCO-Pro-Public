@@ -6,16 +6,21 @@ with the REAL kernel's constants (module KR below), never with the constants of 
 
 Invariants (every run; each is True, False or None = does not apply to this kind of run):
   RESERVE_FLOOR          an export never discharges below max(Stop SOC, the effective reserve in force one reaction time earlier)
-  IMPORT_CEILING         with an import ceiling configured, no breach caused by the charger lasts longer than the reaction bound
+  IMPORT_CEILING         with an import ceiling configured, ECCO answers for every breach its session, start, change, forced reduction or
+                         RESTORE caused or left: bounded in duration (the dongle's guard while a session is open, nothing after the last
+                         END), in number, and never opened by its own raise (import_analysis)
   POWER_CEILING          every setpoint written is inside [500 W, ceiling] and, for a lease, never above the pre-session value
   BUDGETS                dwell, change count, write count (charge) and settle, write count (export) are never exceeded
   REACHES_OR_REPORTS     the target is reached by the deadline, or 'unreachable' was reported at least 15 min before it
   NEVER_WORSE_THAN_TODAY a night that today's fixed rate would have won (target reached 25 minutes before the window end) is not lost (Gentle)
   NO_UNTRUSTED_ACTUATION no start, change or loop write while the clock it depends on is untrusted
-  ONE_WRITER             at most one lease at a time and every write belongs to the lease that is open
+  NO_REWRITE             no setpoint write that repeats the value already in force (a double write wastes the flash-wear budget)
+  NO_STALE_DRIVE         no plan-driven change decided on a frame older than STALE_HOLD_S (45 s)
+  COMMAND_FOLLOWED       (export) the measured battery power stays within the runaway bound of the command in force
+  ONE_WRITER             (bench sanity) at most one lease at a time and every write belongs to the lease that is open
   EXPLAINED              every decision has a reason from the closed list, a detail from its list and a non-empty sentence
   RESTORED_OR_ALERTED    at the end no lowered or overriding value is left silently: the owner's values are back, or an alert was raised
-  PHYSICAL               the battery stays between 0 and 100 percent and every number is finite
+  PHYSICAL               (plant sanity) the battery stays between 0 and 100 percent and every number is finite
 
 A scenario passes when every applicable invariant holds (a KNOWN GAP must fail exactly as documented, with its backstop shown) and
 every expectation of the spec holds.
@@ -32,7 +37,10 @@ from bench import Scenario
 
 TICK = P.DT_S
 INVARIANTS = ("RESERVE_FLOOR", "IMPORT_CEILING", "POWER_CEILING", "BUDGETS", "REACHES_OR_REPORTS", "NEVER_WORSE_THAN_TODAY", "NO_UNTRUSTED_ACTUATION",
-              "ONE_WRITER", "EXPLAINED", "RESTORED_OR_ALERTED", "PHYSICAL")
+              "NO_REWRITE", "NO_STALE_DRIVE", "COMMAND_FOLLOWED", "ONE_WRITER", "EXPLAINED", "RESTORED_OR_ALERTED", "PHYSICAL")
+# bench and plant sanity checks: no edit of the CONTROLLER (the kernel) can make them fail, because the dongle model's arbiter and the plant's
+# clamps enforce them; they are kept so that an edit of the bench or the plant cannot break them silently (the bench mutants of test_sim.py)
+SANITY = ("ONE_WRITER", "PHYSICAL")
 SETPOINT_REGS = ("slot_power_w", "fp_rate_w", "dump_ceiling_w")
 REPORT_LEAD_S = 900.0     # an unreachable target must be reported at least this long before the deadline
 TARGET_TOL = 0.5          # the reading is whole percent: a true SOC within half a point of the target reads as the target
@@ -77,6 +85,12 @@ def reserve_at(sc, t):
     return v
 
 
+def react_plan_s(sc):
+    """What a Home Assistant driven reaction (a plan tick, the command, the dongle's tick and its verify) can take: never less than the
+    scenario's own declared reaction."""
+    return max(sc.react_s, sc.plan_s + sc.cmd_delay_s + 2 * TICK)
+
+
 def power_ceiling_at(sc, t):
     v = sc.power_ceiling_w
     for (t0, name, a) in sorted(sc.events, key=lambda e: e[0]):
@@ -111,28 +125,146 @@ def inv_reserve_floor(run):
     return worst[0] >= 0.0, "lowest margin over the floor %.2f points at t=%d s (floor %.1f)" % (worst[0], worst[1], worst[2])
 
 
-def inv_import_ceiling(run):
+BREACH_GUARD_TICKS = 3     # the dongle's own import guard: one tick to see the sample, the forced write, one to verify it; one MORE tick per extra 2000 W step
+BREACH_PHASES = ("before", "in", "gap", "after")
+
+
+def _phase_of(r, first_start, last_end):
+    """Where a row sits relative to the sessions of the night: before the first one, with one open, between two, after the last end."""
+    if r.lease:
+        return "in"
+    if r.t < first_start:
+        return "before"
+    if r.t > last_end:
+        return "after"
+    return "gap"
+
+
+def exogenous_rises(sc):
+    """How many things the world itself does that can open a breach: a step up of the house load, a spike, an owner event that lowers the
+    ceiling, and for a ramp as many as the ramp can cross the margin the guard keeps (a forced reduction leaves the import at the ceiling less
+    IMPORT_MARGIN_PCT, so each further margin of rise can open a new episode). The number of breach episodes in a night is bounded by this
+    plus one (the night's own start): an episode with no such cause is the controller's own."""
+    ceil = min([c for c in [sc.import_ceiling_w] + [a["w"] for (_t, name, a) in sc.events if name == "import_ceiling"] if c is not None] or [1.0])
+    margin = max(1.0, KR.IMPORT_MARGIN_PCT / 100.0 * ceil)
+    n = 0
+    pts = sc.house.points
+    for (a, b) in zip(pts, pts[1:]):
+        rise = b[1] - a[1]
+        if rise > 300.0:
+            n += max(1, math.ceil(rise / margin)) if sc.house.mode == "linear" else 1
+    n += sum(1 for (_s, _d, extra) in sc.house.spikes if extra >= 300.0)
+    n += sum(1 for (_t, name, _a) in sc.events if name == "import_ceiling")
+    return n
+
+
+def _write_kind_at(run, t, regs=("slot_power_w", "fp_rate_w")):
+    kinds = [w.kind for w in run.writes if w.ok and w.t == t and w.reg in regs]
+    return kinds[-1] if kinds else None
+
+
+def import_analysis(run):
+    """F01 of the N4 review: the charger-caused breaches of the owner's import ceiling in a night and who answers for them. A breach row is one
+    with the ceiling set, the grid import above it, the charger drawing and the house load alone below it. An EPISODE is a run of consecutive
+    breach rows under one ceiling value. ECCO answers for every episode that began while it held a session, before its first one (Home
+    Assistant must notice and start a safety session), between two, or within two ticks after its last END (the restore writes the owner's
+    value into whatever the import is: the effect shows one tick later); it keeps answering until the import falls, the charger stops or the
+    owner's ceiling changes. The bounds: before or between sessions the declared reaction (plan period + command + a guard tick); with a
+    session open the dongle's own guard (3 ticks plus one per 2000 W step the peak excess needs, plus the longest telemetry gap, because the
+    guard cannot act on a reading it does not have); AFTER the last end nothing (a restore into a known breach is the finding of the review);
+    the number of episodes in the night by its exogenous causes + 1; and no episode may begin because ECCO's own start or change RAISED the
+    charge power (the previous power would not have breached, the house did not jump). Returns None when no ceiling is configured."""
+    cached = getattr(run, "_import_analysis", False)
+    if cached is not False:
+        return cached
     sc = run.sc
-    if sc.kind == "export":
-        return None, "n/a (not a charge)"
-    ceilings = [r.imp_ceiling for r in run.rows if r.imp_ceiling is not None]
-    if not ceilings:
-        return None, "no import ceiling configured (the plan says so)"
-    longest, cur, peak = 0, 0, 0.0
-    # ECCO answers for the charge only while it holds (or is about to take) the session; after the last session has ended the owner's own
-    # table is charging at the owner's own rate, which the owner chose (the plan says so)
+    rows = run.rows
+    if sc.kind == "export" or not any(r.imp_ceiling is not None for r in rows):
+        run._import_analysis = None
+        return None
+    starts = [l["start_t"] for l in run.leases]
     ends = [l["end_t"] for l in run.leases]
+    first_start = min(starts) if starts else float("inf")
     last_end = float("inf") if (not ends or any(e is None for e in ends)) else max(ends)
-    for r in run.rows:
-        breach = (r.t <= last_end and r.imp_ceiling is not None and r.grid > r.imp_ceiling and r.ac_in > 0.0 and r.house < r.imp_ceiling)
-        if breach:
-            cur += 1
-            peak = max(peak, r.grid)
-        else:
-            cur = 0
-        longest = max(longest, cur)
-    bound = sc.react_s + TICK
-    return longest * TICK <= bound, "longest charger-caused breach %d s (bound %d s), peak import %.0f W" % (longest * TICK, bound, peak)
+    gap_s = max([t1 - t0 for (t0, t1) in sc.tel_gaps] or [0.0])
+    unit = sc.plant.unit_scale if sc.plant.unit_scale > 0 else 1.0
+    eps, cur = [], None
+    for i, r in enumerate(rows):
+        c = r.imp_ceiling
+        breach = c is not None and r.grid > c + 1e-9 and r.ac_in > 0.0 and r.house < c
+        if breach and cur is not None and rows[cur[0]].imp_ceiling != c:
+            eps.append(cur)
+            cur = None
+        if breach and cur is None:
+            cur = [i, i]
+        elif breach:
+            cur[1] = i
+        elif cur is not None:
+            eps.append(cur)
+            cur = None
+    if cur is not None:
+        eps.append(cur)
+    episodes, violations = [], []
+    owner_rows = 0
+    for i0, i1 in eps:
+        c = rows[i0].imp_ceiling
+        peak = max(rows[i].grid - c for i in range(i0, i1 + 1))
+        runs = {k: 0 for k in BREACH_PHASES}
+        now = {k: 0 for k in BREACH_PHASES}
+        for i in range(i0, i1 + 1):
+            ph = _phase_of(rows[i], first_start, last_end)
+            for k in BREACH_PHASES:
+                now[k] = now[k] + 1 if k == ph else 0
+                runs[k] = max(runs[k], now[k])
+        attributed = rows[i0].t <= last_end + 2 * TICK
+        # who raised the charge power just before the episode opened? (the previous power would not have breached and the house did not jump
+        # since the decision was taken: a plan tick plus the command delay earlier)
+        cause = "exogenous"
+        if i0 > 0:
+            r, p = rows[i0], rows[i0 - 1]
+            back = int((sc.plan_s + sc.cmd_delay_s) / TICK) + 3
+            rise = r.house - min(rows[j].house for j in range(max(0, i0 - back), i0))
+            if r.ac_in > p.ac_in + 50.0 and r.grid - (r.ac_in - p.ac_in) <= c and rise < 300.0:
+                for j in range(max(1, i0 - 3), i0 + 1):
+                    if rows[j].slot_w > rows[j - 1].slot_w + 1.0 or rows[j].fp_w > rows[j - 1].fp_w + 1.0:
+                        cause = _write_kind_at(run, rows[j].t) or cause
+        ep = dict(t0=rows[i0].t, t1=rows[i1].t, ceiling=c, peak_w=peak, runs=runs, attributed=attributed, cause=cause)
+        episodes.append(ep)
+        if not attributed:
+            owner_rows += i1 - i0 + 1
+            continue
+        react = react_plan_s(sc) + TICK
+        for k in ("before", "gap"):
+            if runs[k] * TICK > react:
+                violations.append(("react", "breach from t=%d s lasted %d s before a session held the charge (bound %d s)" % (ep["t0"], runs[k] * TICK, react)))
+        steps = max(1, math.ceil(peak / (KR.CHARGE_MAX_STEP_W * unit)))
+        allowed = (BREACH_GUARD_TICKS + steps - 1) * TICK + gap_s
+        if runs["in"] * TICK > allowed:
+            violations.append(("guard", "breach from t=%d s lasted %d s with a session open (bound %d s, peak excess %.0f W)" % (ep["t0"], runs["in"] * TICK, allowed, peak)))
+        if runs["after"] > 0:
+            violations.append(("restore", "the END at t=%d s restored the owner's value into a breach: the import stayed above %.0f W for %d s after it (peak %.0f W)" % (last_end, c, runs["after"] * TICK, rows[i1].grid)))
+        if cause in ("start", "change"):
+            violations.append(("own_raise", "a %s write raised the charge power into a breach at t=%d s" % (cause, ep["t0"])))
+    n_att = sum(1 for e in episodes if e["attributed"])
+    cap = 1 + exogenous_rises(sc)
+    if n_att > cap:
+        violations.append(("count", "%d breach episodes in the night, more than the %d its causes explain" % (n_att, cap)))
+    out = dict(episodes=episodes, violations=violations, owner_rows=owner_rows, cap=cap, attributed=n_att,
+               longest_in=max([e["runs"]["in"] for e in episodes] or [0]) * TICK, longest_after=max([e["runs"]["after"] for e in episodes] or [0]) * TICK,
+               peak_w=max([e["peak_w"] for e in episodes] or [0.0]))
+    run._import_analysis = out
+    return out
+
+
+def inv_import_ceiling(run):
+    a = import_analysis(run)
+    if a is None:
+        return None, ("n/a (not a charge)" if run.sc.kind == "export" else "no import ceiling configured (the plan says so)")
+    bad = a["violations"]
+    if bad:
+        return False, "; ".join("%s: %s" % (k, t) for k, t in bad[:2])
+    return True, "%d episode(s), %d answered for by ECCO (at most %d), longest with a session open %d s, nothing after the last end; %d row(s) of the owner's own breaches not counted" % (
+        len(a["episodes"]), a["attributed"], a["cap"], a["longest_in"], a["owner_rows"])
 
 
 def inv_power_ceiling(run):
@@ -151,8 +283,15 @@ def inv_power_ceiling(run):
             lo, hi = KR.CHARGE_MIN_W, power_ceiling_at(sc, w.t)
         if w.value < lo - 1e-9 or w.value > hi + 1e-9:
             bad.append((w.t, w.kind, w.value, lo, hi))
+    # the state: with a Gentle session open the setpoint in force may stay above a LOWERED Power Ceiling for the declared reaction only
+    over = worst = 0
+    for r in run.rows:
+        over = over + 1 if (sc.kind == "gentle" and r.lease and r.slot_w > power_ceiling_at(sc, r.t) + 1e-9) else 0
+        worst = max(worst, over)
+    if worst * TICK > react_plan_s(sc):
+        bad.append(("in force", worst * TICK, react_plan_s(sc)))
     if n == 0:
-        return True, "no setpoint written"
+        return not bad, "no setpoint written" if not bad else "the setpoint in force stayed above the lowered Power Ceiling for %d s (bound %d s)" % (worst * TICK, react_plan_s(sc))
     return not bad, ("%d writes checked" % n) if not bad else "out of range: %s" % (bad[:3],)
 
 
@@ -232,6 +371,58 @@ def inv_no_untrusted(run):
     return not bad, "no start/change/loop write under untrusted time" if not bad else "wrote under untrusted time: %s" % (bad[:3],)
 
 
+def inv_no_rewrite(run):
+    """No ECCO setpoint write repeats the value already in force (the register's value is replayed from the owner's pre-session value and the
+    successful writes): a double write spends the flash-wear budget on nothing (F04a of the N4 review)."""
+    cur = {"slot_power_w": run.sc.original_w, "fp_rate_w": 0.0, "dump_ceiling_w": 0.0}
+    bad = []
+    n = 0
+    for w in run.writes:
+        if not w.ok or w.reg not in cur:
+            continue
+        if w.kind in ("start", "change", "forced", "loop"):
+            n += 1
+            if abs(w.value - cur[w.reg]) < 1e-9:
+                bad.append((w.t, w.kind, w.reg, w.value))
+        cur[w.reg] = w.value
+    return not bad, ("%d setpoint writes, each a new value" % n) if not bad else "same value written again: %s" % (bad[:3],)
+
+
+STALE_DRIVEN = ("behind_plan", "ahead_of_plan", "import_headroom")
+
+
+def inv_no_stale_drive(run):
+    """No plan-driven change (raise or lower from the plan, not a safety reduction) is decided on a frame older than STALE_HOLD_S: a reading
+    that old may end a session, never drive a change (F04b)."""
+    bad = [(r.t, r.detail, r.age) for r in run.recs if r.who == "ha" and r.write is not None and r.reason in ("increase", "reduce")
+           and r.detail in STALE_DRIVEN and r.age is not None and r.age > KR.STALE_HOLD_S + 1e-9]
+    n = sum(1 for r in run.recs if r.who == "ha" and r.write is not None and r.detail in STALE_DRIVEN)
+    return not bad, ("%d plan-driven changes, each on a frame of at most %d s" % (n, KR.STALE_HOLD_S)) if not bad else "decided on an old frame: %s" % (bad[:3],)
+
+
+def inv_command_followed(run):
+    """(Export) while a session is open the measured battery power stays within the ORDINARY runaway bound of the command in force (the higher
+    of the last three commands: the transition window): command + max(command / 2, 750 W), for no longer than the lease-start grace, the
+    consecutive samples and two ticks of slack. This is the property the measured-power guard exists for; it is judged on the plant, so it
+    fails when the guard is missing (F04d)."""
+    if run.sc.kind != "export":
+        return None, "n/a (not an export)"
+    allowed = KR.RUNAWAY_GRACE_S + (KR.RUNAWAY_SAMPLES + 2) * TICK
+    run_s = worst = 0
+    peak = 0.0
+    rows = run.rows
+    for i, r in enumerate(rows):
+        over = False
+        if r.lease and r.dump_w > 0:
+            v = max(rows[j].dump_w for j in range(max(0, i - 2), i + 1))
+            over = r.batt > v + max(v / 2.0, KR.RUNAWAY_MARGIN_W)
+            if over:
+                peak = max(peak, r.batt)
+        run_s = run_s + TICK if over else 0
+        worst = max(worst, run_s)
+    return worst <= allowed, "the longest stretch above the runaway bound of the command was %d s (allowed %d s)%s" % (worst, allowed, "" if not peak else ", peak %.0f W" % peak)
+
+
 def inv_one_writer(run):
     problems = []
     ls = sorted(run.leases, key=lambda l: l["start_t"])
@@ -288,7 +479,8 @@ def inv_physical(run):
 
 
 CHECKS = {"RESERVE_FLOOR": inv_reserve_floor, "IMPORT_CEILING": inv_import_ceiling, "POWER_CEILING": inv_power_ceiling, "BUDGETS": inv_budgets,
-          "REACHES_OR_REPORTS": inv_reaches_or_reports, "NEVER_WORSE_THAN_TODAY": inv_never_worse, "NO_UNTRUSTED_ACTUATION": inv_no_untrusted, "ONE_WRITER": inv_one_writer,
+          "REACHES_OR_REPORTS": inv_reaches_or_reports, "NEVER_WORSE_THAN_TODAY": inv_never_worse, "NO_UNTRUSTED_ACTUATION": inv_no_untrusted,
+          "NO_REWRITE": inv_no_rewrite, "NO_STALE_DRIVE": inv_no_stale_drive, "COMMAND_FOLLOWED": inv_command_followed, "ONE_WRITER": inv_one_writer,
           "EXPLAINED": inv_explained, "RESTORED_OR_ALERTED": inv_restored_or_alerted, "PHYSICAL": inv_physical}
 
 
@@ -307,6 +499,8 @@ class Spec:
     skip: tuple = ()                   # invariants this scenario does not claim (with the reason in the summary)
     backstop: str = ""                 # what protects the owner when no firmware guard can run (shown in the table)
     covers: tuple = ()                 # requirement ids this scenario exercises (REQUIREMENTS.md)
+    known_finding: tuple = ()          # ((invariant, finding id, one-line reason), ...): a defect of the DESIGN the bench found; the invariant MUST fail
+    tolerate: tuple = ()               # failure classes of an invariant counted as a finding instead of a failure (the sweep: "restore")
 
 
 @dataclass
@@ -321,6 +515,7 @@ class Result:
     failures: list
     ok: bool
     backstop: str = ""
+    findings: tuple = ()               # ((invariant, finding id), ...) hit as pinned or tolerated findings
 
 
 def outcome_of(run):
@@ -346,13 +541,30 @@ def outcome_of(run):
 def evaluate(spec, run):
     inv = check_invariants(run, spec.skip)
     gaps = dict(spec.known_gap)
+    pins = {name: (fid, why) for (name, fid, why) in spec.known_finding}
     failures = []
+    hit = []
     for name, (ok, detail) in inv.items():
         if name in gaps:
             if ok:
                 failures.append("%s was expected to FAIL as a documented gap but held" % name)
+        elif name in pins:
+            classes = {k for k, _t in (import_analysis(run) or {"violations": []})["violations"]} if name == "IMPORT_CEILING" else set()
+            if ok:
+                failures.append("%s was expected to FAIL as the pinned finding %s but held: the finding is fixed, remove its pin" % (name, pins[name][0]))
+            elif classes - {"restore"}:
+                failures.append("%s fails with more than the pinned finding %s (%s): %s" % (name, pins[name][0], ",".join(sorted(classes - {"restore"})), detail))
+            else:
+                hit.append((name, pins[name][0]))
         elif ok is False:
-            failures.append("%s: %s" % (name, detail))
+            classes = {k for k, _t in (import_analysis(run) or {"violations": []})["violations"]} if name == "IMPORT_CEILING" else set()
+            if name == "IMPORT_CEILING" and classes and classes <= set(spec.tolerate):
+                hit.append((name, "F01-restore (tolerated in the sweep)"))
+            else:
+                failures.append("%s: %s" % (name, detail))
+    unknown = set(pins) - set(inv)
+    if unknown:
+        failures.append("pinned finding on an invariant that was not judged: %s" % sorted(unknown))
     exp = {}
     for name, fn in spec.expect:
         ok, detail = fn(run)
@@ -360,9 +572,26 @@ def evaluate(spec, run):
         if not ok:
             failures.append("expect %s: %s" % (name, detail))
     last = run.rows[-1]
-    backstop = "; ".join(["%s: %s" % (k, v) for k, v in gaps.items()] + ([spec.backstop] if spec.backstop else []))
-    return Result(name=spec.sc.name, outcome=outcome_of(run) if not gaps else "KNOWN GAP (documented)", inv=inv, expect=exp, writes=len(run.writes),
-                  final_soc=last.soc, codes=tuple(sorted(codes_of(run))), failures=failures, ok=not failures, backstop=backstop)
+    backstop = "; ".join(["%s: %s" % (k, v) for k, v in gaps.items()] + ["FINDING %s %s: %s" % (fid, n, why) for n, (fid, why) in pins.items()] + ([spec.backstop] if spec.backstop else []))
+    if gaps:
+        outcome = "KNOWN GAP (documented)"
+    elif pins:
+        outcome = "FINDING %s (pinned)" % ",".join(f for _n, (f, _w) in pins.items())
+    else:
+        outcome = outcome_of(run)
+    return Result(name=spec.sc.name, outcome=outcome, inv=inv, expect=exp, writes=len(run.writes),
+                  final_soc=last.soc, codes=tuple(sorted(codes_of(run))), failures=failures, ok=not failures, backstop=backstop, findings=tuple(hit))
+
+
+def failing_pairs(results):
+    """The (scenario, invariant) pairs that FAIL in a list of Results (documented gaps and pinned findings included)."""
+    return {(r.name, n) for r in results for n, (ok, _d) in r.inv.items() if ok is False}
+
+
+def pinned_pairs(specs):
+    """The (scenario, invariant) pairs the catalogue says must fail: documented gaps and pinned findings. run_sim exits 0 only when the failing
+    pairs equal this set exactly, so a fix flips its pin red and any NEW failure fails as well."""
+    return {(sp.sc.name, e[0]) for sp in specs for e in tuple(sp.known_gap) + tuple(sp.known_finding)}
 
 
 def run_spec(spec, K):
@@ -528,6 +757,31 @@ def X_gain_measured_near(g, tol=0.02):
     return ("the realised AC power over the setpoint is about %.3f" % g, f)
 
 
+def X_first_change_between(t0, t1, min_w=None):
+    def f(run):
+        ch = [w for w in run.writes if w.ok and w.kind == "change"]
+        if not ch:
+            return False, "no ordinary change"
+        w = ch[0]
+        return t0 <= w.t <= t1 and (min_w is None or w.value >= min_w), "first change %d W at t=%d s" % (w.value, w.t)
+    return ("the first ordinary change is between t=%d and %d s%s" % (t0, t1, "" if min_w is None else " and at least %d W" % min_w), f)
+
+
+def X_slot_at_most(w_max, by_s):
+    def f(run):
+        rows = [r for r in run.rows if r.lease and r.t >= by_s]
+        worst = max([r.slot_w for r in rows] or [0.0])
+        return bool(rows) and worst <= w_max + 1e-9, "highest setpoint in force with a session open after t=%d s: %.0f W" % (by_s, worst)
+    return ("the setpoint in force is at most %d W from t=%d s on" % (w_max, by_s), f)
+
+
+def X_nth_start_at_most(n, w_max):
+    def f(run):
+        st = [w for w in run.writes if w.ok and w.kind == "start"]
+        return len(st) >= n and st[n - 1].value <= w_max + 1e-9, "start writes %s" % ([int(w.value) for w in st],)
+    return ("start number %d is at most %d W" % (n, w_max), f)
+
+
 def X_reported_by(t_s):
     def f(run):
         t = run.first_unreachable_t
@@ -600,8 +854,9 @@ EXPORT_PAYLOAD = {"kind": "export", "owner": "export", "first_w": 2000.0, "stop_
 SPECS = []
 
 
-def add(sc, *expect, covers=(), known_gap=(), skip=(), backstop=""):
-    SPECS.append(Spec(sc=sc, expect=tuple(expect), known_gap=tuple(known_gap), skip=tuple(skip), covers=tuple(covers), backstop=backstop))
+def add(sc, *expect, covers=(), known_gap=(), known_finding=(), skip=(), backstop=""):
+    SPECS.append(Spec(sc=sc, expect=tuple(expect), known_gap=tuple(known_gap), known_finding=tuple(known_finding), skip=tuple(skip), covers=tuple(covers),
+                      backstop=backstop))
 
 
 # ----- Gentle: the closed loop on a charge window 00:30-05:30 (300 min), deadline = window end - 60 min -----------------------
@@ -617,13 +872,18 @@ add(gentle("g03_heavy_load_import_ceiling", "The same load with an 11 kW import 
            house=Hs((0, 800), (3600, 5000), (9000, 800)), import_ceiling_w=11000.0),
     X_saw("dongle", "reduce", "import_ceiling"), X_reported_by(14400 - REPORT_LEAD_S),
     covers=("REQ-A4", "REQ-A7", "REQ-A9", "REQ-B5", "REQ-C10", "REQ-D2"))
+add(gentle("g03b_restore_into_breach", "FINDING F01 (the review's variant of g03): the house load ramps up to 6 kW and stays; the lease holds the 11 kW import ceiling for hours, ends at its deadline and the restore writes the owner's 8000 W into a 14.98 kW import for the last 14 minutes of the window. The restore is ECCO's write, so the breach is ECCO's; the design does not yet say what an end should write into a known breach.",
+           house=P.Series([(0, 800), (1800, 800), (9000, 6000)], mode="linear"), import_ceiling_w=11000.0),
+    X_saw("dongle", "reduce", "import_ceiling"), X_lease_ended("deadline"), X_reported_by(14400 - REPORT_LEAD_S),
+    known_finding=(("IMPORT_CEILING", "F01", "the END at the deadline restores the owner's 8000 W into a 14.98 kW import (840 s over the ceiling); a restore of min(original, headroom) would hold it, but that breaks 'the exact pre-session value' (REQ-C12): an owner decision"),),
+    covers=("REQ-A4", "REQ-C10", "REQ-D2"))
 add(gentle("g04_load_removal", "A heavy load for 30 minutes then sudden removal, with an import ceiling: the forced reduction is undone only after the dwell and hysteresis.",
            house=Hs((0, 800), (3600, 5000), (5400, 800)), import_ceiling_w=11000.0),
     X_saw("dongle", "reduce", "import_ceiling"), X_changes_at_most(5),
     covers=("REQ-A6", "REQ-A10"))
-add(gentle("g05_kettle_spikes", "Kettle-sized bursts (3 kW for 3 minutes every 25 minutes) with a roomy import ceiling: no rate change follows a burst.",
-           house=P.Series([(0.0, 800.0)], spikes=[(900.0 + 1500.0 * i, 180.0, 3000.0) for i in range(9)]), import_ceiling_w=16000.0),
-    X_reached(), X_saw("dongle", "reduce", "import_ceiling", present=False), X_changes_at_most(4),
+add(gentle("g05_kettle_spikes", "Bursts of 3 kW for 7 minutes every 25 minutes (off the plan grid, so the planner sees each at one plan tick) under a binding 11 kW import ceiling: the planner lowers the rate once and then plans on the half-hour peak, so the later bursts cause no further change and the dongle's guard never has to act; a planner that forgot the peak would change the rate after every burst.",
+           house=P.Series([(0.0, 800.0)], spikes=[(1000.0 + 1500.0 * i, 420.0, 3000.0) for i in range(9)]), import_ceiling_w=11000.0),
+    X_reached(), X_saw("dongle", "reduce", "import_ceiling", present=False), X_changes_at_most(2), X_saw("ha", "reduce", "import_headroom"),
     covers=("REQ-A6",))
 add(gentle("g06_high_start_soc", "High starting SOC: 80 to 95 percent, so the plan is gentle and short.", soc0_pct=80.0, target_soc_pct=95.0),
     X_reached(),
@@ -632,9 +892,9 @@ add(gentle("g07_low_start_soc_tight", "Low starting SOC and a short window: 8 to
            soc0_pct=8.0, target_soc_pct=100.0, window=(0.0, 14400.0), duration_s=14400.0),
     X_reported_by(600), X_no_writes(),
     covers=("REQ-A9", "REQ-A10", "REQ-B8"))
-add(gentle("g08_efficiency_drop", "Charging efficiency falls from 0.945 to 0.70 after 30 minutes: the SOC lags the pessimistic projection, the progress tracker flags it and the rate is raised in bounded steps; any shortfall is reported.",
+add(gentle("g08_efficiency_drop", "Charging efficiency falls from 0.945 to 0.70 after 30 minutes: the SOC lags the pessimistic projection, the progress tracker flags it, so the plan sees the real shortfall at once and raises by a large step at the first change the 30 minute dwell allows (about 70 minutes in); without the tracker the raises come late and small and the night misses its deadline.",
            soc0_pct=25.0, events=((1800.0, "plant", {"charge_eff": 0.70}),)),
-    X_saw("ha", "increase", "behind_plan"),
+    X_saw("ha", "increase", "behind_plan"), X_first_change_between(3900, 4500, min_w=7500), X_reached(),
     covers=("REQ-A3", "REQ-A4", "REQ-A10"))
 add(gentle("g09_efficiency_gain", "Efficiency better than assumed (0.97) and a smaller battery (30 kWh): ahead of the plan, the rate is lowered.",
            plant=P.PlantParams(charge_eff=0.97, capacity_kwh=30.0)),
@@ -681,9 +941,13 @@ add(gentle("g19_inverter_ignores_write", "From 10 minutes in the inverter takes 
            events=((600.0, "ignore_writes", {"on": True}),)),
     X_alert("FAULT"),
     covers=("REQ-C7", "REQ-C12", "REQ-D5"))
-add(gentle("g20_telemetry_short_gap", "A 60 second telemetry gap (under the 90 second bound): nothing stops, nothing is raised on stale data.", tel_gaps=((3600.0, 3660.0),)),
-    X_reached(), X_lease_ended("target_reached"),
+add(gentle("g20_telemetry_short_gap", "A 75 second telemetry gap that straddles a plan tick (the plan sees a frame 90 s old, under the 90 second bound): nothing stops, and the plan holds instead of deciding on stale data.", tel_gaps=((3840.0, 3915.0),)),
+    X_reached(), X_lease_ended("target_reached"), X_saw("ha", "hold", "stale_short"), X_leases_count(1),
     covers=("REQ-B3",))
+add(gentle("g20b_stale_frame_while_a_raise_is_due", "The first raise of a lagging night is due at the 4200 s plan tick, but the frame the plan sees is 90 s old: the plan holds (stale_short) and raises at the next tick on a fresh frame, never on the old one.",
+           events=((1800.0, "plant", {"charge_eff": 0.70}),), tel_gaps=((4140.0, 4215.0),)),
+    X_saw("ha", "hold", "stale_short"), X_no_write_between(4200, 4500, kinds=("change",)), X_first_change_between(4500, 4800), X_leases_count(1),
+    covers=("REQ-B3", "REQ-A3"))
 add(gentle("g21_telemetry_long_gap", "A 5 minute telemetry gap: beyond the bound the lease ends and today's rate takes over.", tel_gaps=((3600.0, 3900.0),)),
     X_lease_ended("stale_telemetry"), X_reached(), X_no_write_between(3600, 3900),
     covers=("REQ-B3", "REQ-B9"))
@@ -723,10 +987,19 @@ add(gentle("g29_grid_loss_in_lease", "Grid lost mid-lease (and a lowered slot ma
            events=((7000.0, "grid_loss", {"dur": 600.0}),)),
     X_lease_ended("grid_lost"), X_lease_ends_within(7000.0, 30.0), X_unserved_at_most(30),
     covers=("REQ-B21", "REQ-D7"))
-add(gentle("g30_import_ceiling_drop", "The owner's import ceiling is applied mid-lease (9 kW) with 2 kW of house load: the forced reduction does not wait for the dwell.",
+add(gentle("g30_import_ceiling_drop", "The owner's import ceiling is applied mid-lease (9 kW) with 2 kW of house load: the forced reduction does not wait for the dwell. FINDING F01: when the lease ends at the target the restore writes the owner's 8000 W back and the import stays over the ceiling until the inverter's own slot target stops the charge.",
            house=Hs((0, 2000)), events=((5000.0, "import_ceiling", {"w": 9000.0}),)),
     X_saw("dongle", "reduce", "import_ceiling"),
+    known_finding=(("IMPORT_CEILING", "F01", "the restore at the end writes the owner's rate into a house load that already puts it over the ceiling (75 s here)"),),
     covers=("REQ-B21", "REQ-C10", "REQ-D2"))
+add(gentle("g30b_breach_inside_the_dwell", "A heavy load arrives 10 minutes into the lease, inside the 30 minute dwell after the start write, under an 11 kW import ceiling: the forced reduction does not wait for the dwell, and neither the session nor the owner's import is left to the restore.",
+           house=P.Series([(0, 800), (900, 4800), (7200, 800)]), import_ceiling_w=11000.0),
+    X_saw("dongle", "reduce", "import_ceiling"), X_lease_ended("target_reached"), X_leases_count(1), X_reached(),
+    covers=("REQ-B21", "REQ-C10", "REQ-D2"))
+add(gentle("g35_power_ceiling_lowered", "The owner lowers the Power Ceiling to 4000 W mid-lease (the setpoint in force is 6300 W): the plan's forced reduction takes the setpoint to the new ceiling within one plan period and every later write stays under it; the shortfall that follows is reported.",
+           events=((6000.0, "power_ceiling", {"w": 4000.0}),)),
+    X_saw("ha", "reduce", "power_ceiling"), X_slot_at_most(4000, 6600), X_leases_count(1),
+    covers=("REQ-A7", "REQ-C10", "REQ-B21"))
 add(gentle("g31_two_policies", "Another controller tries to start an export while the Gentle lease owns the setpoint: refused, one writer per setting.",
            events=((6000.0, "second_start", EXPORT_PAYLOAD),)),
     X_refused("authority_busy"), X_reached(),
@@ -769,7 +1042,7 @@ add(fixed("f01_fixed_nominal", "Charge Fixed at 8 kW from 30 to 90 percent: one 
     covers=("REQ-B2", "REQ-B11", "REQ-B12"))
 add(fixed("f02_fixed_import_breach", "Charge Fixed with an 11 kW import ceiling and a 4 kW house load: import would pass it, so the session ends at once; a later start uses the headroom rate.",
           soc0_pct=30.0, owner_rate_w=8000.0, import_ceiling_w=11000.0, house=Hs((0, 800), (3600, 4000)), react_s=200.0),
-    X_lease_ended("import_ceiling"),
+    X_lease_ended("import_ceiling"), X_leases_count(2), X_nth_start_at_most(2, 6000),
     covers=("REQ-B12", "REQ-C10", "REQ-D2"))
 add(fixed("f03_fixed_unreachable", "Charge Fixed at only 2 kW from 10 to 100 percent: the start says at once that this rate cannot make the target.",
           soc0_pct=10.0, target_soc_pct=100.0, owner_rate_w=2000.0),
@@ -828,6 +1101,11 @@ add(export("e10b_reserve_above_soc", "The reserve jumps above the battery's own 
            soc0_pct=45.0, events=((900.0, "reserve", {"pct": 55.0}),), duration_s=3600.0),
     X_lease_ends_within(900.0, 300.0),
     covers=("REQ-B14", "REQ-B21"))
+add(export("e10c_reserve_rise_then_ha_outage", "The reserve rises to 64 percent, Home Assistant relays the raise-only Stop SOC and then goes down for good: the dongle alone ends the export at the raised floor, above the new reserve (its own Stop SOC is the only floor left).",
+           soc0_pct=70.0, events=((600.0, "reserve", {"pct": 64.0}), (900.0, "ha_down", {"dur": 5000.0})), house=P.Series([(0.0, 2000.0)]), lease_ceiling_w=5000.0,
+           duration_s=9000.0, export_len_s=20000.0),
+    X_lease_ended("floor_reached"), X_min_soc_at_least(64.0),
+    covers=("REQ-B14", "REQ-B21", "REQ-D4"))
 add(export("e11_hold_pressed", "The owner presses Hold during the export: Home Assistant ends the session within a plan tick and the pre-session values are restored.",
            events=((1800.0, "hold", {"dur": 1800.0}),), duration_s=5400.0),
     X_lease_ended("owner_end"), X_lease_ends_within(1800.0, 200.0),
@@ -852,6 +1130,10 @@ add(export("e14_unit_wrong_x10", "Export unit wrong by 10x with no Max Grid Expo
     covers=("REQ-B18", "REQ-D3"))
 add(export("e15_runaway_anomaly", "The 22 Sept 2026 anomaly: the battery ignores its ceiling mid-lease. The runaway guard ends the lease.",
            events=((900.0, "plant", {"ignore_ceiling_w": 8600.0}),), max_export_w=None, duration_s=3600.0),
+    X_lease_ended("runaway"), X_lease_ends_within(900.0, 200.0),
+    covers=("REQ-D3",))
+add(export("e15b_runaway_between_thresholds", "The battery ignores a 500 W ceiling and gives 2.6 kW: above the ordinary runaway bound (1250 W) and under the absolute backstop (3750 W), so only the ordinary measured-power guard can end the lease, and it does within its samples.",
+           target_export_w=500.0, house=P.Series([(0.0, 500.0)]), events=((900.0, "plant", {"ignore_ceiling_w": 2600.0}),), max_export_w=None, duration_s=3600.0),
     X_lease_ended("runaway"), X_lease_ends_within(900.0, 200.0),
     covers=("REQ-D3",))
 add(export("e16_export_time_untrusted", "The dongle's NTP time is untrusted for the first 10 minutes: no start until it is trusted.", trust=((0.0, 600.0, "ntp"),), duration_s=3600.0),
@@ -924,7 +1206,8 @@ def random_spec(seed, kind):
                       cmd_delay_s=cmd_delay, noise_w=noise, tel_gaps=gaps, seed=seed, table_charges=kind == "gentle",
                       owner_rate_w=8000.0 if kind == "charge_fixed" else None)
         skip = ()
-        return Spec(sc=sc, skip=skip)
+        # a restore into a known breach is finding F01 of the design (pinned in the scenarios, README): the sweep counts it, it does not fail on it
+        return Spec(sc=sc, skip=skip, tolerate=("restore",))
     cap = rng.uniform(25.0, 40.0)
     soc0 = rng.uniform(40.0, 90.0)
     reserve = rng.uniform(10.0, 35.0)
@@ -951,13 +1234,19 @@ def random_spec(seed, kind):
     return Spec(sc=sc)
 
 
-def sweep(K, n_per_kind, base_seed=20261126, kinds=("gentle", "charge_fixed", "export")):
-    """Run n_per_kind random specs of each kind against the kernel module K. Returns the list of (spec name, [failure texts]) that failed."""
+def sweep(K, n_per_kind, base_seed=20261126, kinds=("gentle", "charge_fixed", "export"), stats=None):
+    """Run n_per_kind random specs of each kind against the kernel module K. Returns the list of (spec name, [failure texts]) that failed.
+    `stats`, when given, is a dict that is filled with what the sweep exercised: runs, findings hit (a restore into a breach is counted, not failed)."""
     bad = []
     for kind in kinds:
         for i in range(n_per_kind):
             spec = random_spec(base_seed + i * 7919 + {"gentle": 0, "charge_fixed": 1, "export": 2}[kind] * 1000003, kind)
             run, res = run_spec(spec, K)
+            if stats is not None:
+                stats["runs"] = stats.get("runs", 0) + 1
+                for fnd in res.findings:
+                    stats.setdefault("findings", {})
+                    stats["findings"][fnd] = stats["findings"].get(fnd, 0) + 1
             if not res.ok:
                 bad.append((spec.sc.name, res.failures))
     return bad

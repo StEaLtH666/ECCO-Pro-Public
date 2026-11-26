@@ -419,6 +419,7 @@ def u_measure_and_judge(Km):
     assert (w.v_w, w.writes, w.changes, w.last_dir, w.pre_v_w, w.pre_ac_w) == (5800.0, 2, 1, -1, 6300.0, 7000.0)
     fz = Km.note_write(s, 2000.0, 5800.0, "forced", 7000.0)
     assert (fz.writes, fz.changes, fz.last_dir) == (2, 0, 0) and Km.note_write(s, 2000.0, 8000.0, "restore").phase == "ended" and Km.note_end(s).phase == "ended"
+    assert Km.note_write(replace(s, last_dir=1), 2000.0, 5800.0, "forced", 7000.0).last_dir == 1, "a forced reduction leaves the reversal memory alone (N17)"
 
 
 def u_guards(Km):
@@ -516,6 +517,20 @@ def u_plan_charge(Km):
     assert (d.reason, d.detail, d.write_w) == ("hold", "budget", None), d
     d = Km.plan_gentle(cin(Km, now=300.0, soc=25.0, ac=6000.0 * GAIN, inforce=6000.0), ob, lim, st0)
     assert d.unreachable and d.write_w is None, "a pre-session rate that is too low cannot be raised by a lease: the plan says so"
+    prog = Km.charge_progress(run_in(2200.0, 30.0), ob, lim, act)
+    assert prog["cands"][-1] == prog["ceiling_ac"] == 8980.0 and prog["cands"][-2] == 8900.0, "the exact ceiling is a feasibility candidate (N06)"
+    ob95 = cobj(Km, target=95.0)
+    d = Km.plan_gentle(run_in(1000.0, 90.0), ob95, lim, act)
+    assert (d.reason, d.detail) == ("hold", "past_knee"), "at the knee nothing is lowered: a change there could only slow the charge (N07)"
+    assert Km.charge_progress(run_in(7000.0, 89.0), ob95, lim, act)["past"] is True and Km.charge_progress(run_in(7000.0, 88.0), ob95, lim, act)["past"] is False, \
+        "the knee test adds half the reading's resolution and its noise (N12)"
+    st13 = replace(act, v_w=4900.0, last_write_s=0.0, writes=2, changes=1)
+    in13 = cin(Km, now=9000.0, soc=30.0, house=4000.0, ac=4900.0 * GAIN, inforce=4900.0)
+    lim13 = Km.Limits(import_ceiling_w=11000.0)
+    p13 = Km.charge_progress(in13, ob, lim13, st13)
+    assert p13["ceiling_name"] == "import" and p13["ceiling_sp"] == 5000.0
+    d = Km.plan_gentle(in13, ob, lim13, st13)
+    assert d.write_w is None or d.write_w <= 5000.0, "a raise never goes above what the import ceiling leaves (N13)"
     for why in ("dwell", "budget", "deadband", "reversal", "no_change_needed"):
         h = Km._hold(act, run_in(2000.0, 30.0), why, 6300.0, 6700.0)
         assert (h.reason, h.detail) == ("hold", why) and "?" not in h.explanation, why
@@ -574,6 +589,10 @@ def u_export(Km):
     assert (d.reason, d.detail, d.end) == ("stop", "reserve_rose", True), d
     d = Km.plan_export(inputs(Km, 600.0, fr(soc=21.3, grid=-1900.0, inv=2900.0)), eo, lim, run)
     assert (d.reason, d.detail, d.end) == ("stop", "floor_reached", True) and Km.plan_export(inputs(Km, 600.0, fr(soc=21.4, grid=-1900.0, inv=2900.0)), eo, lim, run).reason == "hold"
+    d = Km.plan_export(inputs(Km, 600.0, fr(soc=21.0, grid=-1900.0, inv=2900.0), reserve_pct=60.0), eo, lim, run)
+    assert (d.reason, d.detail, d.end) == ("stop", "reserve_rose", True), "the latched Stop SOC trips first but the reserve rose above it: say so (N02)"
+    d = Km.plan_export(inputs(Km, 600.0, fr(soc=50.0, grid=3000.0, inv=2900.0), reserve_pct=40.0), eo, lim, run)
+    assert d.detail == "infeasible_high" and d.stop_soc_pct is not None and d.stop_soc_pct > 40.0, "a reserve rise is relayed while the target is infeasible too (N03)"
     d = Km.plan_export(inputs(Km, 600.0, fr(pv=3500.0, grid=-1900.0, inv=2900.0)), eo, lim, run)
     assert (d.reason, d.detail) == ("unreachable", "infeasible_low") and d.write_w is None
     assert Km.export_required_w(fr(grid=1000.0, pv=200.0), 2000.0) == 2800.0 and Km.export_required_w(replace(fr(), pv_w=None), 2000.0) is None
@@ -782,6 +801,11 @@ check("the dead-dongle export is a DOCUMENTED gap that fails exactly its reserve
 check("determinism: running a scenario twice gives the same rows and writes",
       B.run_scenario(S.SPEC_BY_NAME["g03_heavy_load_import_ceiling"].sc, K).rows == RUNS["g03_heavy_load_import_ceiling"][0].rows
       and B.run_scenario(S.SPEC_BY_NAME["e02_house_step_up"].sc, K).writes == RUNS["e02_house_step_up"][0].writes)
+check("the failing (scenario, invariant) pairs of the catalogue equal the pinned set exactly (documented gaps and pinned findings): a fix flips its pin red, a new failure fails",
+      S.failing_pairs([r for _run, r in RUNS.values()]) == S.pinned_pairs(S.SPECS), str(sorted(S.failing_pairs([r for _run, r in RUNS.values()]) ^ S.pinned_pairs(S.SPECS))))
+FINDINGS = [(sp.sc.name, f) for sp in S.SPECS for f in sp.known_finding]
+check("every pinned finding names its invariant, an id and a one-line reason", bool(FINDINGS) and all(len(f) == 3 and f[0] in S.INVARIANTS and f[1] and f[2] and "\n" not in f[2] for _n, f in FINDINGS))
+check("the catalogue pins finding F01 (a restore into a breach) on at least two scenarios", sum(1 for _n, f in FINDINGS if f[1] == "F01") >= 2)
 req_text = read("docs/dev/dynamic-energy-control/REQUIREMENTS.md")
 req_ids = set(re.findall(r"\| (REQ-[A-D]\d+) \|", req_text))
 used = {rid for s in S.SPECS for rid in s.covers}
@@ -795,6 +819,72 @@ for s in S.SPECS:
 check("the 'Covered by' column of REQUIREMENTS.md names every scenario that claims the requirement", not missing, str(missing[:3]))
 stale = [rid for rid, row in rows.items() if "sim:" in row and rid not in used]
 check("no requirement row points at the simulator without a scenario claiming it", not stale, str(stale[:3]))
+
+# ===========================================================================
+print("")
+print("[5b] the invariants themselves, judged on hand-made runs: each must be able to fail, and to pass")
+# ===========================================================================
+def mkrow(t, grid=0.0, house=800.0, ac_in=0.0, lease=0, slot_w=8000.0, fp_w=0.0, dump_w=0.0, batt=0.0, mode="slot_charge", ceil=11000.0, soc=50.0):
+    return B.Row(t, soc, round(soc), batt, grid, house, 0.0, -ac_in, mode, slot_w, dump_w, fp_w, lease, 0.0, ac_in, 20.0, ceil, True, True)
+
+
+def mkrun(sc, rows, leases=(), writes=(), recs=()):
+    return types.SimpleNamespace(sc=sc, rows=list(rows), leases=list(leases), writes=list(writes), recs=list(recs), alerts=[], refusals=[], first_unreachable_t=None)
+
+
+def breach_rows(t0, n, lease=0, ceil=11000.0, grid=12000.0, house=2000.0, ac_in=10000.0, slot_w=8000.0):
+    return [mkrow(t0 + i * 15.0, grid=grid, house=house, ac_in=ac_in, lease=lease, ceil=ceil, slot_w=slot_w) for i in range(n)]
+
+
+def quiet_rows(t0, n, lease=0, ceil=11000.0, slot_w=8000.0):
+    return [mkrow(t0 + i * 15.0, grid=3000.0, house=2000.0, ac_in=1000.0, lease=lease, ceil=ceil, slot_w=slot_w) for i in range(n)]
+
+
+quiet_sc = replace(S.SPEC_BY_NAME["g03_heavy_load_import_ceiling"].sc, house=P.Series([(0.0, 2000.0)]), react_s=120.0, plan_s=300.0, cmd_delay_s=0.0, tel_gaps=())
+L1 = dict(id=1, kind="gentle", owner="gentle", start_t=600.0, end_t=3000.0, reason="deadline", soc_start=30.0, soc_end=60.0, writes=1, changes=0, fault=False, planned_end=3000.0)
+cls = lambda run: sorted({k for k, _t in S.import_analysis(run)["violations"]})
+r_ok = mkrun(quiet_sc, quiet_rows(15, 39) + breach_rows(600, 2, lease=1) + quiet_rows(630, 10, lease=1) + quiet_rows(3000, 5), [L1])
+check("IMPORT_CEILING (crafted): a breach the dongle's guard clears in two ticks is fine", S.inv_import_ceiling(r_ok)[0] is True, S.inv_import_ceiling(r_ok)[1])
+r_react = mkrun(quiet_sc, breach_rows(15, 30) + quiet_rows(465, 10), [])
+check("IMPORT_CEILING (crafted): a breach before any session that outlasts the declared reaction fails (class react)", cls(r_react) == ["react"], str(cls(r_react)))
+r_guard = mkrun(quiet_sc, quiet_rows(15, 39) + breach_rows(600, 8, lease=1) + quiet_rows(720, 5, lease=1), [L1])
+check("IMPORT_CEILING (crafted): a breach that outlasts the dongle's guard with a session open fails (class guard)", cls(r_guard) == ["guard"], str(cls(r_guard)))
+r_gap = mkrun(replace(quiet_sc, tel_gaps=((600.0, 675.0),)), quiet_rows(15, 39) + breach_rows(600, 8, lease=1) + quiet_rows(720, 5, lease=1), [L1])
+check("IMPORT_CEILING (crafted): the same breach is forgiven exactly as long as the telemetry gap that blinds the guard", cls(r_gap) == [], str(cls(r_gap)))
+r_rest = mkrun(quiet_sc, quiet_rows(15, 39) + quiet_rows(600, 10, lease=1) + breach_rows(3000, 4), [dict(L1, end_t=2985.0)])
+check("IMPORT_CEILING (crafted): a breach that starts right after the last END is the restore's and fails (class restore)", cls(r_rest) == ["restore"], str(cls(r_rest)))
+r_late = mkrun(quiet_sc, quiet_rows(15, 39) + quiet_rows(600, 10, lease=1) + quiet_rows(3000, 10) + breach_rows(3150, 4), [L1])
+check("IMPORT_CEILING (crafted): a breach that starts long after the last END is the owner's own and is not ECCO's", cls(r_late) == [] and S.import_analysis(r_late)["owner_rows"] == 4)
+many = []
+for k in range(4):
+    many += quiet_rows(15 + k * 150, 9, lease=0) + breach_rows(15 + k * 150 + 135, 1)
+check("IMPORT_CEILING (crafted): more breach episodes than the night's causes explain fail (class count)", "count" in cls(mkrun(quiet_sc, many, [])), str(cls(mkrun(quiet_sc, many, []))))
+rr = quiet_rows(15, 20, lease=1, slot_w=5000.0) + [mkrow(315.0, grid=3000.0, house=2000.0, ac_in=1000.0, lease=1, slot_w=6000.0)]
+rr += [mkrow(330.0, grid=12000.0, house=2000.0, ac_in=10000.0, lease=1, slot_w=6000.0)] + quiet_rows(345, 5, lease=1, slot_w=6000.0)
+r_raise = mkrun(quiet_sc, rr, [dict(L1, start_t=15.0, end_t=420.0)], [B.Write(315.0, "gentle", 1, "change", "slot_power_w", 6000.0, True)])
+check("IMPORT_CEILING (crafted): a breach that opens because ECCO's own change raised the charge power fails (class own_raise)", cls(r_raise) == ["own_raise"], str(cls(r_raise)))
+rh = [mkrow(15.0 * i, grid=1800.0, house=800.0, ac_in=1000.0, lease=1, slot_w=5000.0) for i in range(1, 21)] + [mkrow(315.0, grid=1800.0, house=800.0, ac_in=1000.0, lease=1, slot_w=6000.0)]
+rh += [mkrow(330.0, grid=13000.0, house=3000.0, ac_in=10000.0, lease=1, slot_w=6000.0)] + quiet_rows(345, 5, lease=1, slot_w=6000.0)
+r_house = mkrun(quiet_sc, rh, [dict(L1, start_t=15.0, end_t=420.0)], [B.Write(315.0, "gentle", 1, "change", "slot_power_w", 6000.0, True)])
+check("IMPORT_CEILING (crafted): the same raise while the house load stepped up by 2.2 kW is the house's doing, not ECCO's (no own_raise)", cls(r_house) == [], str(cls(r_house)))
+check("IMPORT_CEILING (crafted): the owner's ceiling being absent makes the invariant not apply", S.inv_import_ceiling(mkrun(quiet_sc, [mkrow(15.0, ceil=None)], []))[0] is None)
+
+ws = lambda *vals: [B.Write(15.0 * (i + 1), "export", 1, "loop", "dump_ceiling_w", v, True) for i, v in enumerate(vals)]
+exp_sc = replace(S.SPEC_BY_NAME["e01_nominal"].sc)
+check("NO_REWRITE (crafted): a write that repeats the value in force fails, a changed value passes",
+      S.inv_no_rewrite(mkrun(exp_sc, [mkrow(15.0)], writes=ws(1000.0, 1000.0)))[0] is False and S.inv_no_rewrite(mkrun(exp_sc, [mkrow(15.0)], writes=ws(1000.0, 1100.0)))[0] is True)
+mkrec = lambda age, detail="behind_plan", write=6000.0, who="ha": B.Rec(900.0, who, "gentle", "increase", detail, write, write, False, False, "x", age, None)
+check("NO_STALE_DRIVE (crafted): a plan-driven change on a 60 s old frame fails, on a 40 s old frame and a safety reduction on an old frame pass",
+      S.inv_no_stale_drive(mkrun(exp_sc, [mkrow(15.0)], recs=[mkrec(60.0)]))[0] is False and S.inv_no_stale_drive(mkrun(exp_sc, [mkrow(15.0)], recs=[mkrec(40.0)]))[0] is True
+      and S.inv_no_stale_drive(mkrun(exp_sc, [mkrow(15.0)], recs=[mkrec(80.0, detail="import_ceiling")]))[0] is True)
+exp_rows = lambda n, batt: [mkrow(15.0 * i, lease=1, dump_w=500.0, batt=batt, mode="export") for i in range(1, n + 1)]
+check("COMMAND_FOLLOWED (crafted): 2.6 kW against a 500 W command for 150 s fails, for 45 s passes, the command itself passes",
+      S.inv_command_followed(mkrun(exp_sc, exp_rows(10, 2600.0)))[0] is False and S.inv_command_followed(mkrun(exp_sc, exp_rows(3, 2600.0) + exp_rows(8, 600.0)))[0] is True
+      and S.inv_command_followed(mkrun(exp_sc, exp_rows(10, 600.0)))[0] is True)
+pc_sc = replace(S.SPEC_BY_NAME["g35_power_ceiling_lowered"].sc, events=((300.0, "power_ceiling", {"w": 4000.0}),))
+pc_rows = lambda n: [mkrow(15.0 * i, lease=1, slot_w=5000.0) for i in range(1, n + 1)]
+check("POWER_CEILING (crafted): a setpoint left above a lowered Power Ceiling for longer than a plan period fails (the state, not only the writes)",
+      S.inv_power_ceiling(mkrun(pc_sc, pc_rows(60)))[0] is False and S.inv_power_ceiling(mkrun(pc_sc, pc_rows(5)))[0] is True)
 
 # ===========================================================================
 print("")
@@ -864,9 +954,17 @@ print("[7] property sweep (seeded)")
 # ===========================================================================
 SWEEP_N = 700
 t1 = time.time()
-bad = S.sweep(K, SWEEP_N)
+sweep_stats = {}
+bad = S.sweep(K, SWEEP_N, stats=sweep_stats)
 check(f"{3 * SWEEP_N} seeded random plants and inputs (gentle, charge fixed, export): every applicable invariant holds ({time.time() - t1:.0f} s)", not bad,
       "; ".join("%s %s" % (n, f[0][:80]) for n, f in bad[:3]))
+F01_HITS = sweep_stats.get("findings", {}).get(("IMPORT_CEILING", "F01-restore (tolerated in the sweep)"), 0)
+check(f"finding F01 is alive in the sweep: {F01_HITS} of the {3 * SWEEP_N} runs end with a restore into a breach (counted, not failed; pinned at 1 or more, so the day the design is fixed this "
+      f"check goes red and the tolerance in scenarios.random_spec must be removed)", F01_HITS >= 1)
+t1 = time.time()
+bad2 = S.sweep(K, 400, base_seed=777001)
+check(f"a second seeded sweep from another base seed (777001, the review's), {3 * 400} runs: every applicable invariant holds ({time.time() - t1:.0f} s)", not bad2,
+      "; ".join("%s %s" % (n, f[0][:80]) for n, f in bad2[:3]))
 
 # ===========================================================================
 print("")
@@ -946,6 +1044,33 @@ MUTANTS = [
     ("N08 the target guard never trips once its margin has passed", "    if until <= 0:\n        return inp.frame.soc_pct < obj.target_soc_pct\n", "    if until <= 0:\n        return False\n"),
     ("N09 the target guard margin is 5 minutes instead of 15", "GUARD_MARGIN_S = 900 ", "GUARD_MARGIN_S = 300 "),
     ("M65 forced reduction taken from the planning peak", "write, _why = ramp_charge(st, inp.now_s, want, lim.power_ceiling_w, forced=True)\n    if write is None:\n        return make(\"stop\", \"write_budget\", end=True)", "write, _why = ramp_charge(st, inp.now_s, want, lim.power_ceiling_w, forced=False)\n    if write is None:\n        return make(\"stop\", \"write_budget\", end=True)"),
+    # ---- the independent review's mutants (labels BI.. and N.. are the reviewer's), each of which survived the first version ----
+    ('BI03 Gentle dongle guard ignores the import ceiling', '        "ceiling": active and lim.import_ceiling_w is not None and import_w is not None and import_w > lim.import_ceiling_w,\n', '        "ceiling": False,\n'),
+    ('BI04 Gentle ignores a lowered power ceiling (caps only at the pre-session value)', (('    cap_w = min(ceiling_w, st.original_w if st.original_w is not None else ceiling_w)\n', '    cap_w = st.original_w if st.original_w is not None else ceiling_w\n'), ('    ceiling_sp = lim.power_ceiling_w\n', '    ceiling_sp = CHARGE_MAX_W\n')), None),
+    ('BI06a export loop re-writes the same ceiling when saturated (double write)', '    if rounded == v_w:\n        return None, label, None, st\n', ''),
+    ('BI06b Gentle hold decisions carry a write (HA re-sends ADJUST on every hold)', '    return make("hold", why or "no_change_needed", wanted_w=want, v_w=v, want_w=want,', '    return make("hold", why or "no_change_needed", wanted_w=want, write_w=want, v_w=v, want_w=want,'),
+    ('BI08 a 46-90 s old frame may drive a change (the stale-hold removed)', '    if f.age_s > STALE_HOLD_S:\n', '    if False:\n'),
+    ('BI12a feasibility forgets the finish-early buffer (plans to the window end)', '    dl_min = (obj.deadline_s - inp.now_s) / 60.0\n', '    dl_min = (obj.window_end_s - inp.now_s) / 60.0\n'),
+    ("BI12b BI12a plus a spurious 'at risk' report at every start (cry wolf)", (('    dl_min = (obj.deadline_s - inp.now_s) / 60.0\n', '    dl_min = (obj.window_end_s - inp.now_s) / 60.0\n'), ('    if starting:\n        goal = max(CHARGE_MIN_W, min(need_sp, st.original_w))', '    if starting:\n        unreach = unreach or "at_risk"\n        goal = max(CHARGE_MIN_W, min(need_sp, st.original_w))')), None),
+    ('BI13 import-breach reduction has the wrong sign (raises)', '    want = _floor_step(st.v_w - excess_ac / gain, CHARGE_STEP_W)\n', '    want = _floor_step(st.v_w + excess_ac / gain, CHARGE_STEP_W)\n'),
+    ('N01 export_tick never runs the ordinary measured-power runaway guard', '    if since >= RUNAWAY_GRACE_S and frame_fresh(f, ("batt",)):\n', '    if False:\n'),
+    ('N02 reserve_rose reported as floor_reached when the latched Stop SOC trips first', '            if g.detail == "floor_reached" and st.stop_soc_pct is not None and floor > st.stop_soc_pct + EPS:\n', '            if False:\n'),
+    ('N03 a reserve rise is not relayed (RAISE_STOP) while the export is infeasible high', 'stop_soc_pct=floor if not active else raise_to, house_w=house_w(f)', 'stop_soc_pct=floor if not active else None, house_w=house_w(f)'),
+    ('N04 progress tracker keeps judging up to 95 percent (past the pessimistic knee)', 'f.soc_pct >= KNEE_PESSIMISTIC_PCT - 2.0', 'f.soc_pct >= KNEE_PESSIMISTIC_PCT + 5.0'),
+    ('N05 the 20 percent demand margin is dropped from the import headroom', '    return lim.import_ceiling_w * (1.0 - IMPORT_MARGIN_PCT / 100.0) - planning_house_w(st, inp) * (1.0 + DEMAND_MARGIN_PCT / 100.0)\n', '    return lim.import_ceiling_w * (1.0 - IMPORT_MARGIN_PCT / 100.0) - planning_house_w(st, inp)\n'),
+    ('N06 the exact ceiling is not a feasibility candidate (top candidate a step below)', '    if cands and cands[-1] < ceiling_ac - EPS:\n        cands.append(ceiling_ac)\n', ''),
+    ('N07 reductions allowed past the knee (past_knee hold removed)', '    if prog["past"]:\n        return make("hold", "past_knee", wanted_w=v, v_w=v)\n', ''),
+    ('N10 no safety start: a session never starts just to lower an import breach', '        if lim.import_ceiling_w is not None and is_fresh(f.grid_w, f.age_s, TELEMETRY_STALE_S) and f.grid_w > lim.import_ceiling_w:\n', '        if False:\n'),
+    ("N12 the knee test ignores the reading's resolution and noise", '    past = charging and knee_may_be_passed(w, obj.target_soc_pct, reading + SOC_RESOLUTION_PCT / 2.0 + SOC_NOISE_PCT)\n', '    past = charging and knee_may_be_passed(w, obj.target_soc_pct, reading)\n'),
+    ('N13 a raise ignores the import headroom ceiling (only the power ceiling caps it)', '        raise_to = min(ceiling_sp, max(need_sp, v + CHARGE_HYST_W))\n', '        raise_to = max(need_sp, v + CHARGE_HYST_W)\n'),
+    ('N14 measured solar half-credited in the export feed-forward', '    return h + target_export_w - frame.pv_w\n', '    return h + target_export_w - 0.5 * frame.pv_w\n'),
+    ("N15 the progress tracker's verdict is never used by the plan", '    w = pessimistic_world(obj.capacity_kwh, eff=EFF_PESSIMISTIC * st.eff_scale)\n    reading = inp.frame.soc_pct\n', '    w = pessimistic_world(obj.capacity_kwh, eff=EFF_PESSIMISTIC)\n    reading = inp.frame.soc_pct\n'),
+    ('N16 no smoothing: the planning house load is the latest sample only', '        hist = tuple(x for x in hist if x[0] > inp.now_s - HOUSE_PEAK_WINDOW_S) + ((inp.now_s, h),)\n', '        hist = ((inp.now_s, h),)\n'),
+    ('N17 a forced reduction clears the reversal memory', 'last_dir=direction if ordinary else st.last_dir', 'last_dir=direction if ordinary else 0'),
+    ('N19 the charge lease runs to 10 min before the slot end instead of the deadline', '        "deadline": inp.now_s >= lease_end_s(obj) - EPS,\n', '        "deadline": inp.now_s >= obj.window_end_s - END_MARGIN_S - EPS,\n'),
+    ('N20 Charge Fixed ignores the import headroom when it (re)starts', '    prog = charge_progress(inp, obj, lim, replace(st, v_w=None))\n', '    prog = charge_progress(inp, obj, replace(lim, import_ceiling_w=None), replace(st, v_w=None))\n'),
+    ('N21 export reserve floor margin computed for 0 s of reaction', '    return stop_soc_with_margin(reserve_pct, obj.stop_soc_pct, obj.lease_ceiling_w, obj.capacity_kwh)\n', '    return stop_soc_with_margin(reserve_pct, obj.stop_soc_pct, obj.lease_ceiling_w, obj.capacity_kwh, react_s=0.0)\n'),
+    ('N22 Gentle increases on a stale (46-90 s) frame AND the dongle accepts 120 s old telemetry', (('    if f.age_s > STALE_HOLD_S:\n', '    if False:\n'), ('TELEMETRY_STALE_S = 90 ', 'TELEMETRY_STALE_S = 120 ')), None),
 ]
 
 
@@ -970,20 +1095,64 @@ def load_mutant(src, name):
     return mod
 
 
-def first_scenario_failure(Km):
-    for spec in S.SPECS:
-        try:
-            run, res = S.run_spec(spec, Km)
-        except BaseException as exc:
-            return f"{spec.sc.name}: crashed {type(exc).__name__}"
-        if not res.ok:
-            return f"{spec.sc.name}: {res.failures[0][:70]}"
+def scenario_failure(Km, name, Bm=None):
+    """The first failure text of ONE scenario run with the (mutated) kernel Km and the (mutated) bench Bm; None when it passes."""
+    old = S.B
+    if Bm is not None:
+        S.B = Bm
+    try:
+        run, res = S.run_spec(S.SPEC_BY_NAME[name], Km)
+    except BaseException as exc:
+        return f"crashed {type(exc).__name__}"
+    finally:
+        S.B = old
+    return None if res.ok else res.failures[0][:70]
+
+
+def first_scenario_failure(Km, Bm=None):
+    old = S.B
+    if Bm is not None:
+        S.B = Bm
+    try:
+        for spec in S.SPECS:
+            try:
+                run, res = S.run_spec(spec, Km)
+            except BaseException as exc:
+                return f"{spec.sc.name}: crashed {type(exc).__name__}"
+            if not res.ok:
+                return f"{spec.sc.name}: {res.failures[0][:70]}"
+    finally:
+        S.B = old
     return None
 
+
+# mutants that must die in a NAMED scenario on its own: a scenario, not a unit table (the review's classes F01, F03, F04, F05)
+SCENARIO_KILLERS = {
+    "BI03": "g03_heavy_load_import_ceiling",          # the dongle's import guard is off: a breach lasts far beyond its guard reaction
+    "BI13": "g03_heavy_load_import_ceiling",          # the forced reduction raises: the lease ends in the breach and the restore leaves it
+    "M65": "g30b_breach_inside_the_dwell",            # a forced reduction waits for the dwell
+    "M66": "g34_target_guard_hands_back",             # the never-worse target guard never trips
+    "M67": "g34b_target_guard_reports_missed_target",  # the hand-back is not reported at risk
+    "N09": "g34_target_guard_hands_back",             # the guard margin is 5 minutes instead of 15
+    "BI04": "g35_power_ceiling_lowered",              # a lowered Power Ceiling is ignored
+    "BI06a": "e02b_house_step_infeasible",            # a saturated export loop writes the same ceiling again
+    "BI08": "g20b_stale_frame_while_a_raise_is_due",  # a 46-90 s old frame drives a change
+    "N22": "g20_telemetry_short_gap",                 # the same, with a wider stale bound
+    "N01": "e15b_runaway_between_thresholds",         # the ordinary measured-power guard is missing
+    "N15": "g08_efficiency_drop",                     # the progress tracker is never used
+    "N16": "g05_kettle_spikes",                       # the planning house load is the latest sample only
+    "N20": "f02_fixed_import_breach",                 # Charge Fixed restarts at the full rate into a breach
+}
+BSRC = (HERE / "bench.py").read_text(encoding="utf-8")
+BENCH_MUTANTS = [
+    ("BI26 the dongle ignores RAISE_STOP (the Stop SOC is never raised)", '            if lease.kind == "export" and cmd[1] is not None and cmd[1] > (lease.st.stop_soc_pct or 0.0):\n', "            if False:\n"),
+]
+BENCH_KILLERS = {"BI26": "e10c_reserve_rise_then_ha_outage"}
 
 check("at least 40 mutants are defined", len(MUTANTS) >= 40, str(len(MUTANTS)))
 survivors = []
 killed_by_units = 0
+labels = set()
 for name, old, new in MUTANTS:
     msrc, problem = apply_mutation(KSRC, old, new)
     if problem is not None:
@@ -998,10 +1167,40 @@ for name, old, new in MUTANTS:
     check(f"mutant {name}: killed ({why})", why is not None)
     if why is None:
         survivors.append(name)
+    mid = name.split()[0]
+    labels.add(mid)
+    if mid in SCENARIO_KILLERS:
+        sf = scenario_failure(mutant, SCENARIO_KILLERS[mid])
+        check(f"mutant {mid} dies in scenario {SCENARIO_KILLERS[mid]} on its own ({sf})", sf is not None)
 check(f"every mutant is killed ({len(MUTANTS) - len(survivors)} of {len(MUTANTS)}; {killed_by_units} by the units, the rest by the scenarios)", not survivors, str(survivors))
+check("the scenario killers name mutants that exist and scenarios that exist", set(SCENARIO_KILLERS) <= labels and all(v in S.SPEC_BY_NAME for v in SCENARIO_KILLERS.values()),
+      str(sorted(set(SCENARIO_KILLERS) - labels)))
 unmutated = load_mutant(KSRC, "kernel_unmutated")
 check("an unmutated copy of the kernel passes the units and every scenario (the mutation harness itself is sound)",
       first_unit_failure(unmutated) is None and first_scenario_failure(unmutated) is None)
+
+# ===========================================================================
+print("")
+print("[9] mutants of the bench (the dongle and Home Assistant models; each must be killed by the scenarios, there are no unit tables for them)")
+# ===========================================================================
+bsurv = []
+for name, old, new in BENCH_MUTANTS:
+    msrc, problem = apply_mutation(BSRC, old, new)
+    if problem is not None:
+        check(f"bench mutant {name}: its target text occurs exactly once", False, problem)
+        continue
+    bmut = load_mutant(msrc, "bench_mutant")
+    why = first_scenario_failure(K, bmut)
+    mid = name.split()[0]
+    check(f"bench mutant {name}: killed ({why})", why is not None)
+    if why is None:
+        bsurv.append(name)
+    if mid in BENCH_KILLERS:
+        sf = scenario_failure(K, BENCH_KILLERS[mid], bmut)
+        check(f"bench mutant {mid} dies in scenario {BENCH_KILLERS[mid]} on its own ({sf})", sf is not None)
+check(f"every bench mutant is killed ({len(BENCH_MUTANTS) - len(bsurv)} of {len(BENCH_MUTANTS)})", not bsurv, str(bsurv))
+bunmut = load_mutant(BSRC, "bench_unmutated")
+check("an unmutated copy of the bench passes every scenario (the bench mutation harness itself is sound)", first_scenario_failure(K, bunmut) is None)
 
 print("")
 print(f"  info  total {time.time() - T0:.0f} s")

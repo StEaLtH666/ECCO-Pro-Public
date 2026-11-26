@@ -34,7 +34,7 @@ KINDS_CHARGE = ("gentle", "charge_fixed")
 
 Row = namedtuple("Row", "t soc read batt grid house pv inv mode slot_w dump_w fp_w lease unserved ac_in reserve imp_ceiling time_ok grid_up")
 Write = namedtuple("Write", "t owner lease_id kind reg value ok")
-Rec = namedtuple("Rec", "t who policy reason detail wanted write end unreachable explanation")
+Rec = namedtuple("Rec", "t who policy reason detail wanted write end unreachable explanation age ctx")
 
 
 @dataclass(frozen=True)
@@ -288,8 +288,11 @@ class Bench:
             return
         self.queue.append((t + self.sc.cmd_delay_s, i, cmd))
 
-    def rec(self, t, who, policy, d):
-        self.run.recs.append(Rec(t, who, policy, d.reason, d.detail, d.wanted_w, d.write_w, d.end, d.unreachable, d.explanation))
+    def rec(self, t, who, policy, d, inp=None, ctx=None):
+        """Record a published decision. `inp` gives the age of the frame it was decided on; `ctx` (a report only) is what is needed to ask the
+        reference kernel the same question again: (what, inputs, objective, limits, state)."""
+        self.run.recs.append(Rec(t, who, policy, d.reason, d.detail, d.wanted_w, d.write_w, d.end, d.unreachable, d.explanation,
+                                 None if inp is None else inp.frame.age_s, ctx if d.unreachable else None))
         # a REPORT is any published decision that says the objective cannot be met, from Home Assistant or from the dongle's own guard
         # (the target guard's hand-back is the dongle's: its stop says 'at risk' at once, F02 of the N4 review)
         if d.unreachable and self.run.first_unreachable_t is None:
@@ -487,13 +490,13 @@ class Bench:
     def charge_tick(self, t, lease, inp):
         K = self.K
         if lease.kind == "gentle" and t - lease.plan_t > K.PLAN_MAX_AGE_S:
-            self.rec(t, "dongle", lease.kind, K.make("stop", "plan_lost", end=True, age_s=t - lease.plan_t, limit_s=K.PLAN_MAX_AGE_S))
+            self.rec(t, "dongle", lease.kind, K.make("stop", "plan_lost", end=True, age_s=t - lease.plan_t, limit_s=K.PLAN_MAX_AGE_S), inp)
             self.restore(t, lease, "plan_lost")
             return
         lim = replace(lease.lim, import_ceiling_w=self.import_ceiling_w, power_ceiling_w=self.power_ceiling_w)
         d = K.charge_guards(inp, lease.obj, lim, lease.st, lease.kind)
         if d is not None:
-            self.rec(t, "dongle", lease.kind, d)
+            self.rec(t, "dongle", lease.kind, d, inp, ("guards", inp, lease.obj, lim, lease.st, lease.kind))
             if d.end:
                 self.restore(t, lease, d.detail)
             elif d.write_w is not None and lease.pending is None:
@@ -509,20 +512,20 @@ class Bench:
             lease.st = st
             if tripped:
                 self.rec(t, "dongle", lease.kind, K.make("stop", "runaway", end=True, measured_w=K.ac_in_w(inp.frame),
-                                                         expected_w=st.v_w * st.gain, samples=K.RUNAWAY_SAMPLES))
+                                                         expected_w=st.v_w * st.gain, samples=K.RUNAWAY_SAMPLES), inp)
                 self.restore(t, lease, "runaway")
                 return
         st, verdict = K.judge_response(inp, lease.st)
         lease.st = st
         if verdict == "wrong":
-            self.rec(t, "dongle", lease.kind, K.make("stop", "response_failed", end=True))
+            self.rec(t, "dongle", lease.kind, K.make("stop", "response_failed", end=True), inp)
             self.restore(t, lease, "response_failed")
         elif verdict == "implausible":
             self.rec(t, "dongle", lease.kind, K.make("blocked", "implausible_gain", end=True, gain=st.gain, gain_min=K.GRC_GAIN_MIN * st.gain0,
-                                                     gain_max=K.GRC_GAIN_MAX * st.gain0))
+                                                     gain_max=K.GRC_GAIN_MAX * st.gain0), inp)
             self.restore(t, lease, "implausible_gain")
         elif verdict == "weak" and st.weak >= K.GRC_MAX_INEFFECTIVE:
-            self.rec(t, "dongle", lease.kind, K.make("blocked", "no_response", end=True))
+            self.rec(t, "dongle", lease.kind, K.make("blocked", "no_response", end=True), inp)
             self.restore(t, lease, "no_response")
 
     def export_tick(self, t, lease, inp):
@@ -530,14 +533,14 @@ class Bench:
         d, st = K.export_tick(inp, lease.obj, replace(lease.lim, max_export_w=self.max_export_w), lease.st)
         lease.st = st
         if d.end:
-            self.rec(t, "dongle", "export", d)
+            self.rec(t, "dongle", "export", d, inp)
             self.restore(t, lease, d.detail)
         elif d.write_w is not None:
-            self.rec(t, "dongle", "export", d)
+            self.rec(t, "dongle", "export", d, inp)
             self.do_write(t, lease, "dump_ceiling_w", d.write_w, "loop")
             lease.pending = (t, "dump_ceiling_w", d.write_w, "loop", None)
         elif d.unreachable:
-            self.rec(t, "dongle", "export", d)
+            self.rec(t, "dongle", "export", d, inp)
 
     # ------------------------------------------------------------------------------------------------------------------
     # Home Assistant
@@ -574,7 +577,7 @@ class Bench:
             # the dongle is not answering: no firmware guard can run; Home Assistant alerts the owner (the backstop that exists)
             if self.unavailable_since is None:
                 self.unavailable_since = t
-            self.rec(t, "ha", sc.kind, K.make("blocked", "dongle_unavailable"))
+            self.rec(t, "ha", sc.kind, K.make("blocked", "dongle_unavailable"), inp)
             if (lease is not None) and not self.ha_alerted and t - self.unavailable_since >= ALERT_AFTER_S:
                 self.ha_alerted = True
                 self.run.alerts.append((t, "dongle unavailable for %d s while session %d is open: no firmware guard runs" % (t - self.unavailable_since, lease.id)))
@@ -596,21 +599,22 @@ class Bench:
         sc = self.sc
         return self.ha_start_sent_t is None or t - self.ha_start_sent_t >= 2 * max(sc.plan_s, sc.cmd_delay_s + TICK)
 
-    def ha_report(self, t, name, d):
+    def ha_report(self, t, name, d, inp, ctx):
         """Report only (the plan hand-over is stopped): a decision that says the target cannot be met is published without its write or its
         end; nothing else is recorded and nothing is sent."""
         if d.unreachable:
-            self.rec(t, "ha", name, replace(d, write_w=None, end=False))
+            self.rec(t, "ha", name, replace(d, write_w=None, end=False), inp, ctx)
 
     def ha_watch(self, t, inp, obj, lim, name):
         """After a Gentle lease has ended, for any reason, the night's lease is used up (one lease a night) and the plan can no longer START,
         ADJUST or END anything; it keeps judging the rate in force and REPORTS a target that is going to be missed (kernel.plan_watch).
         Report only: this method never sends a command."""
         d = self.K.plan_watch(inp, obj, lim, self.ha_state)
+        ctx = ("watch", None, inp, obj, lim, self.ha_state)
         if d.unreachable:
-            self.rec(t, "ha", name, d)
+            self.rec(t, "ha", name, d, inp, ctx)
         elif d.reason == "stop":
-            self.rec(t, "ha", name, d)
+            self.rec(t, "ha", name, d, inp, ctx)
             self.ha_over = True          # the target is reached or the window is over: nothing more to watch tonight
 
     def ha_charge(self, t, inp, lease, plan, name, report_only=False):
@@ -623,9 +627,9 @@ class Bench:
                 return
             d = plan(inp, obj, lim, self.ha_state)
             if report_only:
-                self.ha_report(t, name, d)
+                self.ha_report(t, name, d, inp, ("plan", plan, inp, obj, lim, self.ha_state))
                 return
-            self.rec(t, "ha", name, d)
+            self.rec(t, "ha", name, d, inp, ("plan", plan, inp, obj, lim, self.ha_state))
             if d.reason == "stop":
                 self.ha_over = True      # the target is reached or the window is over: nothing more to plan tonight
                 return
@@ -640,9 +644,9 @@ class Bench:
         st = K.carry_memory(lease.st, self.ha_state)
         d = plan(inp, obj, lim, st)
         if report_only:
-            self.ha_report(t, name, d)
+            self.ha_report(t, name, d, inp, ("plan", plan, inp, obj, lim, st))
             return
-        self.rec(t, "ha", name, d)
+        self.rec(t, "ha", name, d, inp, ("plan", plan, inp, obj, lim, st))
         if d.end:
             self.send(t, ("END", d.detail))
         elif name == "gentle" and d.write_w is not None and d.detail != "import_ceiling" and t >= self.ha_inflight_until and lease.pending is None:
@@ -664,7 +668,7 @@ class Bench:
             dur = K.export_duration_s(soc, floor_pct, sc.trusted_capacity_kwh, power)
             obj = replace(probe, end_s=t + min(sc.export_len_s, max(0.0, dur - 300.0)))
             d = K.plan_export(inp, obj, lim, K.State(), authority_free=True)
-            self.rec(t, "ha", "export", d)
+            self.rec(t, "ha", "export", d, inp)
             if d.write_w is not None and d.reason in ("increase", "unreachable") and d.stop_soc_pct is not None:
                 self.ha_start_sent_t = t
                 self.run.start_cmd_t = t if self.run.start_cmd_t is None else self.run.start_cmd_t
@@ -673,7 +677,7 @@ class Bench:
         if lease.restore_owed or lease.kind != "export":
             return
         d = K.plan_export(inp, lease.obj, lim, K.carry_memory(lease.st, self.ha_state))
-        self.rec(t, "ha", "export", d)
+        self.rec(t, "ha", "export", d, inp)
         if d.end:
             self.send(t, ("END", d.detail))
         elif d.stop_soc_pct is not None:
