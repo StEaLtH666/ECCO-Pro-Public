@@ -10,6 +10,7 @@ Invariants (every run; each is True, False or None = does not apply to this kind
   POWER_CEILING          every setpoint written is inside [500 W, ceiling] and, for a lease, never above the pre-session value
   BUDGETS                dwell, change count, write count (charge) and settle, write count (export) are never exceeded
   REACHES_OR_REPORTS     the target is reached by the deadline, or 'unreachable' was reported at least 15 min before it
+  NEVER_WORSE_THAN_TODAY a night that today's fixed rate would have won (target reached 25 minutes before the window end) is not lost (Gentle)
   NO_UNTRUSTED_ACTUATION no start, change or loop write while the clock it depends on is untrusted
   ONE_WRITER             at most one lease at a time and every write belongs to the lease that is open
   EXPLAINED              every decision has a reason from the closed list, a detail from its list and a non-empty sentence
@@ -22,7 +23,7 @@ every expectation of the spec holds.
 
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import kernel as KR
 import plant as P
@@ -30,8 +31,8 @@ import bench as B
 from bench import Scenario
 
 TICK = P.DT_S
-INVARIANTS = ("RESERVE_FLOOR", "IMPORT_CEILING", "POWER_CEILING", "BUDGETS", "REACHES_OR_REPORTS", "NO_UNTRUSTED_ACTUATION", "ONE_WRITER",
-              "EXPLAINED", "RESTORED_OR_ALERTED", "PHYSICAL")
+INVARIANTS = ("RESERVE_FLOOR", "IMPORT_CEILING", "POWER_CEILING", "BUDGETS", "REACHES_OR_REPORTS", "NEVER_WORSE_THAN_TODAY", "NO_UNTRUSTED_ACTUATION",
+              "ONE_WRITER", "EXPLAINED", "RESTORED_OR_ALERTED", "PHYSICAL")
 SETPOINT_REGS = ("slot_power_w", "fp_rate_w", "dump_ceiling_w")
 REPORT_LEAD_S = 900.0     # an unreachable target must be reported at least this long before the deadline
 TARGET_TOL = 0.5          # the reading is whole percent: a true SOC within half a point of the target reads as the target
@@ -206,6 +207,23 @@ def inv_reaches_or_reports(run):
     return False, "SOC %.1f at the deadline (target %.0f) and no timely report (first report %s)" % (r.soc, sc.target_soc_pct, t)
 
 
+def inv_never_worse(run):
+    """REQ-A12: the same night without ECCO (today's fixed rate in force all night) is run beside it; whenever that reaches the target at
+    least END_MARGIN_S + GUARD_MARGIN_S before the window end, the Gentle night must reach it by the window end."""
+    sc = run.sc
+    if sc.kind != "gentle":
+        return None, "n/a (not a Gentle night)"
+    base = getattr(run, "baseline", None)
+    if base is None:
+        return None, "no baseline run"
+    we = sc.window[1]
+    today = max(x.read for x in base.rows if x.t <= we - KR.END_MARGIN_S - KR.GUARD_MARGIN_S) >= sc.target_soc_pct - 1e-9
+    ours = max(x.read for x in run.rows if x.t <= we) >= sc.target_soc_pct - 1e-9
+    if not today:
+        return True, "today's rate would not have made it either (nothing to compare)"
+    return ours, "today's rate reaches the target in good time and so does the session" if ours else "today's rate would have reached the target and the session did not"
+
+
 def inv_no_untrusted(run):
     bad = []
     for w in run.writes:
@@ -270,7 +288,7 @@ def inv_physical(run):
 
 
 CHECKS = {"RESERVE_FLOOR": inv_reserve_floor, "IMPORT_CEILING": inv_import_ceiling, "POWER_CEILING": inv_power_ceiling, "BUDGETS": inv_budgets,
-          "REACHES_OR_REPORTS": inv_reaches_or_reports, "NO_UNTRUSTED_ACTUATION": inv_no_untrusted, "ONE_WRITER": inv_one_writer,
+          "REACHES_OR_REPORTS": inv_reaches_or_reports, "NEVER_WORSE_THAN_TODAY": inv_never_worse, "NO_UNTRUSTED_ACTUATION": inv_no_untrusted, "ONE_WRITER": inv_one_writer,
           "EXPLAINED": inv_explained, "RESTORED_OR_ALERTED": inv_restored_or_alerted, "PHYSICAL": inv_physical}
 
 
@@ -349,6 +367,9 @@ def evaluate(spec, run):
 
 def run_spec(spec, K):
     run = B.run_scenario(spec.sc, K)
+    if spec.sc.kind == "gentle":
+        # the same night with no ECCO at all: Home Assistant never plans, so today's fixed rate stays in force
+        run.baseline = B.run_scenario(replace(spec.sc, events=spec.sc.events + ((0.0, "plan_stop", {}),)), K)
     return run, evaluate(spec, run)
 
 
@@ -593,7 +614,7 @@ add(gentle("g09_efficiency_gain", "Efficiency better than assumed (0.97) and a s
            plant=P.PlantParams(charge_eff=0.97, capacity_kwh=30.0)),
     X_reached(), X_saw("ha", "reduce", "ahead_of_plan"),
     covers=("REQ-A5", "REQ-A10"))
-add(gentle("g10_taper_cliff_98", "Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the pessimistic knee at 90 plans for it.",
+add(gentle("g10_taper_cliff_98", "Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) says 'at risk' where the real knee (98) lets the night reach, so the plan is conservative and never optimistic.",
            soc0_pct=40.0, target_soc_pct=100.0, slot_target_pct=100.0),
     X_reached(), X_min_decisions(10),
     covers=("REQ-A7", "REQ-A12", "REQ-B6"))

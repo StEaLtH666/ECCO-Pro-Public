@@ -9,6 +9,11 @@ UNMEASURED (no data either way: the default is a documented choice and the flag 
 (the charge response below the top rate, the taper at gentle rates, the off-grid effect of a lowered slot power, the unit of the
 setpoint) the behaviour is a PARAMETER, so a scenario can run every alternative the control-authority study lists.
 
+What is NOT in this file, and where it is: command delay and loss, telemetry staleness and gaps, a dongle restart or a dead dongle, a Home
+Assistant outage, the untrusted-clock state and the one-owner arbiter are properties of the channels and of the two controllers' hosts, so
+they live in bench.py (which owns the clocks and the queues and takes the kernel as a module); the plant only keeps what the world does to
+the battery: the registers, the physics, the house, the sun and the grid.
+
 The plant does NOT enforce any grid limit: the inverter did not protect the supply (12.46 kW of import was seen with nothing reducing the
 charge), so an import ceiling and a Max Grid Export are limits ECCO enforces, configured in the bench (bench.Scenario.import_ceiling_w and
 max_export_w; the import ceiling defaults to none) and judged by the invariants.

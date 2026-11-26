@@ -51,10 +51,10 @@ def main(argv):
         run, res = S.run_spec(spec, K)
         results.append((spec, run, res))
     w = max(len(r.name) for _s, _r, r in results)
-    print("%-*s  %-26s  %-22s  %6s  %8s  %s" % (w, "scenario", "outcome", "invariants", "writes", "final SOC", "reason codes (reason/detail)"))
+    print("%-*s  %-34s  %-22s  %6s  %8s  %s" % (w, "scenario", "outcome", "invariants", "writes", "final SOC", "reason codes (reason/detail)"))
     for spec, run, res in results:
         flag = "ok  " if res.ok else "FAIL"
-        print("%-*s  %-26s  %-22s  %6d  %8.1f  %s" % (w, res.name, res.outcome[:26], short_inv(res), res.writes, res.final_soc, short_codes(res)), flag)
+        print("%-*s  %-34s  %-22s  %6d  %8.1f  %s" % (w, res.name, res.outcome[:34], short_inv(res), res.writes, res.final_soc, short_codes(res)), flag)
         if res.backstop and not (verbose or not res.ok):
             print("    backstop that applies: " + res.backstop)
         if verbose or not res.ok:

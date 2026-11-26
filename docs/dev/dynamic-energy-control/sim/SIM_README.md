@@ -20,7 +20,7 @@ prove" says what that leaves open.
 | File | What it is |
 |---|---|
 | [kernel.py](kernel.py) | the shared kernel: pure functions only (freshness, time trust, the pessimistic battery world and the feasibility maths ported from the Gentle planner, the guard order, ramp limiting and hysteresis inside the real budgets, the Dump loop law, the three policies, one explanation sentence per decision) |
-| [plant.py](plant.py) | the discrete-time plant: battery, charge plateau / cliff / trickle, discharge, house, solar, grid, the unmeasured parameters as parameters; the parameter table below is generated from it |
+| [plant.py](plant.py) | the discrete-time plant: battery, charge plateau / cliff / trickle, discharge, house, solar, grid, the unmeasured parameters as parameters (the setpoint unit among them); the parameter table below is generated from it. Command delay and loss, telemetry gaps, restart, dead dongle, outage and untrusted time are in the bench, because they belong to the channels and the two hosts, not to the physics |
 | [bench.py](bench.py) | the closed-loop bench: telemetry and command channels (delay, loss, gaps, staleness), a MODEL of the dongle lease engine (one owner, snapshot, readback, 15 s guards, restore, restart, dead dongle) and of the Home Assistant planner host (plan ticks, outage) around the plant and ONE kernel module |
 | [scenarios.py](scenarios.py) | the named scenarios, the invariants, the expectations, the property-sweep generator, the generated scenario table |
 | [run_sim.py](run_sim.py) | runs every scenario and prints one table row each; exit status 1 on any failure |
@@ -189,6 +189,7 @@ Every run is judged by `scenarios.check_invariants` with the REAL kernel's const
 | POWER_CEILING | every setpoint written is inside 500 W and the ceiling and, for a lease, never above the pre-session value |
 | BUDGETS | dwell, change count, write count (charge), settle and write count (export) are never exceeded, and the dongle never has to refuse a request |
 | REACHES_OR_REPORTS | the SOC reading reached the target by the deadline, or 'unreachable' was reported at least 15 minutes before it |
+| NEVER_WORSE_THAN_TODAY | (Gentle, REQ-A12) the same night is run beside it with no ECCO at all; whenever today's fixed rate reaches the target 25 minutes before the window end, the Gentle night reaches it by the window end |
 | NO_UNTRUSTED_ACTUATION | no start, change or loop write while the clock it depends on is untrusted |
 | ONE_WRITER | at most one lease at a time and every write belongs to the lease that is open |
 | EXPLAINED | every decision has a reason from the closed list, a detail from its list and a complete sentence |
@@ -212,7 +213,7 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `g07_low_start_soc_tight` | gentle | Low starting SOC and a short window: 8 to 100 percent in four hours cannot make a 60 minute buffer; 'unreachable' is said at the first plan tick. | REQ-A9, REQ-A10, REQ-B8 |
 | `g08_efficiency_drop` | gentle | Charging efficiency falls from 0.945 to 0.70 after 30 minutes: the SOC lags the pessimistic projection, the progress tracker flags it and the rate is raised in bounded steps; any shortfall is reported. | REQ-A3, REQ-A4, REQ-A10 |
 | `g09_efficiency_gain` | gentle | Efficiency better than assumed (0.97) and a smaller battery (30 kWh): ahead of the plan, the rate is lowered. | REQ-A5, REQ-A10 |
-| `g10_taper_cliff_98` | gentle | Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the pessimistic knee at 90 plans for it. | REQ-A7, REQ-A12, REQ-B6 |
+| `g10_taper_cliff_98` | gentle | Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) says 'at risk' where the real knee (98) lets the night reach, so the plan is conservative and never optimistic. | REQ-A7, REQ-A12, REQ-B6 |
 | `g11_unit_ac_watts` | gentle | Unit alternative: the setpoint is AC grid watts (scale 1.0). The plan measures the gain; it never assumes it. | REQ-A7, REQ-B18 |
 | `g12_unit_dc_watts` | gentle | Unit alternative: the setpoint is DC battery watts (scale 1/0.945). | REQ-A7, REQ-B18 |
 | `g13_unit_wrong_x10` | gentle | Unit wrong by 10x (every setpoint above 800 W hits the AC cap): the first lowered setpoint changes nothing, the gain is implausible, the lease ends and the original rate stands. | REQ-B18, REQ-D3 |
