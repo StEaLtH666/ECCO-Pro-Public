@@ -1,0 +1,70 @@
+{
+  "_note": "Synthetic Home Assistant states for mini.catalogue.json. age_s is converted to last_updated by the test helpers. An entity that is absent here is absent from hass.states (declared-but-missing).",
+  "sensor.ecco_intel_status": {
+    "state": "OK", "age_s": 40,
+    "attributes": {
+      "contract_version": "ecco-intel-entities/1", "mode": "SHADOW", "applies_nothing": true,
+      "generated_at": "2026-11-14T11:59:20+00:00", "valid_until": "2026-11-14T12:55:00+00:00",
+      "git_sha": "0123456789abcdef0123456789abcdef01234567", "config_hash": "a1b2c3d4e5f60718",
+      "provenance_ok": true,
+      "input_ages": [ { "source": "load", "age_s": 120 }, { "source": "solar", "age_s": 340 }, { "source": "tariff", "age_s": 60 } ],
+      "decisions": { "I-D1": "RECORDED", "I-D2": "OPEN" },
+      "accuracy": { "n": 12, "coverage_7d": 0.86, "mae_7d": 0.42, "unlisted_extra": 1 },
+      "plan": { "precharge_by": "2026-11-14T23:30:00+00:00", "headroom_ceiling_pct": 90, "reserve_runout_at": null },
+      "options": [ "OK", "STALE", "PAUSED" ], "device_class": "enum", "friendly_name": "ECCO Intelligence status",
+      "future_diagnostic_x": 7
+    }
+  },
+  "sensor.ecco_intel_charge_target": {
+    "state": "80.0", "age_s": 40,
+    "attributes": {
+      "advice": { "target_soc_pct": 80.0, "window": { "start": "2026-11-14T23:30:00+00:00", "end": "2026-11-15T05:30:00+00:00", "deep": { "a": 1 } }, "shortfall_soc_pct": 0, "buffer_pct": 5 },
+      "reason_codes": [ "TARGET_FROM_DEMAND", "PV_CREDIT" ], "blockers": [], "confidence": "MEDIUM",
+      "engine_comparison": { "v1_target_soc_pct": 78, "authority": "V11" },
+      "unit_of_measurement": "%", "friendly_name": "ECCO Intelligence charge target"
+    }
+  },
+  "sensor.ecco_intel_pv_tomorrow": {
+    "state": "12.4", "age_s": 50,
+    "attributes": { "p10": 8.1, "p90": 15.2, "advice": { "p50": 12.4, "notes": "cloudy morning" }, "unit_of_measurement": "kWh" }
+  },
+  "sensor.ecco_intel_overnight_demand": {
+    "state": "6.2", "age_s": 4000,
+    "attributes": { "advice": { "expected_kwh": 6.2, "nights_used": 14 }, "unit_of_measurement": "kWh" }
+  },
+  "sensor.ecco_intel_export_event": {
+    "state": "NO_ADVICE", "age_s": 60,
+    "attributes": { "simulated": true, "blockers": [ "EXPORT_NOT_ENABLED" ] }
+  },
+  "sensor.ecco_intel_data_quality": {
+    "state": "unavailable", "age_s": 100, "attributes": { "reason_codes": [ "INPUT_MISSING" ] }
+  },
+  "sensor.ecco_intel_accuracy": {
+    "state": "unknown", "age_s": 100, "attributes": { "n": null, "coverage_7d": null }
+  },
+  "binary_sensor.ecco_intel_fresh": {
+    "state": "on", "age_s": 45,
+    "attributes": { "generated_at": "2026-11-14T11:59:20+00:00", "valid_until": "2026-11-14T12:55:00+00:00", "status": "OK" }
+  },
+  "binary_sensor.ecco_intel_watchdog_fresh": {
+    "state": "on", "age_s": 3000, "attributes": { "icon": "mdi:shield-check" }
+  },
+  "input_boolean.ecco_intel_paused": {
+    "state": "off", "age_s": 90000, "attributes": { "editable": true, "icon": "mdi:pause-circle-outline", "friendly_name": "ECCO Intelligence paused" }
+  },
+  "automation.ecco_intel_alert_self_test_failed": {
+    "state": "on", "age_s": 440000, "attributes": { "current": 0, "last_triggered": null, "mode": "single", "id": "1700000000001" }
+  },
+  "sensor.ecco_intel_predicted_morning_soc": {
+    "state": "64.0", "age_s": 40, "attributes": { "verified": false, "p10": 55.0, "p90": 71.0, "unit_of_measurement": "%" }
+  },
+  "sensor.ecco_intel_new_diagnostic": {
+    "state": "3", "age_s": 20, "attributes": { "friendly_name": "New diagnostic", "note": "added after the catalogue was written" }
+  },
+  "binary_sensor.ecco_intel_new_flag": { "state": "off", "age_s": 20, "attributes": { "friendly_name": "New flag" } },
+  "automation.ecco_intel_alert_new_example": { "state": "on", "age_s": 500000, "attributes": { "current": 0, "mode": "single" } },
+  "sensor.ecco_intel_excluded_probe": { "state": "1", "age_s": 20, "attributes": {} },
+  "sensor.other_thing": { "state": "9", "age_s": 20, "attributes": { "friendly_name": "Not an ECCO Intelligence entity" } },
+  "sensor.ecco_unrelated": { "state": "5", "age_s": 20, "attributes": {} },
+  "light.example_lamp": { "state": "on", "age_s": 20, "attributes": {} }
+}

@@ -1,0 +1,161 @@
+{
+ "automation.ecco_intel_alert_no_fresh_intelligence_result": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: no fresh Intelligence result",
+   "id": "ecco_intel_alert_watchdog_stale",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "automation.ecco_intel_alert_output_not_recognised": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: output not recognised",
+   "id": "ecco_intel_alert_contract_mismatch",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "automation.ecco_intel_alert_self_test_failed": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: self-test failed",
+   "id": "ecco_intel_alert_self_test_failed",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "binary_sensor.ecco_intel_fresh": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel fresh"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "binary_sensor.ecco_intel_watchdog_fresh": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "ECCO Intel Watchdog Fresh",
+   "icon": "mdi:timer-check-outline"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "input_boolean.ecco_intel_paused": {
+  "state": "off",
+  "attributes": {
+   "editable": false,
+   "friendly_name": "ECCO Intel Paused",
+   "icon": "mdi:pause-circle-outline"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "input_number.ecco_advisory_reserve_raise_pct": {
+  "state": "0.0",
+  "attributes": {
+   "editable": false,
+   "friendly_name": "ECCO Intel Advisory Reserve Raise",
+   "icon": "mdi:battery-arrow-up-outline",
+   "initial": null,
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1,
+   "unit_of_measurement": "%"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "sensor.ecco_intel_accuracy": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel accuracy"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_charge_target": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel charge target"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_data_quality": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel data quality"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_dump_to_grid": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel Dump to Grid estimate"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_export_event": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel export event"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_overnight_demand": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel overnight demand"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_predicted_day_load": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel predicted day load"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_predicted_morning_soc": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel predicted morning SOC"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_pv_tomorrow": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel PV tomorrow"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_status": {
+  "state": "unavailable",
+  "attributes": {
+   "friendly_name": "ECCO Intel status"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ }
+}

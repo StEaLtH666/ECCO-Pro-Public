@@ -1,0 +1,3177 @@
+{
+ "automation.noise_alpha_battery_007": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 7",
+   "id": "noise_automation_007",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_bravo_current_000": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 0",
+   "id": "noise_automation_000",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_charlie_humidity_005": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 5",
+   "id": "noise_automation_005",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_delta_power_006": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 6",
+   "id": "noise_automation_006",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_echo_humidity_003": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 3",
+   "id": "noise_automation_003",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_foxtrot_temperature_012": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 12",
+   "id": "noise_automation_012",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_golf_current_001": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 1",
+   "id": "noise_automation_001",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_hotel_battery_002": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 2",
+   "id": "noise_automation_002",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_juliet_current_008": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 8",
+   "id": "noise_automation_008",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_kilo_humidity_013": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 13",
+   "id": "noise_automation_013",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_lima_battery_014": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 14",
+   "id": "noise_automation_014",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_mike_temperature_011": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 11",
+   "id": "noise_automation_011",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_november_pressure_004": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 4",
+   "id": "noise_automation_004",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_oscar_humidity_009": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 9",
+   "id": "noise_automation_009",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "automation.noise_papa_current_010": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise automation 10",
+   "id": "noise_automation_010",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_alpha_current_026": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise alpha 26"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_alpha_pressure_010": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise alpha 10"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_bravo_current_019": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise bravo 19"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_bravo_illuminance_003": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise bravo 3"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_bravo_power_035": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise bravo 35"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_charlie_illuminance_024": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise charlie 24"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_charlie_pressure_008": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise charlie 8"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_delta_power_025": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise delta 25"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_delta_voltage_009": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise delta 9"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_echo_battery_038": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise echo 38"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_echo_power_022": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise echo 22"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_echo_temperature_006": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise echo 6"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_foxtrot_battery_031": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise foxtrot 31"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_foxtrot_signal_015": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise foxtrot 15"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_golf_energy_020": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise golf 20"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_golf_pressure_004": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise golf 4"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_golf_signal_036": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise golf 36"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_hotel_illuminance_037": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise hotel 37"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_hotel_power_005": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise hotel 5"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_hotel_signal_021": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise hotel 21"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_india_battery_002": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise india 2"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_india_battery_034": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise india 34"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_india_current_018": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise india 18"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_juliet_energy_011": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise juliet 11"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_juliet_illuminance_027": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise juliet 27"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_kilo_energy_016": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise kilo 16"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_kilo_signal_000": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise kilo 0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_kilo_signal_032": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise kilo 32"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_lima_current_001": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise lima 1"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_lima_humidity_017": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise lima 17"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_lima_illuminance_033": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise lima 33"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_mike_energy_014": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise mike 14"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_mike_signal_030": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise mike 30"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_november_current_007": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise november 7"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_november_temperature_023": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise november 23"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_november_voltage_039": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise november 39"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_oscar_humidity_028": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise oscar 28"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_oscar_pressure_012": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise oscar 12"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_papa_humidity_013": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise papa 13"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "binary_sensor.noise_papa_signal_029": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise papa 29"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_bravo_temperature_007": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 7",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 20
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_foxtrot_humidity_003": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 3",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 22
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_golf_voltage_008": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 8",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 21
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_hotel_pressure_009": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 9",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 22
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_india_current_006": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 6",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 22
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_kilo_pressure_004": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 4",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 22
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_lima_temperature_005": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 5",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 20
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_mike_energy_002": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 2",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 20
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_oscar_illuminance_000": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 0",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 21
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "climate.noise_papa_power_001": {
+  "state": "heat",
+  "attributes": {
+   "friendly_name": "Noise climate 1",
+   "hvac_modes": [
+    "off",
+    "heat"
+   ],
+   "temperature": 19
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "device_tracker.synthetic_decoy_phone": {
+  "state": "synthetic_zone",
+  "attributes": {
+   "friendly_name": "Decoy: a location",
+   "gps_accuracy": 10,
+   "latitude": 1.2345,
+   "location": "Synthetic Test Lab",
+   "longitude": 5.4321
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_alpha_illuminance_006": {
+  "state": "68.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 6",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_charlie_temperature_004": {
+  "state": "6.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 4",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_delta_pressure_005": {
+  "state": "51.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 5",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_echo_humidity_002": {
+  "state": "12.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 2",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_foxtrot_battery_011": {
+  "state": "5.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 11",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_golf_power_000": {
+  "state": "94.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 0",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_hotel_energy_001": {
+  "state": "11.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 1",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_india_power_014": {
+  "state": "0.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 14",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_juliet_voltage_007": {
+  "state": "21.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 7",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_kilo_signal_012": {
+  "state": "26.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 12",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_lima_battery_013": {
+  "state": "59.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 13",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_mike_voltage_010": {
+  "state": "92.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 10",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_november_voltage_003": {
+  "state": "65.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 3",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_oscar_power_008": {
+  "state": "14.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 8",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "input_number.noise_papa_temperature_009": {
+  "state": "35.0",
+  "attributes": {
+   "editable": true,
+   "friendly_name": "Noise number 9",
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_alpha_pressure_002": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise alpha 2"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_alpha_temperature_018": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise alpha 18"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_bravo_signal_027": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise bravo 27"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_bravo_voltage_011": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise bravo 11"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_charlie_energy_016": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise charlie 16"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_charlie_humidity_000": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise charlie 0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_delta_pressure_001": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise delta 1"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_delta_voltage_017": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise delta 17"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_echo_battery_014": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise echo 14"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_foxtrot_power_023": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise foxtrot 23"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_foxtrot_temperature_007": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise foxtrot 7"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_golf_humidity_028": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise golf 28"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_golf_temperature_012": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise golf 12"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_hotel_current_029": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise hotel 29"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_hotel_pressure_013": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise hotel 13"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_india_current_026": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise india 26"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_india_humidity_010": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise india 10"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_juliet_temperature_003": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise juliet 3"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_juliet_temperature_019": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise juliet 19"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_kilo_battery_008": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise kilo 8"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_kilo_power_024": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise kilo 24"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_lima_humidity_009": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise lima 9"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_lima_voltage_025": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise lima 25"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_mike_battery_022": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise mike 22"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_mike_current_006": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise mike 6"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_november_energy_015": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise november 15"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_oscar_illuminance_004": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise oscar 4"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_oscar_pressure_020": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise oscar 20"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_papa_humidity_021": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise papa 21"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "light.noise_papa_voltage_005": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise papa 5"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "media_player.noise_bravo_temperature_005": {
+  "state": "idle",
+  "attributes": {
+   "friendly_name": "Noise player 5"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "media_player.noise_foxtrot_illuminance_001": {
+  "state": "idle",
+  "attributes": {
+   "friendly_name": "Noise player 1"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "media_player.noise_india_battery_004": {
+  "state": "idle",
+  "attributes": {
+   "friendly_name": "Noise player 4"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "media_player.noise_kilo_power_002": {
+  "state": "idle",
+  "attributes": {
+   "friendly_name": "Noise player 2"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "media_player.noise_lima_temperature_003": {
+  "state": "idle",
+  "attributes": {
+   "friendly_name": "Noise player 3"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "media_player.noise_mike_signal_000": {
+  "state": "idle",
+  "attributes": {
+   "friendly_name": "Noise player 0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_alpha_signal_008": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 8",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_bravo_signal_001": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 1",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_charlie_current_006": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 6",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_delta_pressure_007": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 7",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_echo_energy_004": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 4",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_golf_voltage_002": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 2",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_hotel_humidity_003": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 3",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_india_current_000": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 0",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_juliet_signal_009": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 9",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "script.noise_november_illuminance_005": {
+  "state": "off",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "Noise script 5",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.ecco_intelligence_decoy": {
+  "state": "1",
+  "attributes": {
+   "friendly_name": "lookalike (synthetic): frozen V1 prototype id family"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_battery_032": {
+  "state": "59.1",
+  "attributes": {
+   "friendly_name": "Noise alpha battery 32",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_battery_048": {
+  "state": "1.8",
+  "attributes": {
+   "friendly_name": "Noise alpha battery 48",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_current_144": {
+  "state": "48.4",
+  "attributes": {
+   "friendly_name": "Noise alpha current 144",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_illuminance_016": {
+  "state": "35.6",
+  "attributes": {
+   "friendly_name": "Noise alpha illuminance 16",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_illuminance_064": {
+  "state": "86.9",
+  "attributes": {
+   "friendly_name": "Noise alpha illuminance 64",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_pressure_080": {
+  "state": "1.6",
+  "attributes": {
+   "friendly_name": "Noise alpha pressure 80",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_signal_096": {
+  "state": "52.3",
+  "attributes": {
+   "friendly_name": "Noise alpha signal 96",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_voltage_000": {
+  "state": "43.3",
+  "attributes": {
+   "friendly_name": "Noise alpha voltage 0",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_voltage_112": {
+  "state": "11.8",
+  "attributes": {
+   "friendly_name": "Noise alpha voltage 112",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_alpha_voltage_128": {
+  "state": "74.5",
+  "attributes": {
+   "friendly_name": "Noise alpha voltage 128",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_current_105": {
+  "state": "32.6",
+  "attributes": {
+   "friendly_name": "Noise bravo current 105",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_energy_041": {
+  "state": "97.8",
+  "attributes": {
+   "friendly_name": "Noise bravo energy 41",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_energy_089": {
+  "state": "26.3",
+  "attributes": {
+   "friendly_name": "Noise bravo energy 89",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_illuminance_057": {
+  "state": "66.5",
+  "attributes": {
+   "friendly_name": "Noise bravo illuminance 57",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_power_025": {
+  "state": "71.5",
+  "attributes": {
+   "friendly_name": "Noise bravo power 25",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_power_121": {
+  "state": "68.5",
+  "attributes": {
+   "friendly_name": "Noise bravo power 121",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_pressure_073": {
+  "state": "81.6",
+  "attributes": {
+   "friendly_name": "Noise bravo pressure 73",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_temperature_137": {
+  "state": "80.4",
+  "attributes": {
+   "friendly_name": "Noise bravo temperature 137",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_bravo_voltage_009": {
+  "state": "75.6",
+  "attributes": {
+   "friendly_name": "Noise bravo voltage 9",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_humidity_078": {
+  "state": "86.7",
+  "attributes": {
+   "friendly_name": "Noise charlie humidity 78",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_humidity_094": {
+  "state": "98.2",
+  "attributes": {
+   "friendly_name": "Noise charlie humidity 94",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_humidity_110": {
+  "state": "85.7",
+  "attributes": {
+   "friendly_name": "Noise charlie humidity 110",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_power_062": {
+  "state": "55.2",
+  "attributes": {
+   "friendly_name": "Noise charlie power 62",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_power_126": {
+  "state": "60.4",
+  "attributes": {
+   "friendly_name": "Noise charlie power 126",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_pressure_014": {
+  "state": "6.3",
+  "attributes": {
+   "friendly_name": "Noise charlie pressure 14",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_pressure_030": {
+  "state": "45.8",
+  "attributes": {
+   "friendly_name": "Noise charlie pressure 30",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_pressure_046": {
+  "state": "49.3",
+  "attributes": {
+   "friendly_name": "Noise charlie pressure 46",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_charlie_temperature_142": {
+  "state": "4.7",
+  "attributes": {
+   "friendly_name": "Noise charlie temperature 142",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_humidity_015": {
+  "state": "78.0",
+  "attributes": {
+   "friendly_name": "Noise delta humidity 15",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_humidity_079": {
+  "state": "53.6",
+  "attributes": {
+   "friendly_name": "Noise delta humidity 79",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_illuminance_047": {
+  "state": "34.6",
+  "attributes": {
+   "friendly_name": "Noise delta illuminance 47",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_pressure_095": {
+  "state": "18.3",
+  "attributes": {
+   "friendly_name": "Noise delta pressure 95",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_pressure_111": {
+  "state": "10.2",
+  "attributes": {
+   "friendly_name": "Noise delta pressure 111",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_signal_031": {
+  "state": "91.5",
+  "attributes": {
+   "friendly_name": "Noise delta signal 31",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_signal_063": {
+  "state": "31.3",
+  "attributes": {
+   "friendly_name": "Noise delta signal 63",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_temperature_127": {
+  "state": "61.3",
+  "attributes": {
+   "friendly_name": "Noise delta temperature 127",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_delta_voltage_143": {
+  "state": "19.6",
+  "attributes": {
+   "friendly_name": "Noise delta voltage 143",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_battery_028": {
+  "state": "18.4",
+  "attributes": {
+   "friendly_name": "Noise echo battery 28",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_current_076": {
+  "state": "80.1",
+  "attributes": {
+   "friendly_name": "Noise echo current 76",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_current_124": {
+  "state": "41.0",
+  "attributes": {
+   "friendly_name": "Noise echo current 124",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_current_140": {
+  "state": "77.3",
+  "attributes": {
+   "friendly_name": "Noise echo current 140",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_humidity_092": {
+  "state": "38.0",
+  "attributes": {
+   "friendly_name": "Noise echo humidity 92",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_humidity_108": {
+  "state": "22.3",
+  "attributes": {
+   "friendly_name": "Noise echo humidity 108",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_temperature_012": {
+  "state": "96.5",
+  "attributes": {
+   "friendly_name": "Noise echo temperature 12",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_temperature_044": {
+  "state": "69.1",
+  "attributes": {
+   "friendly_name": "Noise echo temperature 44",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_echo_temperature_060": {
+  "state": "41.4",
+  "attributes": {
+   "friendly_name": "Noise echo temperature 60",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_current_101": {
+  "state": "93.4",
+  "attributes": {
+   "friendly_name": "Noise foxtrot current 101",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_energy_149": {
+  "state": "81.1",
+  "attributes": {
+   "friendly_name": "Noise foxtrot energy 149",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_humidity_005": {
+  "state": "98.0",
+  "attributes": {
+   "friendly_name": "Noise foxtrot humidity 5",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_illuminance_069": {
+  "state": "66.4",
+  "attributes": {
+   "friendly_name": "Noise foxtrot illuminance 69",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_illuminance_085": {
+  "state": "47.1",
+  "attributes": {
+   "friendly_name": "Noise foxtrot illuminance 85",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_pressure_133": {
+  "state": "54.0",
+  "attributes": {
+   "friendly_name": "Noise foxtrot pressure 133",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_signal_021": {
+  "state": "76.3",
+  "attributes": {
+   "friendly_name": "Noise foxtrot signal 21",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_voltage_037": {
+  "state": "66.6",
+  "attributes": {
+   "friendly_name": "Noise foxtrot voltage 37",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_voltage_053": {
+  "state": "27.3",
+  "attributes": {
+   "friendly_name": "Noise foxtrot voltage 53",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_foxtrot_voltage_117": {
+  "state": "86.9",
+  "attributes": {
+   "friendly_name": "Noise foxtrot voltage 117",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_battery_010": {
+  "state": "2.2",
+  "attributes": {
+   "friendly_name": "Noise golf battery 10",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_energy_074": {
+  "state": "53.0",
+  "attributes": {
+   "friendly_name": "Noise golf energy 74",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_energy_090": {
+  "state": "54.1",
+  "attributes": {
+   "friendly_name": "Noise golf energy 90",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_illuminance_026": {
+  "state": "62.5",
+  "attributes": {
+   "friendly_name": "Noise golf illuminance 26",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_illuminance_042": {
+  "state": "43.6",
+  "attributes": {
+   "friendly_name": "Noise golf illuminance 42",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_power_058": {
+  "state": "31.9",
+  "attributes": {
+   "friendly_name": "Noise golf power 58",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_signal_122": {
+  "state": "11.5",
+  "attributes": {
+   "friendly_name": "Noise golf signal 122",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_signal_138": {
+  "state": "36.6",
+  "attributes": {
+   "friendly_name": "Noise golf signal 138",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_golf_voltage_106": {
+  "state": "51.2",
+  "attributes": {
+   "friendly_name": "Noise golf voltage 106",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_battery_059": {
+  "state": "30.3",
+  "attributes": {
+   "friendly_name": "Noise hotel battery 59",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_battery_091": {
+  "state": "10.1",
+  "attributes": {
+   "friendly_name": "Noise hotel battery 91",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_current_075": {
+  "state": "76.6",
+  "attributes": {
+   "friendly_name": "Noise hotel current 75",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_energy_043": {
+  "state": "77.6",
+  "attributes": {
+   "friendly_name": "Noise hotel energy 43",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_humidity_011": {
+  "state": "22.6",
+  "attributes": {
+   "friendly_name": "Noise hotel humidity 11",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_humidity_139": {
+  "state": "37.8",
+  "attributes": {
+   "friendly_name": "Noise hotel humidity 139",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_illuminance_107": {
+  "state": "70.8",
+  "attributes": {
+   "friendly_name": "Noise hotel illuminance 107",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_pressure_027": {
+  "state": "65.7",
+  "attributes": {
+   "friendly_name": "Noise hotel pressure 27",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_hotel_temperature_123": {
+  "state": "60.3",
+  "attributes": {
+   "friendly_name": "Noise hotel temperature 123",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_battery_104": {
+  "state": "18.8",
+  "attributes": {
+   "friendly_name": "Noise india battery 104",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_energy_008": {
+  "state": "37.8",
+  "attributes": {
+   "friendly_name": "Noise india energy 8",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_humidity_056": {
+  "state": "89.9",
+  "attributes": {
+   "friendly_name": "Noise india humidity 56",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_humidity_136": {
+  "state": "53.8",
+  "attributes": {
+   "friendly_name": "Noise india humidity 136",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_pressure_024": {
+  "state": "58.1",
+  "attributes": {
+   "friendly_name": "Noise india pressure 24",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_pressure_040": {
+  "state": "16.8",
+  "attributes": {
+   "friendly_name": "Noise india pressure 40",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_signal_088": {
+  "state": "0.1",
+  "attributes": {
+   "friendly_name": "Noise india signal 88",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_signal_120": {
+  "state": "44.7",
+  "attributes": {
+   "friendly_name": "Noise india signal 120",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_india_voltage_072": {
+  "state": "71.0",
+  "attributes": {
+   "friendly_name": "Noise india voltage 72",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_battery_097": {
+  "state": "61.8",
+  "attributes": {
+   "friendly_name": "Noise juliet battery 97",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_current_049": {
+  "state": "93.3",
+  "attributes": {
+   "friendly_name": "Noise juliet current 49",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_energy_065": {
+  "state": "9.2",
+  "attributes": {
+   "friendly_name": "Noise juliet energy 65",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_energy_129": {
+  "state": "20.8",
+  "attributes": {
+   "friendly_name": "Noise juliet energy 129",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_humidity_001": {
+  "state": "30.4",
+  "attributes": {
+   "friendly_name": "Noise juliet humidity 1",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_illuminance_113": {
+  "state": "43.3",
+  "attributes": {
+   "friendly_name": "Noise juliet illuminance 113",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_power_145": {
+  "state": "55.9",
+  "attributes": {
+   "friendly_name": "Noise juliet power 145",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_temperature_017": {
+  "state": "65.5",
+  "attributes": {
+   "friendly_name": "Noise juliet temperature 17",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_voltage_033": {
+  "state": "27.0",
+  "attributes": {
+   "friendly_name": "Noise juliet voltage 33",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_juliet_voltage_081": {
+  "state": "91.5",
+  "attributes": {
+   "friendly_name": "Noise juliet voltage 81",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_battery_118": {
+  "state": "10.2",
+  "attributes": {
+   "friendly_name": "Noise kilo battery 118",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_current_054": {
+  "state": "5.0",
+  "attributes": {
+   "friendly_name": "Noise kilo current 54",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_illuminance_038": {
+  "state": "15.9",
+  "attributes": {
+   "friendly_name": "Noise kilo illuminance 38",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_signal_070": {
+  "state": "7.7",
+  "attributes": {
+   "friendly_name": "Noise kilo signal 70",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_signal_086": {
+  "state": "75.2",
+  "attributes": {
+   "friendly_name": "Noise kilo signal 86",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_temperature_006": {
+  "state": "48.9",
+  "attributes": {
+   "friendly_name": "Noise kilo temperature 6",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_temperature_022": {
+  "state": "24.4",
+  "attributes": {
+   "friendly_name": "Noise kilo temperature 22",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_temperature_102": {
+  "state": "13.1",
+  "attributes": {
+   "friendly_name": "Noise kilo temperature 102",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_kilo_voltage_134": {
+  "state": "66.5",
+  "attributes": {
+   "friendly_name": "Noise kilo voltage 134",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_current_023": {
+  "state": "93.1",
+  "attributes": {
+   "friendly_name": "Noise lima current 23",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_current_039": {
+  "state": "29.0",
+  "attributes": {
+   "friendly_name": "Noise lima current 39",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_current_071": {
+  "state": "92.8",
+  "attributes": {
+   "friendly_name": "Noise lima current 71",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_current_087": {
+  "state": "52.7",
+  "attributes": {
+   "friendly_name": "Noise lima current 87",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_energy_055": {
+  "state": "45.7",
+  "attributes": {
+   "friendly_name": "Noise lima energy 55",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_energy_135": {
+  "state": "85.2",
+  "attributes": {
+   "friendly_name": "Noise lima energy 135",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_humidity_103": {
+  "state": "82.2",
+  "attributes": {
+   "friendly_name": "Noise lima humidity 103",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_signal_007": {
+  "state": "24.4",
+  "attributes": {
+   "friendly_name": "Noise lima signal 7",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_lima_signal_119": {
+  "state": "27.7",
+  "attributes": {
+   "friendly_name": "Noise lima signal 119",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_battery_036": {
+  "state": "89.7",
+  "attributes": {
+   "friendly_name": "Noise mike battery 36",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_current_148": {
+  "state": "76.6",
+  "attributes": {
+   "friendly_name": "Noise mike current 148",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_energy_020": {
+  "state": "42.2",
+  "attributes": {
+   "friendly_name": "Noise mike energy 20",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_energy_116": {
+  "state": "68.8",
+  "attributes": {
+   "friendly_name": "Noise mike energy 116",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_humidity_004": {
+  "state": "70.7",
+  "attributes": {
+   "friendly_name": "Noise mike humidity 4",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_power_068": {
+  "state": "23.9",
+  "attributes": {
+   "friendly_name": "Noise mike power 68",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_power_084": {
+  "state": "64.2",
+  "attributes": {
+   "friendly_name": "Noise mike power 84",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_power_100": {
+  "state": "8.5",
+  "attributes": {
+   "friendly_name": "Noise mike power 100",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_signal_132": {
+  "state": "31.5",
+  "attributes": {
+   "friendly_name": "Noise mike signal 132",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_mike_voltage_052": {
+  "state": "66.8",
+  "attributes": {
+   "friendly_name": "Noise mike voltage 52",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_current_013": {
+  "state": "25.5",
+  "attributes": {
+   "friendly_name": "Noise november current 13",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_current_061": {
+  "state": "44.4",
+  "attributes": {
+   "friendly_name": "Noise november current 61",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_energy_141": {
+  "state": "89.5",
+  "attributes": {
+   "friendly_name": "Noise november energy 141",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_illuminance_077": {
+  "state": "91.5",
+  "attributes": {
+   "friendly_name": "Noise november illuminance 77",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_illuminance_125": {
+  "state": "34.4",
+  "attributes": {
+   "friendly_name": "Noise november illuminance 125",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_power_045": {
+  "state": "12.5",
+  "attributes": {
+   "friendly_name": "Noise november power 45",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_power_093": {
+  "state": "27.4",
+  "attributes": {
+   "friendly_name": "Noise november power 93",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_pressure_109": {
+  "state": "57.7",
+  "attributes": {
+   "friendly_name": "Noise november pressure 109",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_november_voltage_029": {
+  "state": "3.0",
+  "attributes": {
+   "friendly_name": "Noise november voltage 29",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_battery_082": {
+  "state": "95.1",
+  "attributes": {
+   "friendly_name": "Noise oscar battery 82",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_current_130": {
+  "state": "40.0",
+  "attributes": {
+   "friendly_name": "Noise oscar current 130",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_current_146": {
+  "state": "1.1",
+  "attributes": {
+   "friendly_name": "Noise oscar current 146",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_energy_002": {
+  "state": "89.6",
+  "attributes": {
+   "friendly_name": "Noise oscar energy 2",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_humidity_098": {
+  "state": "78.6",
+  "attributes": {
+   "friendly_name": "Noise oscar humidity 98",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_illuminance_050": {
+  "state": "31.3",
+  "attributes": {
+   "friendly_name": "Noise oscar illuminance 50",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_power_066": {
+  "state": "79.6",
+  "attributes": {
+   "friendly_name": "Noise oscar power 66",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_pressure_018": {
+  "state": "49.1",
+  "attributes": {
+   "friendly_name": "Noise oscar pressure 18",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_temperature_114": {
+  "state": "4.5",
+  "attributes": {
+   "friendly_name": "Noise oscar temperature 114",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_oscar_voltage_034": {
+  "state": "3.8",
+  "attributes": {
+   "friendly_name": "Noise oscar voltage 34",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_battery_019": {
+  "state": "90.5",
+  "attributes": {
+   "friendly_name": "Noise papa battery 19",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_battery_115": {
+  "state": "57.9",
+  "attributes": {
+   "friendly_name": "Noise papa battery 115",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_energy_067": {
+  "state": "49.4",
+  "attributes": {
+   "friendly_name": "Noise papa energy 67",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_humidity_003": {
+  "state": "46.6",
+  "attributes": {
+   "friendly_name": "Noise papa humidity 3",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_humidity_035": {
+  "state": "6.4",
+  "attributes": {
+   "friendly_name": "Noise papa humidity 35",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_humidity_099": {
+  "state": "78.0",
+  "attributes": {
+   "friendly_name": "Noise papa humidity 99",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_humidity_131": {
+  "state": "93.8",
+  "attributes": {
+   "friendly_name": "Noise papa humidity 131",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_power_083": {
+  "state": "19.7",
+  "attributes": {
+   "friendly_name": "Noise papa power 83",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_temperature_147": {
+  "state": "44.1",
+  "attributes": {
+   "friendly_name": "Noise papa temperature 147",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.noise_papa_voltage_051": {
+  "state": "19.1",
+  "attributes": {
+   "friendly_name": "Noise papa voltage 51",
+   "state_class": "measurement",
+   "unit_of_measurement": "u"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_blobs": {
+  "state": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "attributes": {
+   "digest": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+   "friendly_name": "Decoy: long hex and base64 blobs",
+   "payload": "U1lOVEhFVElDLURFQ09ZLVBBWUxPQUQtMDAwOS1ub3QtYS1yZWFsLXNlY3JldC12YWx1ZS1hdC1hbGw="
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_connection": {
+  "state": "ok",
+  "attributes": {
+   "broker": "mqtt://synthetic:decoy@broker.example.invalid:1883",
+   "connection": "postgresql://synthetic:decoy@db.example.invalid:5432/synthetic",
+   "friendly_name": "Decoy: connection strings"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_credentials": {
+  "state": "ok",
+  "attributes": {
+   "api_key": "SYNTHETIC-DECOY-0003",
+   "friendly_name": "Decoy: password and api key",
+   "password": "SYNTHETIC-DECOY-0002"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_jwt": {
+  "state": "eyJhbGciOiJub25lIn0.eyJzeW50aGV0aWMiOjF9.c2lnbmF0dXJl",
+  "attributes": {
+   "friendly_name": "Decoy: a JWT-shaped state"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_keynames": {
+  "state": "ok",
+  "attributes": {
+   "eyJhbGciOiJub25lIn0.eyJzeW50aGV0aWMiOjF9.c2lnbmF0dXJl": "a value under a JWT-shaped key name",
+   "friendly_name": "Decoy: key NAMES that look secret",
+   "x-0123456789abcdef0123456789abcdef0123456789abcdef": "a value under a long hex key name"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_nested": {
+  "state": "ok",
+  "attributes": {
+   "config": {
+    "client_secret": "SYNTHETIC-DECOY-0010",
+    "nested": {
+     "session_id": "SYNTHETIC-DECOY-0011",
+     "list": [
+      {
+       "bearer": "SYNTHETIC-DECOY-0012"
+      },
+      {
+       "safe": "visible"
+      }
+     ]
+    }
+   },
+   "friendly_name": "Decoy: secrets inside nested values",
+   "headers": {
+    "Authorization": "Bearer SYNTHETIC-DECOY-0013",
+    "Cookie": "sid=SYNTHETIC-DECOY-0014"
+   },
+   "private_key_pem_note": "SYNTHETIC-DECOY-0015",
+   "refresh_token": "SYNTHETIC-DECOY-0016"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_network": {
+  "state": "203.0.113.7",
+  "attributes": {
+   "friendly_name": "Decoy: an address from a documentation range",
+   "host": "decoy-host.example.invalid",
+   "ip_address": "203.0.113.7"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_token": {
+  "state": "ok",
+  "attributes": {
+   "access_token": "SYNTHETIC-DECOY-0001-not-a-token",
+   "friendly_name": "Decoy: token attribute"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_url_token": {
+  "state": "https://decoy.example.invalid/feed?token=SYNTHETIC-DECOY-0008&format=json",
+  "attributes": {
+   "friendly_name": "Decoy: a token in a URL"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "sensor.synthetic_decoy_webhook": {
+  "state": "ok",
+  "attributes": {
+   "friendly_name": "Decoy: webhook",
+   "webhook_url": "https://hooks.example.invalid/api/webhook/SYNTHETIC-DECOY-0004"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_alpha_humidity_004": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise alpha 4"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_alpha_voltage_020": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise alpha 20"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_bravo_power_029": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise bravo 29"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_bravo_temperature_013": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise bravo 13"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_charlie_battery_002": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise charlie 2"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_charlie_battery_018": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise charlie 18"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_delta_power_003": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise delta 3"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_delta_voltage_019": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise delta 19"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_echo_battery_000": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise echo 0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_echo_temperature_016": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise echo 16"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_foxtrot_current_025": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise foxtrot 25"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_foxtrot_humidity_009": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise foxtrot 9"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_golf_pressure_014": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise golf 14"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_hotel_voltage_015": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise hotel 15"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_india_battery_012": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise india 12"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_india_signal_028": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise india 28"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_juliet_current_021": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise juliet 21"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_juliet_signal_005": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise juliet 5"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_kilo_current_026": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise kilo 26"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_kilo_voltage_010": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise kilo 10"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_lima_power_011": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise lima 11"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_lima_temperature_027": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise lima 27"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_mike_pressure_008": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise mike 8"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_mike_pressure_024": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise mike 24"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_november_power_017": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise november 17"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_november_signal_001": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise november 1"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_oscar_energy_022": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise oscar 22"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_oscar_humidity_006": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise oscar 6"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_papa_illuminance_023": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise papa 23"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "switch.noise_papa_pressure_007": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "Noise papa 7"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_alpha_energy_004": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 4",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_charlie_current_002": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 2",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_delta_voltage_003": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 3",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_echo_energy_000": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 0",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_juliet_power_005": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 5",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_november_signal_001": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 1",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_oscar_temperature_006": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 6",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ },
+ "update.noise_papa_humidity_007": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "Noise update 7",
+   "installed_version": "1.0.0",
+   "latest_version": "1.0.0"
+  },
+  "last_changed": "2030-01-15T20:59:00+00:00",
+  "last_updated": "2030-01-15T20:59:00+00:00"
+ }
+}

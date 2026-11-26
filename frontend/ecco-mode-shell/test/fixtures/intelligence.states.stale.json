@@ -1,0 +1,398 @@
+{
+ "automation.ecco_intel_alert_no_fresh_intelligence_result": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: no fresh Intelligence result",
+   "id": "ecco_intel_alert_watchdog_stale",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "automation.ecco_intel_alert_output_not_recognised": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: output not recognised",
+   "id": "ecco_intel_alert_contract_mismatch",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "automation.ecco_intel_alert_self_test_failed": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: self-test failed",
+   "id": "ecco_intel_alert_self_test_failed",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "binary_sensor.ecco_intel_fresh": {
+  "state": "off",
+  "attributes": {
+   "applies_nothing": true,
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel fresh",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "fresh",
+   "mode": "SHADOW",
+   "status": "STALE",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "binary_sensor.ecco_intel_watchdog_fresh": {
+  "state": "off",
+  "attributes": {
+   "friendly_name": "ECCO Intel Watchdog Fresh",
+   "icon": "mdi:timer-check-outline"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "input_boolean.ecco_intel_paused": {
+  "state": "off",
+  "attributes": {
+   "editable": false,
+   "friendly_name": "ECCO Intel Paused",
+   "icon": "mdi:pause-circle-outline"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "input_number.ecco_advisory_reserve_raise_pct": {
+  "state": "0.0",
+  "attributes": {
+   "editable": false,
+   "friendly_name": "ECCO Intel Advisory Reserve Raise",
+   "icon": "mdi:battery-arrow-up-outline",
+   "initial": null,
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1,
+   "unit_of_measurement": "%"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "sensor.ecco_intel_accuracy": {
+  "state": "unknown",
+  "attributes": {
+   "applies_nothing": true,
+   "contract_version": "ecco-intel-entities/1",
+   "coverage_7d": null,
+   "friendly_name": "ECCO Intel accuracy",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "accuracy",
+   "mode": "SHADOW",
+   "n": null,
+   "reason_codes": [],
+   "status": "STALE",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh"
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_charge_target": {
+  "state": "unknown",
+  "attributes": {
+   "advice": {
+    "status": "WITHHELD",
+    "blocker_codes": []
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": null,
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": null,
+   "friendly_name": "ECCO Intel charge target",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "charge_target",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "WITHHELD",
+   "unit": "%",
+   "unit_of_measurement": "%",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_data_quality": {
+  "state": "unknown",
+  "attributes": {
+   "applies_nothing": true,
+   "contract_version": "ecco-intel-entities/1",
+   "coverage_7d": null,
+   "device_class": "enum",
+   "friendly_name": "ECCO Intel data quality",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "data_quality",
+   "mode": "SHADOW",
+   "n": null,
+   "options": [
+    "OK",
+    "DEGRADED",
+    "BLOCKED",
+    "UNKNOWN"
+   ],
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "STALE",
+   "unit": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_dump_to_grid": {
+  "state": "unknown",
+  "attributes": {
+   "advice": {
+    "status": "WITHHELD",
+    "blocker_codes": []
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": null,
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": null,
+   "friendly_name": "ECCO Intel Dump to Grid estimate",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "dump_to_grid",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "WITHHELD",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_export_event": {
+  "state": "unknown",
+  "attributes": {
+   "advice": {
+    "status": "WITHHELD",
+    "blocker_codes": []
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": null,
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": null,
+   "friendly_name": "ECCO Intel export event",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "export_event",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "WITHHELD",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_overnight_demand": {
+  "state": "unknown",
+  "attributes": {
+   "advice": {
+    "status": "WITHHELD",
+    "blocker_codes": []
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": null,
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": null,
+   "friendly_name": "ECCO Intel overnight demand",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "overnight_demand",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "WITHHELD",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_predicted_day_load": {
+  "state": "unknown",
+  "attributes": {
+   "advice": {
+    "status": "WITHHELD",
+    "blocker_codes": []
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": null,
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel predicted day load",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "predicted_day_load",
+   "mode": "SHADOW",
+   "p10": null,
+   "p90": null,
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "WITHHELD",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_predicted_morning_soc": {
+  "state": "unknown",
+  "attributes": {
+   "advice": {
+    "status": "WITHHELD",
+    "blocker_codes": []
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": null,
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel predicted morning SOC",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "predicted_morning_soc",
+   "mode": "SHADOW",
+   "p10": null,
+   "p90": null,
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "WITHHELD",
+   "unit": "%",
+   "unit_of_measurement": "%",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_pv_tomorrow": {
+  "state": "unknown",
+  "attributes": {
+   "advice": {
+    "status": "WITHHELD",
+    "blocker_codes": []
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": null,
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel PV tomorrow",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "kind": "pv_tomorrow",
+   "mode": "SHADOW",
+   "p10": null,
+   "p90": null,
+   "reason_codes": [
+    "STALE"
+   ],
+   "status": "WITHHELD",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ },
+ "sensor.ecco_intel_status": {
+  "state": "STALE",
+  "attributes": {
+   "accuracy": null,
+   "applies_nothing": true,
+   "blockers": [
+    {
+     "code": "STALE",
+     "text": "the last result is older than its validity; nothing is shown until a fresh cycle"
+    }
+   ],
+   "calibration": null,
+   "config_hash": "fixture00000hash",
+   "contract_version": "ecco-intel-entities/1",
+   "data_quality": "UNKNOWN",
+   "decisions": {
+    "I-D1": "RECORDED",
+    "I-D2": "RECORDED",
+    "I-D3": "RECORDED",
+    "I-D4": "RECORDED",
+    "I-D5": "RECORDED",
+    "I-D6": "RECORDED",
+    "I-D7": "OPEN",
+    "I-D8": "RECORDED",
+    "I-D9": "RECORDED"
+   },
+   "device_class": "enum",
+   "drift": null,
+   "engine_version": "intel-v1.1.0-foundation-shadow",
+   "friendly_name": "ECCO Intel status",
+   "generated_at": "2030-01-15T23:00:00+00:00",
+   "git_sha": "0000000",
+   "input_ages": [],
+   "integration_version": "0.1.0-fixture",
+   "kind": "status",
+   "last_good": {
+    "generated_at": "2030-01-15T21:00:00+00:00",
+    "values": {
+     "charge_target": 80.0,
+     "overnight_demand": 6.4,
+     "predicted_day_load": 14.2,
+     "predicted_morning_soc": 72.0,
+     "pv_tomorrow": 9.8
+    }
+   },
+   "mode": "SHADOW",
+   "next_run_at": "2030-01-15T21:15:00+00:00",
+   "options": [
+    "PAUSED",
+    "SELF_TEST_FAILED",
+    "STALE",
+    "STARTING",
+    "BLOCKED",
+    "INSUFFICIENT_DATA",
+    "NO_ADVICE",
+    "OK"
+   ],
+   "pause_control": "OFF",
+   "plan": null,
+   "provenance_ok": true,
+   "reason_codes": [
+    "STALE"
+   ],
+   "self_test": null,
+   "status": "STALE",
+   "tariff": null,
+   "valid_until": null,
+   "value": null
+  },
+  "last_changed": "2030-01-15T23:00:00+00:00",
+  "last_updated": "2030-01-15T23:00:00+00:00"
+ }
+}
