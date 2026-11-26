@@ -1480,7 +1480,7 @@ TTR1 = Entry(
     },
     added_files=_ttr1.ADDED_FILES,
     # _pex.fingerprint(TTR1): hashes its parent bpd1's fingerprint and every declaration above
-    fingerprint="abf69f320f127c5a966d462cb50a345623fe4a4b651b1d71173b2b85afef53b1",
+    fingerprint="7c26168c2a276b184c6cfa2eee659702ad80b02d8a13fbb620df1195c595250e",
     note="the time trust inputs (read only): a trust state for each of three clocks (Home Assistant, the dongle's NTP time, the inverter's), the worst of the three and three yes/no consumers, as template "
          "entities that read eight entities the dongle already publishes and write nothing; an input that is missing, unavailable, unknown or not a finite number is never TRUSTED; nothing is wired to a "
          "gate yet; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
