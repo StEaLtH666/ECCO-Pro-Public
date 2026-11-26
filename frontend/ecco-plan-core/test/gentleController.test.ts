@@ -9,8 +9,11 @@ import {
 import type { GentleInput, GentleDecision, GentleParams, GentlePolicy, NamedCeiling, ChargeModel, HouseholdInput, StepPoint } from "../src/gentleController.ts";
 import type { ClockDay } from "../src/time.ts";
 import { norm } from "../src/time.ts";
+import * as G4 from "../src/gentleController.ts";   // v3: new helpers are reached through the namespace
+import * as TIME from "../src/time.ts";
 import { rng } from "./fixtures.ts";
-import { makeScenario, runClosedLoop, runStatic, feasibility, wallAt, trueFinishMin, readTolerance, makeHouseholdScenario, runHouseholdLoop, runStaticHH, feasibilityHH, v1Fingerprint, pickV1 } from "./support/batterySim.ts";
+import { makeScenario, runClosedLoop, runStatic, feasibility, wallAt, trueFinishMin, readTolerance, makeHouseholdScenario, runHouseholdLoop, runStaticHH, feasibilityHH, v1Fingerprint, pickV1, acceptW, trueFraction } from "./support/batterySim.ts";
+import type { TrueTaper } from "./support/batterySim.ts";
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // A fixed example: 22:00 to 04:00 (360 min), 60 min buffer (deadline at minute 300), 30 kWh nominal (+6 % band), 20 % -> 80 %.
@@ -694,9 +697,20 @@ test("closed loop: a battery already at or above the target is left alone for th
 // Computed ONCE from the v1 module (commit a0d34b8) by v1Fingerprint: 400 seeded closed-loop runs and 4000 random inputs, v1 fields only.
 const GOLDEN_V1_DIGEST = "0449cbd371baaf7748fad96ef6391ebb9aeaf70436e82a8d69e66c29a15827e0";
 const hbase: GentleInput = { ...base, bufferMin: GENTLE_DEFAULT_BUFFER_MIN };
-const hplan = (h: HouseholdInput | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: h, ...over });
+// v3 G4: a forecast counts only with a fresh age. The old checks were written before forecasts had an age, so this helper gives a profile that has no
+// age one of 0 minutes (fresh); the checks of the age rule itself call planGentle directly.
+const withAges = (h: HouseholdInput | undefined): HouseholdInput | undefined => {
+  if (h === undefined || h === null || typeof h !== "object") return h;
+  const o: HouseholdInput = { ...h };
+  if (o.demandProfile && o.demandProfileAgeMin === undefined) o.demandProfileAgeMin = 0;
+  if (o.solarProfile && o.solarProfileAgeMin === undefined) o.solarProfileAgeMin = 0;
+  return o;
+};
+// v3 G5: the default setpoint basis is UNSETTLED (the caps hold under either convention, see the G5 tests). The hand-checked arithmetic of the older
+// checks is the grid-side convention, so this helper asks for it explicitly; a check that passes its own policy keeps that and still gets GRID_AC.
+const hplan = (h: HouseholdInput | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: withAges(h), ...over, policy: { setpointBasis: "GRID_AC", ...(over.policy ?? {}) } });
 const flat = (watts: number): StepPoint[] => [{ fromInMin: 0, watts }];
-const PLANNING = new Set(["OK", "TARGET_AT_RISK", "TARGET_UNREACHABLE"]);
+const PLANNING = new Set(["OK", "DEGRADED", "TARGET_AT_RISK", "TARGET_UNREACHABLE"]);   // v3 G3: DEGRADED (an assumed demand, asked for explicitly) is a planning status
 const inf = (x: number | null) => (x === null ? Infinity : x);
 
 test("v1 behaviour is BIT-IDENTICAL without household input: golden master over 400 closed-loop runs and 4000 random inputs; the new behaviours are off by default", () => {
@@ -705,7 +719,7 @@ test("v1 behaviour is BIT-IDENTICAL without household input: golden master over 
   for (const [k, v] of Object.entries(v1Defaults)) assert.equal((DEFAULT_GENTLE_PARAMS as unknown as Record<string, number>)[k], v, "v1 default " + k);
   assert.equal(DEFAULT_GENTLE_PARAMS.maxDecreaseStepW, DEFAULT_GENTLE_PARAMS.hardMaxW, "the slew is off by default (never binds)");
   assert.equal(GENTLE_RECOMMENDED_PARAMS.maxDecreaseStepW, 1000);
-  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "ASSUME_PROVISIONAL" });
+  assert.deepEqual({ ...DEFAULT_GENTLE_POLICY }, { fallbackPolicy: "KEEP_CURRENT", unknownDemandPolicy: "FALLBACK", setpointBasis: "UNSETTLED", actuatorProfile: "UNCONSTRAINED" });   // v3 G3: was ASSUME_PROVISIONAL, a guessed constant under a known limit; v3 G5: the explicit basis
   // the golden digest is sensitive: one changed v1 field changes it
   const bent = (i: GentleInput) => ({ ...planGentle(i), neededW: (planGentle(i).neededW ?? 0) + 1 });
   assert.notEqual(v1Fingerprint(bent), GOLDEN_V1_DIGEST);
@@ -758,6 +772,8 @@ test("step profiles: the value in force, the last point holds, nothing before th
   }
 });
 
+const CREDIT: Partial<GentleInput> = { params: { solarCreditPct: 100 } };
+
 test("the grid cap (hand-checked): the PEAK of demand and forecast with the margin, never the mean or the minimum; solar only fresh, bounded and confidence-scaled", () => {
   // peak of {now 600, 500, 2000, 800} = 2000; x1.2 margin = 2400; cap = 6000 - 2400 = 3600 W
   const profile: StepPoint[] = [{ fromInMin: 0, watts: 500 }, { fromInMin: 60, watts: 2000 }, { fromInMin: 120, watts: 800 }];
@@ -779,23 +795,24 @@ test("the grid cap (hand-checked): the PEAK of demand and forecast with the marg
   // the margin is configurable
   assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 600, demandAgeMin: 0, demandProfile: profile }, { params: { demandMarginPct: 0 } }).headroomCapW, 4000);
   assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 600, demandAgeMin: 0, demandProfile: profile }, { params: { demandMarginPct: 50 } }).headroomCapW, 3000);
+  // v3 G2: solar inside the hard limit is an explicit option now (solarCreditPct, 0 by default); these hand-checks keep their arithmetic by asking for 100 %.
   // solar: min(fresh reading, forecast x confidence); 2000 reading, 4000 forecast: confidence 0.4 counts 1600, 0.5 counts 2000, 1 counts only the reading 2000
   const sol = (conf: number | null, extra: Partial<HouseholdInput> = {}): HouseholdInput => ({ gridImportLimitW: 4500, demandProfile: flat(1000), solarNowW: 2000, solarAgeMin: 1, solarProfile: flat(4000), solarConfidence: conf, ...extra });
-  assert.equal(hplan({ ...sol(0.4) }).headroomCapW, 4900);
-  assert.equal(hplan({ ...sol(0.4) }).household?.solarCountedMinW, 1600);
-  assert.equal(hplan({ ...sol(0.5) }).headroomCapW, 5300);
-  assert.equal(hplan({ ...sol(1) }).headroomCapW, 5300, "bounded by the fresh reading");
-  assert.equal(hplan({ ...sol(null) }).headroomCapW, 3300, "no confidence: solar not counted");
-  assert.equal(hplan({ ...sol(0) }).headroomCapW, 3300);
-  assert.equal(hplan({ ...sol(0.5, { solarNowW: null }) }).headroomCapW, 3300, "unknown solar counts as 0");
-  assert.equal(hplan({ ...sol(0.5, { solarProfile: null }) }).headroomCapW, 3300, "no forecast bound: not counted");
-  assert.equal(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }).headroomCapW, 3300, "stale solar counts as 0");
-  assert.ok(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }).codes.includes("SOLAR_IGNORED"));
-  assert.equal(hplan({ ...sol(1.5) }).headroomCapW, 3300, "an impossible confidence is ignored, solar is not counted");
-  assert.equal(hplan({ ...sol(0.5, { solarNowW: -50 }) }).headroomCapW, 3300);
+  assert.equal(hplan({ ...sol(0.4) }, CREDIT).headroomCapW, 4900);
+  assert.equal(hplan({ ...sol(0.4) }, CREDIT).household?.solarCountedMinW, 1600);
+  assert.equal(hplan({ ...sol(0.5) }, CREDIT).headroomCapW, 5300);
+  assert.equal(hplan({ ...sol(1) }, CREDIT).headroomCapW, 5300, "bounded by the fresh reading");
+  assert.equal(hplan({ ...sol(null) }, CREDIT).headroomCapW, 3300, "no confidence: solar not counted");
+  assert.equal(hplan({ ...sol(0) }, CREDIT).headroomCapW, 3300);
+  assert.equal(hplan({ ...sol(0.5, { solarNowW: null }) }, CREDIT).headroomCapW, 3300, "unknown solar counts as 0");
+  assert.equal(hplan({ ...sol(0.5, { solarProfile: null }) }, CREDIT).headroomCapW, 3300, "no forecast bound: not counted");
+  assert.equal(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }, CREDIT).headroomCapW, 3300, "stale solar counts as 0");
+  assert.ok(hplan({ ...sol(0.5, { solarAgeMin: 16 }) }, CREDIT).codes.includes("SOLAR_IGNORED"));
+  assert.equal(hplan({ ...sol(1.5) }, CREDIT).headroomCapW, 3300, "an impossible confidence is ignored, solar is not counted");
+  assert.equal(hplan({ ...sol(0.5, { solarNowW: -50 }) }, CREDIT).headroomCapW, 3300);
   // the least solar over the window counts: a forecast that drops to 1000 W later
-  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 0, watts: 4000 }, { fromInMin: 120, watts: 1000 }] }) }).headroomCapW, 3800, "min over the horizon: 500 W counted -> 4500 - 1200 + 500");
-  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 30, watts: 4000 }] }) }).headroomCapW, 3300, "no forecast for the first minutes: nothing counted there");
+  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 0, watts: 4000 }, { fromInMin: 120, watts: 1000 }] }) }, CREDIT).headroomCapW, 3800, "min over the horizon: 500 W counted -> 4500 - 1200 + 500");
+  assert.equal(hplan({ ...sol(0.5, { solarProfile: [{ fromInMin: 30, watts: 4000 }] }) }, CREDIT).headroomCapW, 3300, "no forecast for the first minutes: nothing counted there");
   // a solar surplus never lifts the cap above what the limit allows; the cap never goes below zero
   assert.equal(hplan({ gridImportLimitW: 100, demandProfile: flat(5000) }).headroomCapW, 0);
   assert.equal(hplan({ gridImportLimitW: 100, demandProfile: flat(5000) }).status, "NO_SAFE_CEILING");
@@ -828,8 +845,9 @@ test("grid headroom binds the setpoint, never the ceiling's job: not binding lea
 });
 
 test("unknown demand with a KNOWN grid limit follows the chosen policy and says so; an unknown grid limit means no headroom constraint, and says so", () => {
-  // default ASSUME_PROVISIONAL: the labelled provisional 2000 W (x1.2 margin = 2400) is the floor of the peak
-  const assumed = hplan({ gridImportLimitW: 6000 });
+  // v3 G3: ASSUME_PROVISIONAL is no longer the default; these checks ask for it explicitly. The labelled provisional 2000 W (x1.2 margin = 2400) is the floor of the peak
+  const ha = (h: HouseholdInput, over: Partial<GentleInput> = {}) => hplan(h, { policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" }, ...over });
+  const assumed = ha({ gridImportLimitW: 6000 });
   assert.equal(assumed.household?.demandBasis, "ASSUMED");
   assert.equal(assumed.household?.demandPeakW, 2400);
   assert.equal(assumed.headroomCapW, 3600);
@@ -837,14 +855,14 @@ test("unknown demand with a KNOWN grid limit follows the chosen policy and says 
   assert.match(assumed.reasons.join(" "), /assumed, not measured/);
   assert.ok(assumed.provisionalInUse.some((x) => x.name === "assumedDemandW" && x.value === 2000 && x.kind === "MEASURED_REQUIRED" && x.source === "DEFAULT"));
   // a reading alone (no forecast) does not cover the window either: the assumption is a FLOOR, a larger reading wins
-  assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 500, demandAgeMin: 0 }).headroomCapW, 3600);
-  assert.equal(hplan({ gridImportLimitW: 6000, demandNowW: 3000, demandAgeMin: 0 }).headroomCapW, 2400);
+  assert.equal(ha({ gridImportLimitW: 6000, demandNowW: 500, demandAgeMin: 0 }).headroomCapW, 3600);
+  assert.equal(ha({ gridImportLimitW: 6000, demandNowW: 3000, demandAgeMin: 0 }).headroomCapW, 2400);
   // a forecast that starts later and no fresh reading leaves the first minutes uncovered
-  assert.ok(hplan({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"));
-  assert.ok(!hplan({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 0, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a forecast from now covers the window");
-  assert.ok(!hplan({ gridImportLimitW: 6000, demandNowW: 100, demandAgeMin: 0, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a fresh reading plus a forecast covers it");
+  assert.ok(ha({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"));
+  assert.ok(!ha({ gridImportLimitW: 6000, demandProfile: [{ fromInMin: 0, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a forecast from now covers the window");
+  assert.ok(!ha({ gridImportLimitW: 6000, demandNowW: 100, demandAgeMin: 0, demandProfile: [{ fromInMin: 20, watts: 400 }] }).codes.includes("ASSUMED_DEMAND"), "a fresh reading plus a forecast covers it");
   // the assumed value is a parameter
-  assert.equal(hplan({ gridImportLimitW: 6000 }, { params: { assumedDemandW: 1000 } }).headroomCapW, 4800);
+  assert.equal(ha({ gridImportLimitW: 6000 }, { params: { assumedDemandW: 1000 } }).headroomCapW, 4800);
   // policy FALLBACK: no guess; NO_DATA with its own code and a fallback record; nothing is recommended
   const fb = hplan({ gridImportLimitW: 6000 }, { policy: { unknownDemandPolicy: "FALLBACK" }, currentSetpointW: 3000, lastChangeElapsedMin: 0, elapsedMin: 5 });
   assert.equal(fb.status, "NO_DATA");
@@ -904,7 +922,7 @@ test("household inputs that cannot be trusted: a known limit with an invalid dem
   assert.ok(s.codes.includes("SOLAR_IGNORED"));
   for (const policy of [{ fallbackPolicy: "SOMETIMES" }, { unknownDemandPolicy: "GUESS" }] as unknown as Partial<GentlePolicy>[]) assert.equal(hplan({ gridImportLimitW: 6000 }, { policy }).status, "INVALID");
   for (const params of [{ demandMarginPct: -1 }, { demandMarginPct: 300 }, { assumedDemandW: -1 }, { maxHouseholdAgeMin: 0 }, { maxDecreaseStepW: 50 }, { maxDecreaseStepW: NaN }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
-  assert.equal(plan({ params: { maxDecreaseStepW: 100 } }).status, "OK", "one step is the least slew");
+  assert.equal(plan({ params: { maxDecreaseStepW: 100, hysteresisW: 100 } }).status, "OK", "one step is the least slew (v3 G7: with a hysteresis that one step can save)");
 });
 
 test("TARGET_AT_RISK and TARGET_UNREACHABLE under a grid cap: the highest SAFE rate, the late finish projected, the smallest absorbing buffer, never a lower target, 'NOT guaranteed'", () => {
@@ -1048,10 +1066,10 @@ test("slew limit: a decrease goes down by at most maxDecreaseStepW per change; a
   assert.ok(!smallUp.codes.includes("JUMP_FOR_DEADLINE"));
   assert.equal(plan({ currentSetpointW: 1500, lastChangeElapsedMin: 50, elapsedMin: 100, socPct: 35 }).jumpForDeadline, false, "off by default");
   // a safety decrease goes to the safe value at once, whatever the slew
-  const safety = plan({ currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, ceilings: [{ name: "battery_max_charge", watts: 3000 }], params: { maxDecreaseStepW: 100 } });
+  const safety = plan({ currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, ceilings: [{ name: "battery_max_charge", watts: 3000 }], params: { maxDecreaseStepW: 100, hysteresisW: 100 } });
   assert.ok(safety.codes.includes("ABOVE_CEILING"));
   assert.ok((safety.setpointW as number) <= 3000);
-  const hsafe = hplan({ gridImportLimitW: 5000, demandProfile: flat(1000) }, { currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, changesUsed: 6, params: { maxDecreaseStepW: 100 } });
+  const hsafe = hplan({ gridImportLimitW: 5000, demandProfile: flat(1000) }, { currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, changesUsed: 6, params: { maxDecreaseStepW: 100, hysteresisW: 100 } });
   assert.ok(hsafe.codes.includes("ABOVE_HEADROOM"));
   assert.equal(hsafe.setpointW, 3800);
   assert.equal(hsafe.changesUsed, 6, "a safety decrease does not draw on the budget");
@@ -1098,7 +1116,9 @@ test("an increase that the deadline can WAIT for waits out the dwell (no flappin
   assert.equal(wait.setpointW, 3000);
   assert.ok(wait.codes.includes("HELD_DWELL"));
   assert.equal(wait.status, "OK", "waiting is part of a plan that still makes the deadline");
-  assert.ok((wait.marginMin as number) >= 15 - 0.11, "the projection keeps the slack: " + wait.marginMin);
+  // v3 G7 m5: the projection used to assume a raise to the CEILING after the dwell (a margin of at least the 15 min slack); the later raise goes to the
+  // LOWEST step that still makes the deadline, so the margin shown is that one: not negative, and well under the slack a raise to the ceiling would show.
+  assert.ok((wait.marginMin as number) >= -0.11 && (wait.marginMin as number) < 15 - 5, "the projection is the later lowest-step raise's: " + wait.marginMin);
   assert.match(wait.reasons.join(" "), /deadline still holds/);
   assert.equal(wait.changesUsed, 0);
   assert.ok((wait.neededW as number) > 3000, "the increase was wanted");
@@ -1157,8 +1177,9 @@ test("parameter provenance: every parameter is PROVISIONAL, OWNER_SET or MEASURE
   assert.ok(wl.some((x) => x.name === "maxDecreaseStepW" && x.value === 1000 && x.source === "CALLER"));
   assert.ok(wl.some((x) => x.name === "dwellMin" && x.value === 45 && x.source === "CALLER"), "a caller-set value is shown as such");
   assert.ok(!wl.some((x) => x.name === "assumedDemandW"), "the assumption is listed only when it is used");
-  assert.ok(hplan({ gridImportLimitW: 6000 }).provisionalInUse.some((x) => x.name === "assumedDemandW"));
-  assert.ok(hplan({ gridImportLimitW: 6000 }).provisionalInUse.some((x) => x.name === "unknownDemandPolicy"));
+  const asked = { policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" } } as Partial<GentleInput>;   // v3 G3: explicit
+  assert.ok(hplan({ gridImportLimitW: 6000 }, asked).provisionalInUse.some((x) => x.name === "assumedDemandW"));
+  assert.ok(hplan({ gridImportLimitW: 6000 }, asked).provisionalInUse.some((x) => x.name === "unknownDemandPolicy"));
   assert.ok(plan({ socAgeMin: 99 }).provisionalInUse.some((x) => x.name === "fallbackPolicy" && x.value === "KEEP_CURRENT"));
   assert.deepEqual(plan({ targetSocPct: 9 }).provisionalInUse, [], "an invalid input lists nothing");
   // the README has one table: value, kind and what would replace it
@@ -1214,8 +1235,8 @@ function randomHousehold(rand: () => number): HouseholdInput | undefined {
   };
   return {
     gridImportLimitW: rand() < 0.15 ? null : 1000 + Math.floor(rand() * 11000),
-    demandNowW: rand() < 0.2 ? null : Math.round(rand() * 4000), demandAgeMin: rand() < 0.15 ? 60 : Math.floor(rand() * 10), demandProfile: profile(4000),
-    solarNowW: rand() < 0.3 ? null : Math.round(rand() * 5000), solarAgeMin: rand() < 0.1 ? 60 : Math.floor(rand() * 10), solarProfile: profile(5000),
+    demandNowW: rand() < 0.2 ? null : Math.round(rand() * 4000), demandAgeMin: rand() < 0.15 ? 60 : Math.floor(rand() * 10), demandProfile: profile(4000), demandProfileAgeMin: rand() < 0.1 ? 600 : Math.floor(rand() * 60),
+    solarNowW: rand() < 0.3 ? null : Math.round(rand() * 5000), solarAgeMin: rand() < 0.1 ? 60 : Math.floor(rand() * 10), solarProfile: profile(5000), solarProfileAgeMin: rand() < 0.1 ? 600 : Math.floor(rand() * 60),
     solarConfidence: rand() < 0.15 ? null : Math.round(rand() * 100) / 100,
   };
 }
@@ -1295,7 +1316,7 @@ test("property: more demand never lowers the needed setpoint or brings the finis
     demandNowW: h.demandNowW == null ? h.demandNowW : h.demandNowW * kd, demandProfile: h.demandProfile ? h.demandProfile.map((q) => ({ ...q, watts: q.watts * kd })) : h.demandProfile,
     solarNowW: h.solarNowW == null ? h.solarNowW : h.solarNowW * ks, solarProfile: h.solarProfile ? h.solarProfile.map((q) => ({ ...q, watts: q.watts * ks })) : h.solarProfile,
   });
-  const rank = (d: GentleDecision) => (d.status === "OK" ? 0 : d.status === "TARGET_AT_RISK" ? 1 : 2);
+  const rank = (d: GentleDecision) => (d.status === "OK" || d.status === "DEGRADED" ? 0 : d.status === "TARGET_AT_RISK" ? 1 : 2);
   let demandPairs = 0;
   let solarPairs = 0;
   let limitPairs = 0;
@@ -1349,7 +1370,8 @@ test("property: more demand never lowers the needed setpoint or brings the finis
     for (const big of [{ ...h, gridImportLimitW: 1e9 }, { ...h, gridImportLimitW: null }] as HouseholdInput[]) {
       const g = planGentle({ ...i, household: big });
       neutral++;
-      for (const k of ["status", "setpointW", "neededW", "finishInMin", "marginMin", "change", "ceilingW", "suggestedBufferMin"] as const) assert.deepEqual(g[k], v1[k], k + " with a limit that cannot bind");
+      // v3 G3: an ASSUMED demand (an explicit option) turns an OK into DEGRADED; every number is still the v1 number
+      for (const k of ["status", "setpointW", "neededW", "finishInMin", "marginMin", "change", "ceilingW", "suggestedBufferMin"] as const) assert.deepEqual(k === "status" && g.status === "DEGRADED" ? "OK" : g[k], v1[k], k + " with a limit that cannot bind");
     }
   }
   assert.ok(demandPairs > 300 && solarPairs > 300 && limitPairs > 300 && timePairs > 200 && neutral > 600 && strictDemand > 100, [demandPairs, solarPairs, limitPairs, timePairs, neutral, strictDemand].join("/"));
@@ -1396,7 +1418,8 @@ test("household closed loop: at least 300 seeded scenarios, demand and solar tha
     if (run.overLimitMin > 0) k.over++;
     if (run.clippedMin > 0) k.clipped++;
     const p = { ...DEFAULT_GENTLE_PARAMS, replanMin: sc.replanMin, maxDecreaseStepW: 1000, ...sc.params };
-    const modelHolds = hs.demandKind !== "exceeds" && hs.solarKind !== "below";
+    // v3 G2: solar is not inside the hard limit, so a solar that falls short of its forecast no longer excuses a crossing: only demand above the forecast and its margin does
+    const modelHolds = hs.demandKind !== "exceeds";
     let bound = false;
     for (const tk of run.ticks) {
       const d = tk.decision;
@@ -1511,11 +1534,24 @@ test("household closed loop: at least 300 seeded scenarios, demand and solar tha
   void staOver;
 });
 
+// The at-risk counter of the flap test below: a counted rise must be an INCREASE_FOR_DEADLINE made while the target is at risk, unreachable or past
+// its deadline (a rise toward the ceiling that is a deadline need and is never held). Returns what is wrong with a record, or null.
+const AT_RISK_RISE_STATUSES: readonly string[] = ["TARGET_AT_RISK", "TARGET_UNREACHABLE", "DEADLINE_PASSED"];
+interface AtRiskRiseRecord { change: string; status: string; codes: readonly string[]; recordCode: string }
+function atRiskRiseProblem(r: AtRiskRiseRecord): string | null {
+  if (r.change !== "INCREASE") return "not an increase: " + r.change;
+  if (r.recordCode !== "INCREASE_FOR_DEADLINE" || !r.codes.includes("INCREASE_FOR_DEADLINE")) return "not an INCREASE_FOR_DEADLINE: " + r.recordCode;
+  if (!AT_RISK_RISE_STATUSES.includes(r.status)) return "status " + r.status + " is not TARGET_AT_RISK, TARGET_UNREACHABLE or DEADLINE_PASSED";
+  return null;
+}
+
 test("noisy demand and solar inputs cannot make the setpoint flap: where the headroom does not bind the plan is identical to the exact-input plan, where it binds a decrease is only followed by an increase inside the dwell when the deadline needs it", () => {
   let identical = 0;
   let bindingRuns = 0;
   let reversals = 0;
   let unneeded = 0;
+  let atRiskRises = 0;
+  const atRiskRiseRecords: (AtRiskRiseRecord & { where: string })[] = [];
   let noisyRuns = 0;
   let changesNoisy = 0;
   let changesClean = 0;
@@ -1558,15 +1594,33 @@ test("noisy demand and solar inputs cannot make the setpoint flap: where the hea
         if (prev.kind === "DECREASE" && cur.kind === "INCREASE" && cur.t - prev.t < p.dwellMin) {
           reversals++;
           const tk = noisy.ticks.find((x) => x.t === cur.t) as (typeof noisy.ticks)[number];
-          if (tk.decision.neededW === null) unneeded++;
+          // v3 G1: a rise toward the CEILING in an at-risk state (the limit does not bind) is a deadline need and is never held; only a binding cap's
+          // recovery waits, so only that case can be an unneeded reversal
+          if (tk.decision.neededW === null && tk.decision.limitedBy === "GRID_HEADROOM") unneeded++;
+          else if (tk.decision.neededW === null) {
+            atRiskRises++;
+            atRiskRiseRecords.push({ where: "scenario " + id + " seed " + seed + " t " + cur.t, change: tk.decision.change, status: tk.decision.status, codes: tk.decision.codes, recordCode: cur.code });
+          }
         }
       }
     }
   }
-  console.log("[gentle noise] " + noisyRuns + " runs with 50 % noise on the demand and solar readings and 20 % stale demand: " + identical + " never limited by the headroom, neither noisy nor clean, and then identical to the run with exact household input; " + bindingRuns + " limited by it at some tick; decrease-then-increase inside the dwell " + reversals + " times, of which not needed for the deadline " + unneeded + "; setpoint changes noisy " + changesNoisy + " vs clean " + changesClean);
+  console.log("[gentle noise] " + noisyRuns + " runs with 50 % noise on the demand and solar readings and 20 % stale demand: " + identical + " never limited by the headroom, neither noisy nor clean, and then identical to the run with exact household input; " + bindingRuns + " limited by it at some tick; decrease-then-increase inside the dwell " + reversals + " times, of which not needed for the deadline " + unneeded + " (and " + atRiskRises + " rises toward the ceiling in an at-risk state, a deadline need that is never held); setpoint changes noisy " + changesNoisy + " vs clean " + changesClean);
   assert.ok(identical >= 150, "enough runs where the headroom never bound: " + identical);
   assert.ok(bindingRuns >= 50, "and enough where it did: " + bindingRuns);
   assert.equal(unneeded, 0, "no flapping: an increase right after a decrease only when the deadline needs it");
+  // The reversals counted as at-risk rises (an unknown needed rate and a limit that is the ceiling, so not held) are printed above; they are also
+  // asserted: each one is an INCREASE_FOR_DEADLINE made while the target is at risk, unreachable or past its deadline, never a plain increase.
+  assert.ok(atRiskRises > 0 && atRiskRiseRecords.length === atRiskRises, "the at-risk counter was exercised and every counted rise was recorded: " + atRiskRises + "/" + atRiskRiseRecords.length);
+  const notDeadlineRises = atRiskRiseRecords.map((r) => ({ where: r.where, problem: atRiskRiseProblem(r) })).filter((x) => x.problem !== null);
+  assert.deepEqual(notDeadlineRises, [], "every counted at-risk rise is an INCREASE_FOR_DEADLINE with status TARGET_AT_RISK, TARGET_UNREACHABLE or DEADLINE_PASSED");
+  // the check itself can fail: the three statuses pass; a plain increase (any other status), a decrease or another code does not
+  const sampleRise: AtRiskRiseRecord = { change: "INCREASE", status: "TARGET_AT_RISK", codes: ["INCREASE_FOR_DEADLINE"], recordCode: "INCREASE_FOR_DEADLINE" };
+  for (const st of AT_RISK_RISE_STATUSES) assert.equal(atRiskRiseProblem({ ...sampleRise, status: st }), null, st);
+  for (const st of ["OK", "DEGRADED", "NOTHING_TO_CHARGE", "NO_DATA", "NO_SAFE_CEILING", "INVALID"]) assert.notEqual(atRiskRiseProblem({ ...sampleRise, status: st }), null, "a plain increase in status " + st + " is not an at-risk rise");
+  assert.notEqual(atRiskRiseProblem({ ...sampleRise, change: "DECREASE" }), null);
+  assert.notEqual(atRiskRiseProblem({ ...sampleRise, recordCode: "DECREASE_SAVING" }), null);
+  assert.notEqual(atRiskRiseProblem({ ...sampleRise, codes: ["HELD_DWELL"] }), null);
   assert.ok(changesNoisy / noisyRuns <= 1.5 * (changesClean / 360) + 0.5, "noise does not multiply the changes: " + changesNoisy / noisyRuns + " per run vs " + changesClean / 360 + " clean");
 });
 
@@ -1623,4 +1677,712 @@ test("static: the household, fallback, slew and provenance code is pure data: st
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   assert.match(readme, /does not guarantee|NOT guaranteed|not guaranteed/);
   assert.match(readme, /100 percent|100 %/);
+});
+
+// =================================================================================================================================
+// v3 review fixes (independent review of the read-only model). Each section names the finding it closes: G1 recovery flag, G2 solar in the
+// hard limit, G3 unknown-demand default, G4 ages, G5 setpoint basis, G6 taper shapes, G7 minors. Everything is simulated, never measured.
+// =================================================================================================================================
+
+test("[v3 G1] an increase toward the ceiling in an at-risk or deadline-passed state is never held by hysteresis or dwell when the grid limit does not bind; a binding cap still waits like a saving", () => {
+  // The reviewer's case: a known limit that does not bind (30000 W), a dip makes the needed rate unknown (the target is out of reach at the
+  // ceiling), the setpoint in force is just under the ceiling. With household input the old flag held it (400 W < the 500 W hysteresis).
+  const risk: Partial<GentleInput> = { targetSocPct: 90, socPct: 50, elapsedMin: 160, currentSetpointW: 4600, lastChangeElapsedMin: 155, changesUsed: 0 };
+  const NB: HouseholdInput = { gridImportLimitW: 30000, demandProfile: flat(500) };
+  const free = plan({ ...risk, bufferMin: 60 });
+  assert.equal(free.status, "TARGET_AT_RISK");
+  assert.equal(free.neededW, null);
+  assert.equal(free.change, "INCREASE", "without household input the increase goes through");
+  assert.equal(free.setpointW, 5000);
+  for (const [name, over] of [["short of the hysteresis", {}], ["inside the dwell", { currentSetpointW: 3000 }], ["both", { currentSetpointW: 4600, lastChangeElapsedMin: 159 }]] as [string, Partial<GentleInput>][]) {
+    const d = hplan(NB, { ...risk, ...over });
+    const v1 = plan({ ...risk, ...over, bufferMin: 60 });
+    assert.equal(d.status, "TARGET_AT_RISK", name);
+    assert.equal(d.limitedBy, "CEILING", name);
+    assert.equal(d.change, "INCREASE", name + ": " + d.codes.join(","));
+    assert.equal(d.setpointW, 5000, name);
+    assert.ok(d.codes.includes("INCREASE_FOR_DEADLINE"), name);
+    assert.ok(!d.codes.includes("HELD_HYSTERESIS") && !d.codes.includes("HELD_DWELL"), name);
+    assert.equal(d.setpointW, v1.setpointW, name + ": the household answer equals the v1 answer where the limit does not bind");
+    assert.equal(d.change, v1.change, name);
+  }
+  // the deadline has passed but the window is still open: the same rule
+  const late: Partial<GentleInput> = { targetSocPct: 80, socPct: 60, elapsedMin: 310, currentSetpointW: 4600, lastChangeElapsedMin: 305 };
+  const dp = hplan(NB, late);
+  assert.equal(dp.status, "DEADLINE_PASSED");
+  assert.equal(dp.change, "INCREASE", dp.codes.join(","));
+  assert.equal(dp.setpointW, 5000);
+  assert.equal(dp.change, plan({ ...late, bufferMin: 60 }).change);
+  // an exhausted changes budget still holds (as in v1), and a fall is immediate whatever the limit
+  assert.ok(hplan(NB, { ...risk, changesUsed: 6 }).codes.includes("HELD_BUDGET"));
+  const fell = hplan({ gridImportLimitW: 30000, demandProfile: flat(500) }, { ...risk, currentSetpointW: 5600, ceilings: [{ name: "battery_max_charge", watts: 4000 }] });
+  assert.equal(fell.change, "DECREASE");
+  assert.ok(fell.codes.includes("ABOVE_CEILING"));
+  // a BINDING cap (3300 W): the rise of a recovering cap waits for the hysteresis and the dwell, at risk and after the deadline alike
+  const BIND: HouseholdInput = { gridImportLimitW: 4500, demandProfile: flat(1000) };
+  const bind = hplan(BIND, { ...risk, currentSetpointW: 3000, lastChangeElapsedMin: 120 });
+  assert.equal(bind.limitedBy, "GRID_HEADROOM");
+  assert.equal(bind.change, "NONE");
+  assert.ok(bind.codes.includes("HELD_HYSTERESIS"));
+  assert.equal(hplan(BIND, { ...risk, currentSetpointW: 2500, lastChangeElapsedMin: 155 }).codes.includes("HELD_DWELL"), true);
+  assert.equal(hplan(BIND, { ...risk, currentSetpointW: 2500, lastChangeElapsedMin: 120 }).change, "INCREASE");
+  const bindLate = hplan(BIND, { ...late, currentSetpointW: 3000, lastChangeElapsedMin: 250 });
+  assert.equal(bindLate.status, "DEADLINE_PASSED");
+  assert.equal(bindLate.limitedBy, "GRID_HEADROOM");
+  assert.equal(bindLate.change, "NONE");
+  assert.ok(bindLate.codes.includes("HELD_HYSTERESIS"));
+  // a limit that is KNOWN but far above (so it never binds) and the same state with no household group agree tick for tick
+  let n = 0;
+  for (const cur of [3000, 3500, 4000, 4400, 4600, 4800, 4900]) for (const since of [1, 10, 29, 31, 60]) {
+    const a = hplan(NB, { ...risk, currentSetpointW: cur, lastChangeElapsedMin: 160 - since });
+    const b = plan({ ...risk, currentSetpointW: cur, lastChangeElapsedMin: 160 - since, bufferMin: 60 });
+    assert.equal(a.setpointW, b.setpointW, cur + "/" + since);
+    assert.equal(a.change, b.change, cur + "/" + since);
+    n++;
+  }
+  assert.equal(n, 35);
+});
+
+test("[v3 G3] unknown demand under a KNOWN grid limit: the default is FALLBACK (nothing guessed, no recommendation); the provisional assumption is an explicit option and its status is DEGRADED, never OK", () => {
+  assert.equal(DEFAULT_GENTLE_POLICY.unknownDemandPolicy, "FALLBACK");
+  assert.equal(PARAM_PROVENANCE.unknownDemandPolicy?.value, "FALLBACK");
+  // a known limit, no demand at all, the default policy: the guessed constant is not used
+  for (const h of [{ gridImportLimitW: 6000 }, { gridImportLimitW: 6000, demandNowW: 500, demandAgeMin: 0 }, { gridImportLimitW: 6000, demandProfile: [{ fromInMin: 20, watts: 400 }] }] as HouseholdInput[]) {
+    const d = hplan(h, { currentSetpointW: 3000, lastChangeElapsedMin: 0, elapsedMin: 5 });
+    assert.equal(d.status, "NO_DATA", JSON.stringify(h));
+    assert.equal(d.setpointW, null, "no guessed 2000 W under a known safety limit");
+    assert.equal(d.changeRecommended, false);
+    assert.ok(d.codes.includes("HOUSEHOLD_UNUSABLE"));
+    assert.ok(!d.codes.includes("ASSUMED_DEMAND"));
+    assert.equal(d.household, null);
+    assert.equal(d.fallback.applied, true);
+    assert.equal(d.fallback.setpointW, null, "the grid headroom cannot be checked, so even KEEP_CURRENT recommends nothing");
+  }
+  // the assumption is still available, but only when asked for, and it is DEGRADED, not OK
+  const opt: Partial<GentleInput> = { policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" } };
+  const a = hplan({ gridImportLimitW: 9000 }, opt);
+  assert.equal(a.status, "DEGRADED");
+  assert.notEqual(a.status, "OK");
+  assert.ok(a.codes.includes("ASSUMED_DEMAND"));
+  assert.ok(a.setpointW !== null && a.setpointW <= (a.headroomCapW as number));
+  assert.equal(hplan({ gridImportLimitW: 6000 }, opt).headroomCapW, 3600, "the explicit option keeps its arithmetic: 6000 - 2000 x 1.2");
+  assert.equal(a.headroomCapW, 6600);
+  assert.equal(a.household?.demandBasis, "ASSUMED");
+  assert.match(a.reasons.join(" "), /DEGRADED/);
+  assert.match(a.reasons.join(" "), /assumed, not measured/);
+  assert.ok(a.provisionalInUse.some((x) => x.name === "assumedDemandW" && x.kind === "MEASURED_REQUIRED" && x.source === "DEFAULT"));
+  assert.ok(a.provisionalInUse.some((x) => x.name === "unknownDemandPolicy" && x.value === "ASSUME_PROVISIONAL" && x.source === "CALLER"));
+  assert.equal(a.guarantee, "NONE");
+  // a worse status is not softened: at risk stays at risk (and still carries the assumed-demand code)
+  const risk = hplan({ gridImportLimitW: 5000 }, { ...opt, targetSocPct: 100, socPct: 40 });
+  assert.ok(risk.status === "TARGET_AT_RISK" || risk.status === "TARGET_UNREACHABLE", risk.status);
+  assert.ok(risk.codes.includes("ASSUMED_DEMAND"));
+  // a forecast from now covers the window under either policy: OK, no degradation
+  for (const policy of ["FALLBACK", "ASSUME_PROVISIONAL"] as const) {
+    const ok = hplan({ gridImportLimitW: 7000, demandProfile: flat(1000) }, { policy: { unknownDemandPolicy: policy } });
+    assert.equal(ok.status, "OK", policy);
+    assert.ok(!ok.codes.includes("ASSUMED_DEMAND"));
+  }
+  // without a known limit demand is irrelevant: v1 numbers, status OK
+  assert.equal(hplan({ demandProfile: undefined }).status, "OK");
+  // a sweep: a known limit and no usable demand under the default policy never yields a setpoint, whatever the state
+  const rand = rng(31337);
+  let swept = 0;
+  for (let n = 0; n < 600; n++) {
+    const i = householdCase(rand);
+    const lim = 1500 + Math.floor(rand() * 9000);
+    const d = planGentle({ ...i, socPct: 5 + Math.floor(rand() * 80), socAgeMin: 1, ceilings: [{ name: "owner_maximum", watts: 5000 }], policy: undefined, household: { gridImportLimitW: lim } });
+    if (d.status === "NOTHING_TO_CHARGE" || d.status === "INVALID") continue;
+    swept++;
+    assert.equal(d.setpointW, null, "no guessed demand: " + d.status);
+    assert.ok(d.status === "NO_DATA" || d.status === "DEADLINE_PASSED", d.status);
+  }
+  assert.ok(swept > 300, "swept " + swept);
+});
+
+const HP = (age: unknown, over: Partial<HouseholdInput> = {}) => planGentle({ ...hbase, policy: { setpointBasis: "GRID_AC" }, household: { gridImportLimitW: 7000, demandProfile: flat(1000), demandProfileAgeMin: age as number, ...over } });
+const CE = (cs: NamedCeiling[], over: Partial<GentleInput> = {}) => plan({ ceilings: cs, ...over });
+
+test("[v3 G4a] a forecast needs a fresh age: a stale, missing or invalid age counts as unknown (fail closed), never a covered window", () => {
+  // forecast age: exactly the limit is fresh, over it, missing, null, negative, NaN and a string are not
+  for (const ok of [0, 1, 60, 120]) assert.equal(HP(ok).status, "OK", "age " + ok);
+  assert.equal(HP(0).headroomCapW, 5800);
+  for (const bad of [121, 600, undefined, null, -1, NaN, "5"]) {
+    const d = HP(bad);
+    assert.equal(d.status, "NO_DATA", "age " + String(bad));
+    assert.equal(d.setpointW, null, "a forecast with no fresh age does not cover the window");
+    assert.ok(d.codes.includes("HOUSEHOLD_UNUSABLE") && d.codes.includes("FORECAST_STALE"), String(bad) + ": " + d.codes.join(","));
+    assert.equal(d.fallback.applied, true);
+    assert.equal(d.fallback.setpointW, null, "the grid headroom cannot be checked");
+  }
+  // a fresh READING does not rescue a stale forecast (it covers only the first minutes), and an assumed demand degrades the status
+  assert.equal(HP(500, { demandNowW: 600, demandAgeMin: 0 }).status, "NO_DATA");
+  const assumed = planGentle({ ...hbase, policy: { unknownDemandPolicy: "ASSUME_PROVISIONAL" }, household: { gridImportLimitW: 9000, demandProfile: flat(1000), demandProfileAgeMin: 500 } });
+  assert.equal(assumed.status, "DEGRADED");
+  assert.equal(assumed.household?.demandBasis, "ASSUMED");
+  assert.ok(assumed.codes.includes("FORECAST_STALE") && assumed.codes.includes("ASSUMED_DEMAND"));
+  assert.equal(assumed.household?.demandPeakW, 2400, "the stale forecast's 1000 W is not used: the assumed 2000 W x 1.2");
+  assert.equal(planGentle({ ...hbase, params: { maxForecastAgeMin: 300 }, household: { gridImportLimitW: 7000, demandProfile: flat(1000), demandProfileAgeMin: 300 } }).status, "OK");
+  assert.ok(hplan({ gridImportLimitW: 7000, demandProfile: flat(1000) }).provisionalInUse.some((x) => x.name === "maxForecastAgeMin" && x.kind === "PROVISIONAL" && x.source === "DEFAULT"));
+  assert.ok(!plan().provisionalInUse.some((x) => x.name === "maxCeilingAgeMin" || x.name === "maxForecastAgeMin"), "only where they act");
+});
+
+test("[v3 G4b] the age limits are validated parameters with conservative defaults", () => {
+  assert.equal(DEFAULT_GENTLE_PARAMS.maxForecastAgeMin, 120);
+  assert.equal(DEFAULT_GENTLE_PARAMS.maxCeilingAgeMin, 60);
+  assert.equal(DEFAULT_GENTLE_PARAMS.maxGridLimitAgeMin, 60);
+  for (const params of [{ maxForecastAgeMin: 0 }, { maxForecastAgeMin: -5 }, { maxForecastAgeMin: 1441 }, { maxForecastAgeMin: NaN }, { maxCeilingAgeMin: 0 }, { maxCeilingAgeMin: 5000 }, { maxGridLimitAgeMin: 0 }, { maxGridLimitAgeMin: 1441 }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
+  for (const params of [{ maxForecastAgeMin: 1 }, { maxForecastAgeMin: 1440 }, { maxCeilingAgeMin: 1440 }, { maxGridLimitAgeMin: 1 }]) assert.equal(plan({ params }).status, "OK", JSON.stringify(params));
+});
+
+test("[v3 G4c] a stale solar forecast is ignored; a stale or invalid grid limit age makes the household input unusable, which is not the same as no limit", () => {
+  // a stale solar forecast is ignored like any untrusted solar
+  const sol = (age: unknown) => planGentle({ ...hbase, household: { gridImportLimitW: 4500, demandProfile: flat(1000), demandProfileAgeMin: 0, solarNowW: 2000, solarAgeMin: 0, solarProfile: flat(4000), solarProfileAgeMin: age as number, solarConfidence: 0.5 } });
+  assert.ok(!sol(0).codes.includes("SOLAR_IGNORED"));
+  for (const bad of [121, undefined, null, NaN]) assert.ok(sol(bad).codes.includes("SOLAR_IGNORED"), "solar forecast age " + String(bad));
+  // the grid limit: no age is a static limit (accepted); an age is enforced; a limit that was GIVEN but is stale is not "no limit"
+  assert.equal(HP(0, { gridImportLimitAgeMin: 60 }).status, "OK");
+  assert.equal(HP(0, { gridImportLimitAgeMin: undefined }).status, "OK");
+  assert.equal(HP(0, { gridImportLimitAgeMin: null }).status, "OK");
+  for (const bad of [61, 999, -1, NaN, "x"]) {
+    const d = HP(0, { gridImportLimitAgeMin: bad as number });
+    assert.equal(d.status, "NO_DATA", "limit age " + String(bad));
+    assert.equal(d.setpointW, null);
+    assert.ok(d.codes.includes("GRID_LIMIT_STALE") && d.codes.includes("HOUSEHOLD_UNUSABLE"));
+    assert.ok(!d.codes.includes("NO_GRID_LIMIT"), "a stale limit is not the same as no limit");
+    assert.equal(d.fallback.setpointW, null);
+  }
+  assert.equal(HP(0, { gridImportLimitAgeMin: 300 }).fallback.applied, true);
+  assert.equal(planGentle({ ...hbase, params: { maxGridLimitAgeMin: 300 }, household: { gridImportLimitW: 7000, gridImportLimitAgeMin: 300, demandProfile: flat(1000), demandProfileAgeMin: 0 } }).status, "OK");
+  // no limit at all: demand and ages are irrelevant, as before
+  assert.equal(planGentle({ ...hbase, household: { demandProfile: flat(1000), demandProfileAgeMin: 9999 } }).status, "OK");
+});
+
+test("[v3 G4d] named ceilings with an age: no age is static (v1); a stale ceiling never raises the cap but a stale LOWER one still lowers it; none fresh is NO_SAFE_CEILING, no fallback", () => {
+  assert.equal(CE([{ name: "owner_maximum", watts: 5000 }]).ceilingW, 5000);
+  assert.equal(CE([{ name: "owner_maximum", watts: 5000, ageMin: 0 }, { name: "battery_max_charge", watts: 6200, ageMin: 60 }]).ceilingW, 5000);
+  const lowStale = CE([{ name: "owner_maximum", watts: 5000, ageMin: 0 }, { name: "battery_max_charge", watts: 3000, ageMin: 61 }]);
+  assert.equal(lowStale.ceilingW, 3000, "a derated limit that went quiet is not forgotten");
+  assert.equal(lowStale.ceilingName, "battery_max_charge");
+  assert.ok(lowStale.codes.includes("CEILING_STALE"));
+  assert.match(lowStale.reasons.join(" "), /still caps/);
+  assert.ok((lowStale.setpointW as number) <= 3000);
+  const highStale = CE([{ name: "owner_maximum", watts: 5000, ageMin: 0 }, { name: "battery_max_charge", watts: 9000, ageMin: 500 }]);
+  assert.equal(highStale.ceilingW, 5000, "a stale value never raises the cap");
+  assert.ok(highStale.codes.includes("CEILING_STALE"));
+  const staleOnlyLower = CE([{ name: "owner_maximum", watts: 5000, ageMin: 90 }, { name: "battery_max_charge", watts: 6200, ageMin: 0 }]);
+  assert.equal(staleOnlyLower.ceilingW, 5000, "the stale owner maximum is lower than the fresh battery limit, so it caps");
+  for (const stale of [[{ name: "a", watts: 5000, ageMin: 61 }], [{ name: "a", watts: 5000, ageMin: NaN }], [{ name: "a", watts: 5000, ageMin: -1 }], [{ name: "a", watts: 5000, ageMin: 90 }, { name: "b", watts: 6000, ageMin: 1000 }]] as NamedCeiling[][]) {
+    const d = CE(stale, { currentSetpointW: 3000, policy: { fallbackPolicy: "KEEP_CURRENT" } });
+    assert.equal(d.status, "NO_SAFE_CEILING", JSON.stringify(stale));
+    assert.equal(d.setpointW, null);
+    assert.equal(d.neededW, null);
+    assert.ok(d.codes.includes("NO_CEILING") && d.codes.includes("CEILING_STALE"));
+    assert.equal(d.fallback.setpointW, null, "no fresh ceiling to check a fallback against");
+    assert.match(d.reasons.join(" "), /stale/);
+  }
+  assert.equal(CE([{ name: "a", watts: 5000, ageMin: 100 }], { params: { maxCeilingAgeMin: 100 } }).status, "OK", "the limit is the owner's parameter");
+  // a fresh ceiling and no ages anywhere: never a stale code
+  assert.ok(!CE([{ name: "a", watts: 5000, ageMin: 5 }]).codes.includes("CEILING_STALE"));
+  assert.ok(!plan().codes.includes("CEILING_STALE"));
+  // the exported helper
+  const r = G4.effectiveCeiling([{ name: "x", watts: 4000, ageMin: 10 }, { name: "y", watts: 3500, ageMin: 99 }, { name: "z", watts: null }], 60);
+  assert.deepEqual({ best: r.best, stale: r.staleNames, caps: r.staleCaps }, { best: { watts: 3500, name: "y" }, stale: ["y"], caps: true });
+  assert.equal(G4.effectiveCeiling([{ name: "y", watts: 3500, ageMin: 99 }], 60).best, null);
+  assert.ok(CE([{ name: "a", watts: 5000, ageMin: 5 }]).provisionalInUse.some((x) => x.name === "maxCeilingAgeMin"), "listed where it acts");
+});
+
+test("[v3 G2a] solar is not inside the hard grid limit by default: the cap is the limit minus the demand peak; crediting solar is an explicit, validated parameter and the bounded solar is shown as information", () => {
+  const sol = (conf: number | null, extra: Partial<HouseholdInput> = {}): HouseholdInput => ({ gridImportLimitW: 4500, demandProfile: flat(1000), solarNowW: 2000, solarAgeMin: 1, solarProfile: flat(4000), solarConfidence: conf, ...extra });
+  assert.equal(DEFAULT_GENTLE_PARAMS.solarCreditPct, 0);
+  assert.equal(PARAM_PROVENANCE.solarCreditPct?.kind, "PROVISIONAL");
+  // by default no solar is credited, whatever the confidence: 4500 - 1000 x 1.2 = 3300
+  for (const conf of [0, 0.4, 0.5, 1, null]) {
+    const d = hplan(sol(conf));
+    assert.equal(d.headroomCapW, 3300, "confidence " + conf);
+    assert.equal(d.household?.solarCountedMinW, 0, "nothing is credited");
+    assert.ok(d.codes.includes("SOLAR_NOT_CREDITED"), "the reason says so");
+    assert.match(d.reasons.join(" "), /not counted inside the hard grid limit/);
+    assert.ok((d.setpointW as number) <= 3300);
+  }
+  // the bounded solar is still reported, labelled as information (min of the reading and the scaled forecast)
+  assert.equal(hplan(sol(0.4)).household?.solarPotentialMinW, 1600);
+  assert.equal(hplan(sol(1)).household?.solarPotentialMinW, 2000);
+  assert.equal(hplan(sol(null)).household?.solarPotentialMinW, 0);
+  // an explicit credit: 100 % keeps the old arithmetic (4500 - 1200 + 1600), 50 % credits half of it
+  const full = hplan(sol(0.4), { params: { solarCreditPct: 100 } });
+  assert.equal(full.headroomCapW, 4900);
+  assert.equal(full.household?.solarCountedMinW, 1600);
+  assert.ok(!full.codes.includes("SOLAR_NOT_CREDITED"));
+  assert.equal(hplan(sol(0.4), { params: { solarCreditPct: 50 } }).headroomCapW, 4100);
+  assert.equal(hplan(sol(0.4), { params: { solarCreditPct: 50 } }).household?.solarCountedMinW, 800);
+  assert.equal(hplan(sol(0.4), { params: { solarCreditPct: 0 } }).headroomCapW, 3300);
+  // validated
+  for (const solarCreditPct of [-1, 101, NaN, Infinity, "50" as unknown as number]) assert.equal(plan({ params: { solarCreditPct } }).status, "INVALID", String(solarCreditPct));
+  for (const solarCreditPct of [0, 1, 50, 100]) assert.equal(plan({ params: { solarCreditPct } }).status, "OK", String(solarCreditPct));
+  // without any solar input there is nothing to explain
+  assert.ok(!hplan({ gridImportLimitW: 4500, demandProfile: flat(1000) }).codes.includes("SOLAR_NOT_CREDITED"));
+  // a plentiful solar reading and forecast never lift the setpoint above the limit minus the demand peak
+  for (const w of [500, 3000, 20000]) {
+    const d = hplan(sol(1, { solarNowW: w, solarProfile: flat(w) }), { targetSocPct: 100, socPct: 20 });
+    assert.ok((d.setpointW as number) <= 3300, "solar " + w + ": " + d.setpointW);
+    assert.equal(d.headroomCapW, 3300);
+  }
+  // the hard cap with solar not counted is a function of limit and demand only: the same cap with and without a solar group
+  assert.equal(hplan({ gridImportLimitW: 4500, demandProfile: flat(1000) }).headroomCapW, hplan(sol(0.9)).headroomCapW);
+  // the credit is only ever additive and bounded by the reading: a zero reading credits nothing even at 100 %
+  assert.equal(hplan(sol(1, { solarNowW: 0 }), { params: { solarCreditPct: 100 } }).headroomCapW, 3300);
+});
+
+// A CLOUD scenario: the controller is told it is sunny (a fresh reading of 3000 W and a forecast of the same) but the true solar is a small fraction of that for the whole window.
+const cloudScenario = (variant: number) => {
+  const base0 = makeHouseholdScenario(5);
+  const limit = [6500, 7000, 7500][variant % 3] as number;
+  const fcst = [2500, 3000, 3500][Math.floor(variant / 3) % 3] as number;
+  const trueFrac = [0, 0.03, 0.1][Math.floor(variant / 9) % 3] as number;
+  const nSeg = 8;
+  const sc = {
+    ...base0, kind: "in-band" as const, targetSocPct: 100, bufferMin: 60, clockDay: { changeAtMin: 0, deltaMin: 0 } as ClockDay, windowStartMin: 22 * 60, windowWallMin: 360, windowRealMin: 360,
+    startSocPct: 10, nominalKwh: 30, capacityUpPct: 6, trueCapacityKwh: 30 * 1.03, trueEff: 0.95, trueTaper: { startSocPct: 92, endFraction: 0.2 },
+    ceilings: [{ name: "owner_maximum", watts: 8000 }], ceilW: 8000, readStep: 1, readNoise: 0, staleProb: 0, dips: [], replanMin: 10, paramVariant: "default" as const, params: {}, calm: true,
+    hh: {
+      demandKind: "holds" as const, solarKind: "below" as const, gridLimitW: limit, marginPct: 20, demandForecast: new Array(nSeg).fill(1000) as number[], demandFactor: new Array(nSeg).fill(0.9) as number[], spikes: [],
+      solarForecast: new Array(nSeg).fill(fcst) as number[], solarFactor: new Array(nSeg).fill(trueFrac) as number[], solarConf: 0.9, noise: 0, demandStaleProb: 0, forecastPeakW: 1000, capLowW: limit - 1200,
+    },
+  };
+  const tweak = (h: HouseholdInput) => ({ ...h, solarNowW: fcst, solarAgeMin: 0 });
+  return { sc, tweak, limit };
+};
+
+test("[v3 G2b] closed loop: a cloud, or a solar forecast far too high, cannot push the import over the known limit; asking for the solar credit makes the same loop cross it", () => {
+  let withCredit = 0;
+  let runs = 0;
+  let atRisk = 0;
+  for (let v = 0; v < 27; v++) {
+    const { sc, tweak, limit } = cloudScenario(v);
+    const run = runHouseholdLoop(sc, planGentle, { tweak });
+    runs++;
+    assert.equal(run.overLimitMin, 0, "variant " + v + ": the setpoint plus the true demand stayed inside the limit of " + limit);
+    assert.ok(run.maxImportW <= limit + 1e-6, "variant " + v + ": import " + run.maxImportW);
+    assert.ok(run.ticks.every((tk) => tk.decision.setpointW === null || (tk.decision.headroomCapW as number) <= limit - 1000 * 1.2 + 1e-9), "the cap never counts the solar");
+    if (run.ticks.some((tk) => tk.decision.status === "TARGET_AT_RISK" || tk.decision.status === "TARGET_UNREACHABLE")) atRisk++;
+    // the same world with the credit switched ON shows what the default protects against
+    const credited = runHouseholdLoop(sc, planGentle, { tweak, params: { solarCreditPct: 100 } });
+    if (credited.overLimitMin > 0) withCredit++;
+  }
+  assert.ok(atRisk >= 20, "the shortfall is reported, not hidden: " + atRisk + " of " + runs + " runs flagged at risk or unreachable");
+  assert.ok(withCredit >= 10, "the loop is able to expose the old behaviour: with solarCreditPct 100 the limit was crossed in " + withCredit + " of " + runs + " runs");
+  console.log("[gentle G2] cloud scenarios: " + runs + " runs, solar not credited: limit never crossed; flagged at risk or unreachable in " + atRisk + "; with the credit switched on the limit was crossed in " + withCredit);
+});
+
+test("[v3 G5a] the setpoint basis is explicit and every grid-side limit is converted to it: the default UNSETTLED holds under either convention, GRID_AC keeps the exact grid-side arithmetic, battery-side ceilings are never raised", () => {
+  assert.equal(DEFAULT_GENTLE_POLICY.setpointBasis, "UNSETTLED");
+  assert.equal(DEFAULT_GENTLE_PARAMS.setpointConversionEff, 0.85);
+  assert.equal(PARAM_PROVENANCE.setpointBasis?.kind, "PROVISIONAL");
+  assert.equal(PARAM_PROVENANCE.setpointConversionEff?.kind, "PROVISIONAL");
+  const H: HouseholdInput = { gridImportLimitW: 5000, demandProfile: flat(1000), demandProfileAgeMin: 0 };
+  const run = (basis: string | undefined, over: Partial<GentleInput> = {}) => planGentle({ ...hbase, household: H, ...(basis === undefined ? {} : { policy: { setpointBasis: basis as GentlePolicy["setpointBasis"] } }), ...over });
+  // 5000 - 1000 x 1.2 = 3800 grid-side watts; a setpoint that is battery-side watts can use 0.85 of that: 3230 -> 3200
+  assert.equal(run("GRID_AC").headroomCapW, 3800);
+  assert.equal(run("BATTERY_DC").headroomCapW, 3200);
+  assert.equal(run("UNSETTLED").headroomCapW, 3200);
+  assert.equal(run(undefined).headroomCapW, 3200, "the default is the unsettled basis");
+  assert.equal(run(undefined).setpointBasis, "UNSETTLED");
+  assert.equal(run("GRID_AC").setpointBasis, "GRID_AC");
+  assert.equal(run("BATTERY_DC", { params: { setpointConversionEff: 0.9 } }).headroomCapW, 3400);
+  assert.equal(run("BATTERY_DC", { params: { setpointConversionEff: 1 } }).headroomCapW, 3800);
+  assert.equal(run("GRID_AC", { params: { setpointConversionEff: 0.5 } }).headroomCapW, 3800, "a settled grid-side basis needs no conversion");
+  // whatever the basis, the recommended setpoint stays inside the cap and the import it draws stays inside the limit, on both readings
+  for (const basis of ["GRID_AC", "BATTERY_DC", "UNSETTLED", undefined]) {
+    const d = run(basis, { targetSocPct: 100, socPct: 30 });
+    assert.ok((d.setpointW as number) <= (d.headroomCapW as number), String(basis));
+    const importGrid = (d.setpointW as number) + 1200;
+    const importBattery = (d.setpointW as number) / 0.85 + 1200;
+    assert.ok((d.household?.projectedImportW as number) <= 5000 + 1e-6, "reported import " + d.household?.projectedImportW);
+    assert.ok(basis === "GRID_AC" ? importGrid <= 5000 : importBattery <= 5000 + 1e-6, String(basis) + ": the draw at an efficiency of 0.85 stays inside the limit");
+  }
+  assert.equal(run("GRID_AC", { targetSocPct: 100, socPct: 30 }).household?.projectedImportW, 5000, "grid-side: import = setpoint + demand");
+  assert.ok((run("UNSETTLED", { targetSocPct: 100, socPct: 30 }).household?.projectedImportW as number) < 5000 && (run("UNSETTLED", { targetSocPct: 100, socPct: 30 }).household?.projectedImportW as number) > 4900);
+  // validated
+  for (const setpointConversionEff of [0, -0.1, 1.01, NaN, Infinity]) assert.equal(plan({ params: { setpointConversionEff } }).status, "INVALID", String(setpointConversionEff));
+  for (const setpointConversionEff of [0.01, 0.5, 1]) assert.equal(plan({ params: { setpointConversionEff } }).status, "OK", String(setpointConversionEff));
+  for (const setpointBasis of ["AC", "", null, 7, "grid_ac"]) assert.equal(plan({ policy: { setpointBasis } as unknown as Partial<GentlePolicy> }).status, "INVALID", String(setpointBasis));
+  // named ceilings: an unlabelled one is already in setpoint units; a battery-side one is never raised; a grid-side one is converted DOWN unless the basis is grid-side
+  const CB = (c: NamedCeiling[], basis?: string) => plan({ ceilings: c, ...(basis === undefined ? {} : { policy: { setpointBasis: basis as GentlePolicy["setpointBasis"] } }) });
+  const unl: NamedCeiling[] = [{ name: "owner_maximum", watts: 5000 }];
+  const bat: NamedCeiling[] = [{ name: "battery_max_charge", watts: 5000, basis: "BATTERY_DC" }];
+  const grid: NamedCeiling[] = [{ name: "grid_charge_power", watts: 5000, basis: "GRID_AC" }];
+  for (const b of [undefined, "GRID_AC", "BATTERY_DC", "UNSETTLED"]) {
+    assert.equal(CB(unl, b).ceilingW, 5000, "unlabelled, " + b);
+    assert.equal(CB(bat, b).ceilingW, 5000, "battery-side, " + b);
+  }
+  assert.equal(CB(grid, "GRID_AC").ceilingW, 5000);
+  assert.equal(CB(grid, "BATTERY_DC").ceilingW, 4200, "5000 x 0.85 = 4250, down to a step");
+  assert.equal(CB(grid, "UNSETTLED").ceilingW, 4200);
+  assert.equal(CB(grid, undefined).ceilingW, 4200);
+  const mix = CB([...unl, { name: "grid_charge_power", watts: 5200, basis: "GRID_AC" }]);
+  assert.equal(mix.ceilingW, 4400, "5200 x 0.85 = 4420 is the smallest");
+  assert.equal(mix.ceilingName, "grid_charge_power");
+  assert.ok((mix.setpointW as number) <= 4400);
+  assert.equal(CB([{ name: "x", watts: 5000, basis: "weird" as unknown as "GRID_AC" }], "UNSETTLED").ceilingW, 4200, "an unrecognised label is treated as grid-side: the lower figure");
+  assert.equal(CB([{ name: "x", watts: 5000, basis: "weird" as unknown as "GRID_AC" }], "GRID_AC").ceilingW, 5000);
+  // the helpers, exported pure
+  assert.equal(G4.setpointScale("GRID_AC", 0.85), 1);
+  assert.equal(G4.setpointScale("BATTERY_DC", 0.85), 0.85);
+  assert.equal(G4.setpointScale("UNSETTLED", 0.85), 0.85);
+  assert.equal(G4.ceilingInSetpointUnits({ name: "a", watts: 1000, basis: "GRID_AC" }, "UNSETTLED", 0.8), 800);
+  assert.equal(G4.ceilingInSetpointUnits({ name: "a", watts: 1000, basis: "BATTERY_DC" }, "UNSETTLED", 0.8), 1000);
+  assert.equal(G4.ceilingInSetpointUnits({ name: "a", watts: 1000 }, "BATTERY_DC", 0.8), 1000);
+  // the provisional parameters that shaped the answer are listed
+  const listed = run(undefined).provisionalInUse.map((x) => x.name);
+  assert.ok(listed.includes("setpointBasis") && listed.includes("setpointConversionEff"));
+  assert.ok(!run("GRID_AC").provisionalInUse.some((x) => x.name === "setpointConversionEff"));
+  // v1 numbers are untouched: no household and no labelled ceiling means no conversion at all
+  assert.equal(plan().ceilingW, 5000);
+});
+
+test("[v3 G5b] closed loop with a simulator convention that DIFFERS from the model's: with the default basis the limit holds whether the actuator applies grid-side or battery-side watts; a model that assumed the grid side is exposed", () => {
+  let n = 0;
+  let reachedBattery = 0;
+  let feasible = 0;
+  const grid: Partial<GentlePolicy> = { setpointBasis: "GRID_AC" };
+  for (let id = 0; id < 240; id++) {
+    const sc = makeHouseholdScenario(id);
+    if (sc.hh.demandKind === "exceeds") continue;   // demand above the forecast and its margin can cross any limit; that is reported elsewhere
+    n++;
+    const defGrid = runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC" });
+    const defBat = runHouseholdLoop(sc, planGentle, { applyBasis: "BATTERY_DC" });
+    assert.equal(defGrid.overLimitMin, 0, "default basis, grid-side actuator, scenario " + id);
+    assert.equal(defBat.overLimitMin, 0, "default basis, battery-side actuator, scenario " + id);
+    assert.ok(defBat.maxImportW <= sc.hh.gridLimitW + 1e-6, "scenario " + id + " import " + defBat.maxImportW);
+    // the same assumption meeting a grid-side actuator is exact
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC", policy: grid }).overLimitMin, 0, "scenario " + id);
+    if (sc.kind === "in-band" && feasibilityHH(sc) === "margin") {
+      feasible++;
+      if (defBat.reachedTolMin !== null && defBat.reachedTolMin <= defBat.deadlineMin) reachedBattery++;
+    }
+  }
+  // The loop must be able to SEE a convention mismatch: demand at its forecast, no demand margin, the cap binding (an at-risk target). A model that
+  // assumed grid-side watts, meeting a battery-side actuator, crosses the limit; the default basis does not, with either actuator.
+  let exposed = 0;
+  let minutes = 0;
+  const tight: Partial<GentleParams> = { demandMarginPct: 0 };
+  for (let v = 0; v < 27; v++) {
+    const { sc } = cloudScenario(v);
+    const wrong = runHouseholdLoop(sc, planGentle, { applyBasis: "BATTERY_DC", params: tight, policy: grid });
+    if (wrong.overLimitMin > 0) { exposed++; minutes += wrong.overLimitMin; }
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "BATTERY_DC", params: tight }).overLimitMin, 0, "default basis, battery-side actuator, variant " + v);
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC", params: tight }).overLimitMin, 0, "default basis, grid-side actuator, variant " + v);
+    assert.equal(runHouseholdLoop(sc, planGentle, { applyBasis: "GRID_AC", params: tight, policy: grid }).overLimitMin, 0, "grid-side assumption, grid-side actuator, variant " + v);
+  }
+  console.log("[gentle G5] " + n + " scenarios without demand above the forecast: the default basis crossed the limit in 0 runs with either actuator; tight cases (no margin, cap binding): a grid-side assumption under a battery-side actuator crossed it in " + exposed + " of 27 (" + minutes + " minutes with the setpoint above the limit), the default in 0; feasible-with-margin runs reaching the deadline with a battery-side actuator " + reachedBattery + " of " + feasible);
+  assert.ok(n >= 120, "scenarios: " + n);
+  assert.ok(exposed >= 15 && minutes > 1000, "the loop is able to expose a convention mismatch: " + exposed + " of 27, " + minutes + " minutes");
+  assert.ok(feasible >= 50 && reachedBattery >= feasible - 2, "the conservative default still reaches the deadline where the true battery can: " + reachedBattery + " of " + feasible);
+});
+
+// ---- G6: taper shapes the model does not assume ------------------------------------------------------------------------------------------
+type TaperMake = (sc: ReturnType<typeof makeScenario>) => TrueTaper;
+const TAPERS: readonly [string, TaperMake][] = [
+  ["LINEAR (the model's shape)", (sc) => sc.trueTaper],
+  ["CV_TAIL, tau 3, floor 0.05", (sc) => ({ startSocPct: Math.max(sc.trueTaper.startSocPct, 90), endFraction: 0.05, shape: "CV_TAIL", tauPct: 3 })],
+  ["CV_TAIL, tau 2, floor 0.03", (sc) => ({ startSocPct: Math.max(sc.trueTaper.startSocPct, 90), endFraction: 0.03, shape: "CV_TAIL", tauPct: 2 })],
+  ["CURRENT_ABSOLUTE, 60 % of the ceiling", (sc) => ({ startSocPct: sc.trueTaper.startSocPct, endFraction: sc.trueTaper.endFraction, shape: "CURRENT_ABSOLUTE", ratedW: 0.6 * sc.ceilW })],
+  ["CURRENT_ABSOLUTE, 85 % of the ceiling", (sc) => ({ startSocPct: sc.trueTaper.startSocPct, endFraction: sc.trueTaper.endFraction, shape: "CURRENT_ABSOLUTE", ratedW: 0.85 * sc.ceilW })],
+];
+
+test("[v3 G6a] the simulator's true taper has three shapes: the linear one the model assumes, a constant-voltage tail and a current-based limit independent of the ceiling", () => {
+  const sc0 = { ...makeScenario(1), ceilW: 6000, nominalKwh: 30, trueCapacityKwh: 30, trueEff: 1, dips: [] as [] };
+  const linear: TrueTaper = { startSocPct: 90, endFraction: 0.15 };
+  const cv: TrueTaper = { startSocPct: 90, endFraction: 0.05, shape: "CV_TAIL", tauPct: 3 };
+  const cur: TrueTaper = { startSocPct: 90, endFraction: 0.15, shape: "CURRENT_ABSOLUTE", ratedW: 4000 };
+  const A = (t: TrueTaper, soc: number, ceilW = 6000) => acceptW({ ceilW, trueTaper: t }, soc);
+  // the linear shape is exactly the original expression, and an explicit LINEAR label changes nothing
+  for (const soc of [10, 90, 92, 95, 99, 100]) {
+    assert.equal(A(linear, soc), 6000 * trueFraction(soc, linear));
+    assert.equal(A({ ...linear, shape: "LINEAR" }, soc), A(linear, soc));
+  }
+  // CV tail: the full ceiling to the start, then exp(-(soc - start) / tau) down to the floor, never rising
+  assert.equal(A(cv, 90), 6000);
+  assert.ok(Math.abs(A(cv, 93) - 6000 * Math.exp(-1)) < 1e-9);
+  assert.ok(Math.abs(A(cv, 96) - 6000 * Math.exp(-2)) < 1e-9);
+  assert.equal(A(cv, 100), 6000 * 0.05, "the floor");
+  for (let soc = 80; soc < 100; soc += 0.5) assert.ok(A(cv, soc + 0.5) <= A(cv, soc) + 1e-9, "never rising at " + soc);
+  assert.ok(A(cv, 95) < A(linear, 95) / 3, "far harsher than the linear shape at 95 %: " + A(cv, 95) + " vs " + A(linear, 95));
+  // current-based: its own limit, independent of the ceiling the model knows, linear above the start
+  assert.equal(A(cur, 50), 4000);
+  assert.equal(A(cur, 50, 8000), 4000, "the ceiling is irrelevant");
+  assert.equal(A(cur, 50, 3000), 4000, "and it may exceed it: the delivered power is then the setpoint's, which the loop caps by the ceiling");
+  assert.ok(Math.abs(A(cur, 95) - 4000 * trueFraction(95, cur)) < 1e-9);
+  // the shapes change the time the TRUE battery needs (the closed loop would be blind if they did not)
+  const base = { ...sc0, startSocPct: 80, targetSocPct: 100, dips: [] as [] };
+  const tL = trueFinishMin({ ...base, trueTaper: linear }, 6000) as number;
+  const tC = trueFinishMin({ ...base, trueTaper: cv }, 6000) as number;
+  const tR = trueFinishMin({ ...base, trueTaper: cur }, 6000) as number;
+  assert.ok(tC > tL + 20, "a CV tail takes much longer to 100 %: " + tC + " vs " + tL);
+  assert.ok(tR > tL + 15, "a lower current-based limit takes longer: " + tR + " vs " + tL);
+  // the feasibility class follows the true shape
+  const sc1 = { ...makeScenario(2), targetSocPct: 100, startSocPct: 50, bufferMin: 30, dips: [] as [] };
+  assert.ok(["margin", "tight", "buffer", "infeasible"].includes(feasibility({ ...sc1, trueTaper: cv })));
+});
+
+test("[v3 G6b] closed loop under taper shapes the model does NOT assume: the misses are counted and printed, a 100 % target that misses was flagged at risk before the deadline, and what this shows and does not show is stated", () => {
+  const rows: string[] = [];
+  const stat = { margin: 0, reached: 0, miss: 0, flagged: 0, miss100: 0, flagged100: 0, margin100: 0, linearMiss: 0 };
+  const unflagged: string[] = [];
+  for (const [name, mk] of TAPERS) {
+    let n = 0, margin = 0, reached = 0, miss = 0, flagged = 0, margin100 = 0, miss100 = 0, flagged100 = 0;
+    for (let id = 0; id < 400; id++) {
+      const sc0 = makeScenario(id);
+      if (sc0.kind !== "in-band") continue;
+      const sc = { ...sc0, trueTaper: mk(sc0) };
+      n++;
+      if (feasibility(sc) !== "margin") continue;   // what the TRUE battery, with ITS shape, can do at the full ceiling with time to spare
+      margin++;
+      const is100 = sc.targetSocPct >= 100;
+      if (is100) margin100++;
+      const run = runClosedLoop(sc);
+      for (const tk of run.ticks) { assert.equal(tk.decision.guarantee, "NONE"); assert.equal(tk.decision.targetSocPct, sc.targetSocPct); assert.equal(tk.decision.actuationSupported, false); }
+      if (run.reachedTolMin !== null && run.reachedTolMin <= run.deadlineMin) { reached++; continue; }
+      miss++;
+      if (is100) miss100++;
+      const early = run.ticks.some((tk) => tk.t <= run.deadlineMin && (tk.decision.status === "TARGET_AT_RISK" || tk.decision.status === "TARGET_UNREACHABLE"));
+      if (early) { flagged++; if (is100) flagged100++; } else unflagged.push(name + " scenario " + id + " target " + sc.targetSocPct);
+      // A miss with a buffer of 0 has no tick after the deadline (it is the window end), so a miss that was not flagged before it is NOT claimed away: it is listed below.
+    }
+    rows.push(name.padEnd(40) + " in-band " + n + ", true battery feasible with margin " + margin + ": reached by the deadline " + reached + ", MISSED " + miss + " (flagged at risk before the deadline " + flagged + "); 100 % targets: " + margin100 + " feasible, missed " + miss100 + ", flagged " + flagged100);
+    if (name.startsWith("LINEAR")) { stat.linearMiss = miss; assert.equal(miss, 0, "the model's own shape: every feasible-with-margin run reaches the target by the deadline (the existing claim)"); }
+    else { stat.margin += margin; stat.reached += reached; stat.miss += miss; stat.flagged += flagged; stat.miss100 += miss100; stat.flagged100 += flagged100; stat.margin100 += margin100; }
+  }
+  for (const r of rows) console.log("[gentle taper] " + r);
+  console.log("[gentle taper] shapes the model does not assume: " + stat.margin + " feasible-with-margin runs, " + stat.miss + " missed the deadline (" + (100 * stat.miss / stat.margin).toFixed(1) + " %), " + stat.flagged + " of them flagged at risk before the deadline; 100 % targets: " + stat.miss100 + " missed, " + stat.flagged100 + " flagged; not flagged before the deadline: " + (unflagged.length === 0 ? "none" : unflagged.join("; ")));
+  // the closed loop must be CAPABLE of exposing a wrong taper assumption: misses exist, and they are mostly 100 % targets
+  assert.ok(stat.miss >= 20, "the shapes expose misses: " + stat.miss);
+  assert.ok(stat.miss100 >= 20 && stat.miss100 >= 0.7 * stat.miss, "a harsh taper hits the 100 % targets: " + stat.miss100 + " of " + stat.miss);
+  // and the honest report the owner asked for: a 100 % target that is missed under a harsh taper was flagged TARGET_AT_RISK or TARGET_UNREACHABLE before the deadline
+  assert.equal(stat.flagged100, stat.miss100, "every missed 100 % target was flagged at risk before the deadline");
+  assert.ok(unflagged.length <= 0.1 * stat.miss, "a miss that was not flagged before the deadline is rare and printed: " + unflagged.join("; "));
+  // the claim that is NOT made here: that the assumed taper is right (it is unmeasured), or that these shapes resemble the real BMS
+  assert.match(NO_GUARANTEE_NOTE, /assumed/i);
+});
+
+// ---- G7: the minors ----------------------------------------------------------------------------------------------------------------------
+
+test("[v3 G7 m1] a finish that lands after a FRACTIONAL horizon is late, never on time", () => {
+  const m: ChargeModel = { capacityKwh: 30, chargeEff: 0.95, ceilingW: 8000, taperStartSocPct: 90, taperEndFraction: 0.15 };
+  // 7600 W gives about 0.401 points a minute: from 79.5 to 80 takes 1.2465 minutes
+  const full = projectCharge(79.5, 7600, 80, m, 5).finishMin as number;
+  assert.ok(Math.abs(full - 1.2465) < 0.002, "closed form: " + full);
+  assert.equal(projectCharge(79.5, 7600, 80, m, 1.2).finishMin, null, "1.2465 min is after a horizon of 1.2 min (it used to count as on time)");
+  assert.equal(projectCharge(79.5, 7600, 80, m, 1.2464).finishMin, null);
+  assert.ok(projectCharge(79.5, 7600, 80, m, 1.3).finishMin !== null);
+  assert.equal(projectCharge(79.5, 7600, 80, m, 2).finishMin, full, "a whole-minute horizon is unchanged");
+  assert.equal(projectCharge(79.5, 7600, 80, m, 1).finishMin, null);
+  // through the controller: a fractional elapsed time never lets a late step through as the lowest step, and an at-risk reason is never the budget's when nothing is held
+  let checked = 0;
+  for (let k = 0; k < 900; k++) {
+    const elapsed = 20 + k * 0.31;
+    const socPct = 25 + (k % 37) * 0.7;
+    const d = plan({ elapsedMin: elapsed, socPct, targetSocPct: 90, bufferMin: 60 });
+    if (d.status === "NO_DATA" || d.status === "NOTHING_TO_CHARGE" || d.status === "DEADLINE_PASSED") continue;
+    checked++;
+    if (d.neededW !== null) {
+      assert.equal(d.change, "START");
+      assert.equal(d.status, "OK", "elapsed " + elapsed + " soc " + socPct + ": the lowest step makes the deadline, nothing is held: " + d.reasons.join(" | "));
+      assert.ok((d.marginMin as number) >= -0.11, "margin " + d.marginMin + " at elapsed " + elapsed);
+    }
+  }
+  assert.ok(checked > 400, "checked " + checked);
+});
+
+test("[v3 G7 m2] a fallback never holds anything after the window ends, and says so when it holds a rate inside the buffer", () => {
+  for (const policy of ["KEEP_CURRENT", "USE_STATIC_PLAN"] as const) {
+    for (const elapsedMin of [360, 361, 400]) {
+      const d = plan({ socAgeMin: 99, elapsedMin, currentSetpointW: 3000, staticPlanRateW: 4000, policy: { fallbackPolicy: policy } });
+      assert.equal(d.status, "NO_DATA");
+      assert.equal(d.fallback.applied, true);
+      assert.equal(d.fallback.setpointW, null, policy + " at " + elapsedMin + ": the window is over");
+      assert.match(d.fallback.reason, /window has ended/);
+    }
+    // a household input that cannot be checked after the window end: the same
+    const hh = hplan({ gridImportLimitW: 7000, demandProfile: flat(500), gridImportLimitAgeMin: 999 }, { elapsedMin: 370, currentSetpointW: 3000, staticPlanRateW: 4000, policy: { fallbackPolicy: policy } });
+    assert.equal(hh.fallback.setpointW, null);
+    // an unknown ceiling: still no recommendation (as before)
+    assert.equal(plan({ ceilings: [], elapsedMin: 100, currentSetpointW: 3000, policy: { fallbackPolicy: policy } }).fallback.setpointW, null);
+  }
+  // inside the finish-early buffer (the deadline is minute 300, the window ends at 360): the hold stands, labelled
+  const buf = plan({ socAgeMin: 99, elapsedMin: 310, currentSetpointW: 3000 });
+  assert.equal(buf.fallback.setpointW, 3000);
+  assert.match(buf.fallback.reason, /finish-early deadline has passed/);
+  assert.match(buf.fallback.reason, /does not plan for the deadline/);
+  const st = plan({ socAgeMin: 99, elapsedMin: 310, staticPlanRateW: 4000, policy: { fallbackPolicy: "USE_STATIC_PLAN" } });
+  assert.equal(st.fallback.setpointW, 4000);
+  assert.match(st.fallback.reason, /finish-early deadline has passed/);
+  // before the deadline: no such note, and the answer is the old one
+  const before = plan({ socAgeMin: 99, elapsedMin: 100, currentSetpointW: 3000 });
+  assert.equal(before.fallback.setpointW, 3000);
+  assert.doesNotMatch(before.fallback.reason, /deadline has passed/);
+  assert.equal(plan({ socAgeMin: 99, elapsedMin: 299, currentSetpointW: 3000 }).fallback.setpointW, 3000);
+  assert.equal(plan({ socAgeMin: 99, elapsedMin: 299.5, currentSetpointW: 3000 }).fallback.setpointW, 3000);
+});
+
+test("[v3 G7 m3] every recommended write is counted (the START and a safety decrease included) and none is ever blocked; a slew step smaller than the hysteresis is refused", () => {
+  const start = plan({ changesUsed: 6, totalChangesUsed: 9 });
+  assert.equal(start.change, "START");
+  assert.equal(start.changesUsed, 6, "the START is free in the ordinary budget (v1)");
+  assert.equal(start.totalChangesUsed, 10, "but it is a write: it counts in the total");
+  assert.equal(plan({ changesUsed: 2 }).totalChangesUsed, 3, "missing total = the ordinary count, plus this write");
+  const safety = plan({ currentSetpointW: 4800, lastChangeElapsedMin: 0, elapsedMin: 1, changesUsed: 6, totalChangesUsed: 12, ceilings: [{ name: "battery_max_charge", watts: 4000 }] });
+  assert.equal(safety.change, "DECREASE");
+  assert.ok((safety.setpointW as number) <= 4000, "a safety decrease is never blocked by a spent budget");
+  assert.equal(safety.changesUsed, 6);
+  assert.equal(safety.totalChangesUsed, 13, "but it is counted");
+  const inc = plan({ currentSetpointW: 3000, socPct: 35, elapsedMin: 100, changesUsed: 2, totalChangesUsed: 5, lastChangeElapsedMin: 0 });
+  assert.equal(inc.change, "INCREASE");
+  assert.equal(inc.changesUsed, 3);
+  assert.equal(inc.totalChangesUsed, 6);
+  const held = plan({ currentSetpointW: 3000, socPct: 35, elapsedMin: 100, changesUsed: 6, totalChangesUsed: 8, lastChangeElapsedMin: 0 });
+  assert.equal(held.change, "NONE");
+  assert.equal(held.totalChangesUsed, 8, "no write, no count");
+  for (const bad of [{ changesUsed: 3, totalChangesUsed: 2 }, { totalChangesUsed: 1.5 }, { totalChangesUsed: -1 }, { totalChangesUsed: NaN }] as Partial<GentleInput>[]) assert.equal(plan(bad).status, "INVALID", JSON.stringify(bad));
+  assert.equal(plan({ targetSocPct: 9, changesUsed: 3 }).totalChangesUsed, 3);
+  // the slew: a step smaller than the hysteresis could never save the hysteresis
+  for (const params of [{ maxDecreaseStepW: 100 }, { maxDecreaseStepW: 400, hysteresisW: 500 }, { maxDecreaseStepW: 900, hysteresisW: 1000 }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
+  assert.match(plan({ params: { maxDecreaseStepW: 100 } }).reasons.join(" "), /maxDecreaseStepW must be at least hysteresisW/);
+  for (const params of [{ maxDecreaseStepW: 500, hysteresisW: 500 }, { maxDecreaseStepW: 1000 }, { maxDecreaseStepW: 100, hysteresisW: 0 }, { hysteresisW: 9000 }]) assert.equal(plan({ params }).status, "OK", JSON.stringify(params));
+});
+
+test("[v3 G7 m4] a setpoint in force with nothing (more) to charge or the window over is a STOP, told apart from no data; nothing else changes", () => {
+  const done = plan({ socPct: 85, targetSocPct: 80, currentSetpointW: 4000 });
+  assert.equal(done.status, "NOTHING_TO_CHARGE");
+  assert.equal(done.stopRecommended, true);
+  assert.equal(done.setpointW, null);
+  assert.equal(done.change, "NONE", "the v1 fields are untouched");
+  assert.equal(done.changeRecommended, false);
+  assert.equal(plan({ socPct: 85, targetSocPct: 80, currentSetpointW: null }).stopRecommended, false);
+  assert.equal(plan({ socPct: 85, targetSocPct: 80, currentSetpointW: 0 }).stopRecommended, false);
+  const over = plan({ elapsedMin: 400, currentSetpointW: 3000 });
+  assert.equal(over.status, "DEADLINE_PASSED");
+  assert.equal(over.stopRecommended, true);
+  assert.equal(plan({ elapsedMin: 400, currentSetpointW: null }).stopRecommended, false);
+  // no data is not a stop, and the buffer is not a stop (the ceiling is the best effort there)
+  assert.equal(plan({ socPct: null, currentSetpointW: 3000 }).stopRecommended, false);
+  assert.equal(plan({ elapsedMin: 310, currentSetpointW: 3000 }).stopRecommended, false);
+  assert.equal(plan({ currentSetpointW: 3000, elapsedMin: 100, socPct: 45 }).stopRecommended, false);
+  assert.equal(plan().stopRecommended, false);
+});
+
+test("[v3 G7 m5] a hold that waits out the dwell projects the raise the model will actually make (the lowest step), not a raise to the ceiling", () => {
+  const G: HouseholdInput = { gridImportLimitW: 30000, demandProfile: flat(500) };
+  const st = (soc: number, since: number) => hplan(G, { currentSetpointW: 3000, lastChangeElapsedMin: 60 - since, elapsedMin: 60, socPct: soc });
+  let waits = 0;
+  for (const soc of [32, 33, 34, 35, 36, 37]) {
+    const d = st(soc, 5);
+    if (!d.codes.includes("HELD_DWELL")) continue;
+    waits++;
+    assert.ok((d.marginMin as number) >= -0.11, "soc " + soc + ": " + d.marginMin);
+    assert.ok((d.marginMin as number) < 10, "soc " + soc + ": the margin of a raise to the ceiling would be 15 min or more, this is the lowest step's: " + d.marginMin);
+    assert.equal(d.status, "OK");
+  }
+  assert.ok(waits >= 3, "waits exercised: " + waits);
+});
+
+test("[v3 G7 m6] a second SOC reading must be consistent with the first: not far below it, not further above it than a charge could carry it; a clock that went backwards is INVALID", () => {
+  const PS = (soc: number, prev: { socPct: number; elapsedMin: number } | null | undefined, over: Partial<GentleInput> = {}) => plan({ socPct: soc, previousSoc: prev, elapsedMin: 100, currentSetpointW: 3000, lastChangeElapsedMin: 50, ...over });
+  const prev = { socPct: 40, elapsedMin: 90 };
+  assert.equal(PS(41, prev).status, "OK");
+  assert.equal(PS(37, prev).status, "OK", "exactly the regression tolerance of 3 points is plausible");
+  const down = PS(36.9, prev);
+  assert.equal(down.status, "NO_DATA");
+  assert.ok(down.codes.includes("SOC_IMPLAUSIBLE"));
+  assert.equal(down.setpointW, null);
+  assert.equal(down.fallback.applied, true);
+  assert.match(down.reasons.join(" "), /below the previous one/);
+  // 10 minutes at up to 60 points an hour is 10 points, plus the 1 point resolution and the 3 point tolerance: 14
+  assert.equal(PS(54, prev).status, "OK");
+  const up = PS(54.5, prev);
+  assert.equal(up.status, "NO_DATA");
+  assert.ok(up.codes.includes("SOC_IMPLAUSIBLE"));
+  assert.match(up.reasons.join(" "), /could carry it/);
+  assert.equal(PS(44, { socPct: 40, elapsedMin: 100 }).status, "OK", "the same minute: the resolution and the tolerance only");
+  assert.equal(PS(44.5, { socPct: 40, elapsedMin: 100 }).status, "NO_DATA");
+  assert.equal(PS(60, { socPct: 40, elapsedMin: 40 }).status, "OK", "60 minutes later 20 points is within 60 points an hour");
+  // no previous reading: no check; a stale or unknown current reading is the old NO_DATA with its own code
+  assert.equal(PS(60, null).status, "OK");
+  assert.equal(PS(60, undefined).status, "OK");
+  assert.ok(PS(20, null, { socAgeMin: 99 }).codes.includes("STALE_SOC"));
+  // a bad second reading or a clock that went backwards is INVALID, never guessed around
+  for (const bad of [{ socPct: 40, elapsedMin: 150 }, { socPct: 140, elapsedMin: 90 }, { socPct: NaN, elapsedMin: 90 }, { socPct: 40, elapsedMin: -1 }, "x", { socPct: 40 }] as unknown[]) assert.equal(PS(41, bad as { socPct: number; elapsedMin: number }).status, "INVALID", JSON.stringify(bad));
+  for (const params of [{ socRegressionTolPct: -1 }, { socRegressionTolPct: 51 }, { socJumpPctPerHour: 0 }, { socJumpPctPerHour: 1001 }, { socJumpPctPerHour: NaN }]) assert.equal(plan({ params }).status, "INVALID", JSON.stringify(params));
+  assert.equal(DEFAULT_GENTLE_PARAMS.socRegressionTolPct, 3);
+  assert.equal(DEFAULT_GENTLE_PARAMS.socJumpPctPerHour, 60);
+  assert.equal(PS(50, prev, { params: { socJumpPctPerHour: 30 } }).status, "NO_DATA", "the rate is a parameter: 5 + 1 + 3 = 9 points allowed, 10 are not");
+  assert.equal(PS(50, prev, { params: { socJumpPctPerHour: 40 } }).status, "OK", "6.7 + 1 + 3 = 10.7 points allowed");
+});
+
+test("[v3 G7 m7] a window that starts exactly at the clock change, or inside the hour a spring change skips, has an ambiguous real length: unknown, nothing is recommended", () => {
+  const T = TIME as unknown as { ambiguousClockStart: (startMin: number, day: ClockDay) => boolean };
+  // spring forward (the hour 120-179 does not exist), autumn back (the change minute is ambiguous), an ordinary day
+  for (const start of [120, 121, 150, 179]) assert.equal(T.ambiguousClockStart(start, SPRING), true, "spring " + start);
+  for (const start of [119, 180, 0, 22 * 60]) assert.equal(T.ambiguousClockStart(start, SPRING), false, "spring " + start);
+  assert.equal(T.ambiguousClockStart(120, AUTUMN), true);
+  for (const start of [60, 90, 119, 121, 0, 22 * 60]) assert.equal(T.ambiguousClockStart(start, AUTUMN), false, "autumn " + start + " (the repeated hour is read as the first pass: an open ruling)");
+  for (const start of [0, 120, 150, 1439]) assert.equal(T.ambiguousClockStart(start, ORDINARY), false);
+  assert.equal(T.ambiguousClockStart(NaN, SPRING), false);
+  // the window length is unknown for such a start, and an ordinary start is unchanged
+  assert.equal(windowRealMinutes(120, 4 * 60, SPRING), null);
+  assert.equal(windowRealMinutes(150, 4 * 60, SPRING), null);
+  assert.equal(windowRealMinutes(120, 4 * 60, AUTUMN), null);
+  assert.equal(windowRealMinutes(22 * 60, 4 * 60, SPRING), 300);
+  assert.equal(windowRealMinutes(22 * 60, 4 * 60, AUTUMN), 420);
+  assert.equal(windowRealMinutes(60, 4 * 60, AUTUMN), 180 + 60, "inside the repeated hour: read as the first pass, so the repeat is counted");
+  for (const [start, day] of [[120, SPRING], [150, SPRING], [179, SPRING], [120, AUTUMN]] as [number, ClockDay][]) {
+    const d = plan({ chargeWindow: { startMin: start, endMin: 6 * 60, clockDay: day }, currentSetpointW: 3000 });
+    assert.equal(d.status, "INVALID", start + " " + day.deltaMin);
+    assert.equal(d.setpointW, null);
+    assert.equal(d.changeRecommended, false);
+    assert.match(d.reasons.join(" "), /ambiguous/);
+    assert.equal(d.fallback.applied, false, "an invalid input has no fallback");
+  }
+  assert.equal(plan({ chargeWindow: { startMin: 22 * 60, endMin: 6 * 60, clockDay: SPRING } }).status, "OK");
+  assert.equal(plan({ chargeWindow: { startMin: 60, endMin: 6 * 60, clockDay: AUTUMN } }).status, "OK");
+  assert.equal(plan({ chargeWindow: { startMin: 119, endMin: 9 * 60, clockDay: SPRING } }).status, "OK");
+});
+
+test("[v3 G7 m8] the wording claims no more than the model can know: the note does not say 100 percent cannot be reached, the header scopes 'safe limit' to the model's estimate, the README says what is not observed", () => {
+  assert.doesNotMatch(NO_GUARANTEE_NOTE, /cannot be reached/);
+  assert.match(NO_GUARANTEE_NOTE, /NOT guaranteed/);
+  assert.match(NO_GUARANTEE_NOTE, /100 percent/);
+  assert.match(NO_GUARANTEE_NOTE, /not measured/);
+  assert.match(NO_GUARANTEE_NOTE, /fixed rate/);
+  assert.match(NO_GUARANTEE_NOTE, /taper/);
+  assert.match(NO_GUARANTEE_NOTE, /read-only/);
+  const raw = readFileSync(new URL("../src/gentleController.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(raw, /never exceeds a safe limit/);
+  assert.match(raw, /as its inputs and assumptions state it/);
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.doesNotMatch(readme, /follows the real taper/);
+  assert.match(readme, /does not know the real taper or capacity/);
+  assert.doesNotMatch(readme, /cannot be reached at a fixed rate because the BMS tapers/);
+  assert.match(readme, /held back by the changes budget/, "the at-risk case held by the budget is listed with the statuses");
+  assert.match(readme, /model estimate/i);
+  for (const d of [plan(), plan({ socPct: null }), plan({ targetSocPct: 100, socPct: 40 })]) assert.equal(d.guaranteeNote, NO_GUARANTEE_NOTE);
+});
+
+test("[v3 G7 m9] a power ceiling taken from a current limit uses the lowest plausible voltage, and the amps the actuator would set never exceed the limit at any voltage", () => {
+  assert.equal(powerFromCurrent(60, 51.2), 3072, "no minimum voltage: unchanged");
+  assert.equal(powerFromCurrent(60, 56, 48), 2880, "the lower of the two voltages");
+  assert.equal(powerFromCurrent(60, 44, 48), 2640);
+  assert.equal(powerFromCurrent(60, 51.2, null), 3072);
+  for (const bad of [0, -1, NaN, Infinity]) assert.equal(powerFromCurrent(60, 51.2, bad), null, "a minimum voltage that is not a positive number is unknown: " + bad);
+  assert.equal(powerFromCurrent(null, 51.2, 48), null);
+  // at the high voltage the ceiling asks for more amps than the limit allows at a lower one: capped
+  const hi = powerFromCurrent(60, 58) as number;
+  assert.equal(hi, 3480);
+  assert.ok(hi / 44 > 60, "the power from a high voltage would be " + (hi / 44).toFixed(1) + " A at 44 V");
+  assert.equal(G4.ampsFromPower(hi, 44, 60), 60);
+  assert.ok(Math.abs((G4.ampsFromPower(2640, 51.2, 60) as number) - 2640 / 51.2) < 1e-12);
+  assert.equal(G4.ampsFromPower(3000, 50, 60), 60);
+  assert.equal(G4.ampsFromPower(0, 50, 60), 0);
+  for (const bad of [[null, 50, 60], [3000, 0, 60], [3000, 50, -1], [3000, NaN, 60], [-5, 50, 60], [3000, 50, null]] as [unknown, unknown, unknown][]) assert.equal(G4.ampsFromPower(bad[0] as number, bad[1] as number, bad[2] as number), null, JSON.stringify(bad));
 });

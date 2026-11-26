@@ -224,6 +224,28 @@ What is not enforced and what is not proven is listed in `frontend/ecco-plan-cor
 
 **Stated limitation.** Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
 
+**Reserves, installed status and the compact layout (card fixes after the first install).** Prepare for power cut shows two figures side by side:
+`Reserve now` (your backup reserve helper, read the way the installed scripts read it: any number from 0 to 100, so 5 % is a valid reserve; the
+plan settings model's own 10 % floor is not applied to it) and `Power cut target` (the owner's limit, 10 to 100). An override can only raise a
+reserve, so Prepare for power cut is offered only while the target is strictly above your reserve ROUNDED UP, because the installed effective-reserve
+sensor rounds your reserve up (79.5 is published as 80, so a target of 80 over it raises nothing; the installed script would still accept it and the
+card does not offer it; an equal target is not offered either). Hold battery and Skip tonight never depend on the reserve. A reserve that cannot be
+read, or is not from 0 to 100, hides the control and says why. Two reserves can differ while an override is held, so the card never lets them share
+a label: while any override record is active or held, or whenever the installed effective-reserve sensor reads a figure other than yours, your
+figure is labelled `Your reserve` and `Plan reserve now` (the reserve ECCO's plan uses, read from `sensor.ecco_plan_effective_reserve`; "unknown"
+with the reason when it cannot be read) stands beside it; otherwise `Reserve now` stands alone. The Tomorrow's Plan summary always says
+`Your reserve`. Whether the overrides are installed is read from the entities that exist in Home Assistant (the two plan scripts, the confirmation
+switch, the two plan sensors and, when configured, the guarded Dump to Grid start script). The status line says "Overrides ready." only when every
+one of them is found and the stored plan revision can be read; it asks you to turn on the confirmation switch; it says "Overrides only partly
+ready. Not found: ..." (in the warning colour) when a plan sensor or the guarded Dump start script is missing; it says the plan revision cannot
+be read (the installed start script then refuses every start) when it cannot; it names the one guarded script that is missing when only one is
+("Only part of the override package is installed: ... was not found"); and it says the overrides are not installed only when BOTH guarded scripts
+are absent. With the plan helpers present the Plan section is compact: Tomorrow's Plan, Why?, the planned settings, the override limits and the
+six-slot timeline sit behind closed details, each with a one-line summary, while the start choices, Cancel, the reserve figures and the stated
+limitation stay visible; because Start and Cancel work there, the "Status only" line of the read-only record view is replaced, in the override
+limits fold, by a note about the list of records alone (shown only when a record exists). Without the plan helpers the read-only section keeps
+its former markup, and with `show_plan` off the card renders exactly as before.
+
 **Guarded manual Dump to Grid start.** Set `dump_to_grid.guarded_start: script.ecco_dump_to_grid_start_guarded`
 (`home-assistant/packages/ecco_dump_to_grid_guarded_start.yaml`) and the Start button calls ONLY that script, which refuses while an override
 holds export or the staged Stop SOC is below the effective reserve, and otherwise presses the same start button itself. A `guarded_start`

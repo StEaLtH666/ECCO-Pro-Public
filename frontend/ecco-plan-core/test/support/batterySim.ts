@@ -6,7 +6,7 @@
 // model on purpose. Seeded: the same scenario id always gives the same run.
 import { createHash } from "node:crypto";
 import { planGentle, DEFAULT_GENTLE_PARAMS } from "../../src/gentleController.ts";
-import type { GentleDecision, GentleInput, GentleParams, GentlePolicy, HouseholdInput, NamedCeiling, StepPoint } from "../../src/gentleController.ts";
+import type { GentleDecision, GentleInput, GentleParams, GentlePolicy, HouseholdInput, NamedCeiling, PowerBasis, StepPoint } from "../../src/gentleController.ts";
 import { planGentleCharge } from "../../src/chargePlanner.ts";
 import { elapsedMinutes, norm } from "../../src/time.ts";
 import type { ClockDay } from "../../src/time.ts";
@@ -16,9 +16,23 @@ const SPRING: ClockDay = { changeAtMin: 120, deltaMin: 60 };
 const AUTUMN: ClockDay = { changeAtMin: 120, deltaMin: -60 };
 const ORDINARY: ClockDay = { changeAtMin: 0, deltaMin: 0 };
 
+/**
+ * The shape of the TRUE battery's acceptance above its taper start. LINEAR is the shape the controller model assumes (acceptance falls linearly from the
+ * ceiling to `endFraction` x ceiling at 100 %). The other two are what the closed loop uses to show what a WRONG taper assumption costs:
+ *  - CV_TAIL: a constant-voltage tail, the acceptance decays exponentially above the start (`tauPct` SOC points per e-fold) down to `endFraction`;
+ *  - CURRENT_ABSOLUTE: a current-based limit of the battery itself, `ratedW` at and below the start and falling linearly above it, independent of the
+ *    ceiling the model knows (a BMS limit lower than every ceiling the caller can read).
+ */
+export type TaperShape = "LINEAR" | "CV_TAIL" | "CURRENT_ABSOLUTE";
 export interface TrueTaper {
   startSocPct: number;
   endFraction: number;
+  /** Default LINEAR. */
+  shape?: TaperShape;
+  /** CV_TAIL: SOC percentage points per e-fold of the acceptance above the start. */
+  tauPct?: number;
+  /** CURRENT_ABSOLUTE: the battery's own limit in W, independent of the ceiling. */
+  ratedW?: number;
 }
 export interface Dip {
   fromMin: number;
@@ -60,6 +74,14 @@ export interface Scenario {
 }
 
 export const trueFraction = (soc: number, t: TrueTaper) => (soc <= t.startSocPct ? 1 : Math.max(t.endFraction, 1 - (1 - t.endFraction) * ((soc - t.startSocPct) / (100 - t.startSocPct))));
+
+/** The acceptance power of the TRUE battery at a SOC, in the unit of the delivered power. LINEAR is exactly the original expression (the golden master depends on it). */
+export function acceptW(sc: Pick<Scenario, "ceilW" | "trueTaper">, soc: number): number {
+  const t = sc.trueTaper;
+  if (t.shape === "CV_TAIL") return sc.ceilW * (soc <= t.startSocPct ? 1 : Math.max(t.endFraction, Math.exp(-(soc - t.startSocPct) / (t.tauPct ?? 3))));
+  if (t.shape === "CURRENT_ABSOLUTE") return (t.ratedW ?? sc.ceilW) * trueFraction(soc, t);
+  return sc.ceilW * trueFraction(soc, t);
+}
 
 export function makeScenario(id: number): Scenario {
   const r = rng(9000 + id);
@@ -115,7 +137,7 @@ const dipFactor = (sc: Scenario, t: number) => sc.dips.reduce((f, d) => (t >= d.
 
 /** Deliver one real minute at `appliedW`: grid-side watts, limited by the true acceptance and any dip. Returns the new true SOC. */
 function physics(sc: Scenario, soc: number, appliedW: number, t: number): number {
-  const delivered = Math.min(appliedW * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
+  const delivered = Math.min(appliedW * dipFactor(sc, t), acceptW(sc, soc));
   return Math.min(100, soc + (((delivered / 1000 / 60) * sc.trueEff) / (sc.trueCapacityKwh / 100)));
 }
 
@@ -324,7 +346,7 @@ export interface HouseholdSpec {
   noise: number;
   demandStaleProb: number;
   forecastPeakW: number;
-  /** A lower bound of the controller's cap derived here: the grid limit minus the margin on the largest demand the controller can see, no solar counted, floored to 100 W. */
+  /** A lower bound of the controller's cap derived here: the grid limit minus the margin on the largest demand the controller can see, no solar counted, times the conversion efficiency of an unsettled setpoint basis, floored to 100 W. */
   capLowW: number;
 }
 export interface HouseholdScenario extends Scenario {
@@ -375,7 +397,8 @@ export function makeHouseholdScenario(id: number): HouseholdScenario {
   }
   const marginPct = 20;
   const gridLimitW = Math.round(((1 + marginPct / 100) * upper + sc.ceilW * between(0.6, 1.7)) / 100) * 100;
-  const capLowW = Math.max(0, Math.floor((gridLimitW - (1 + marginPct / 100) * upper) / 100 + 1e-9) * 100);
+  // v3 G5: the controller's default setpoint basis is UNSETTLED, so its cap is the conversion efficiency times the grid-side headroom
+  const capLowW = Math.max(0, Math.floor(((gridLimitW - (1 + marginPct / 100) * upper) * DEFAULT_GENTLE_PARAMS.setpointConversionEff) / 100 + 1e-9) * 100);
   const solarConf = [0.5, 0.7, 0.9][Math.floor(r() * 3)] as number;
   const demandStaleProb = r() < 0.5 ? 0 : 0.15;
   return { ...sc, hh: { demandKind, solarKind, gridLimitW, marginPct, demandForecast, demandFactor, spikes, solarForecast, solarFactor, solarConf, noise, demandStaleProb, forecastPeakW, capLowW } };
@@ -411,6 +434,12 @@ export interface HouseholdRun extends RunResult {
 }
 
 export interface HouseholdRunOptions {
+  /**
+   * What the actuator does with the recommended setpoint in this simulated world (default GRID_AC: the setpoint is grid-side watts, the convention the
+   * model's own arithmetic shares). BATTERY_DC: the setpoint is battery-side watts, so the grid import is setpoint / true efficiency + demand - solar and
+   * the SOC gain is the setpoint itself: a convention that DIFFERS from the one the old model assumed, so a cap that rests on the wrong one is exposed.
+   */
+  applyBasis?: PowerBasis;
   params?: Partial<GentleParams>;
   policy?: Partial<GentlePolicy>;
   staticRateW?: number | null;
@@ -446,6 +475,7 @@ export function runHouseholdLoop(sc: HouseholdScenario, controller: typeof planG
   let firstStatus = "";
   let done = false;
   const jitter = (x: number) => Math.max(0, x * (1 + hs.noise * (2 * rh() - 1)));
+  const battery = opt.applyBasis === "BATTERY_DC";
   for (let t = 0; t <= sc.windowRealMin; t++) {
     if (reachedTol === null && soc >= sc.targetSocPct - tol) reachedTol = t;
     if (reachedStrict === null && soc >= sc.targetSocPct - 1e-9) reachedStrict = t;
@@ -458,9 +488,9 @@ export function runHouseholdLoop(sc: HouseholdScenario, controller: typeof planG
       const stale = rh() < hs.demandStaleProb;
       let household: HouseholdInput = {
         gridImportLimitW: hs.gridLimitW,
-        demandNowW: jitter(trueDemandW(hs, t)), demandAgeMin: stale ? 40 : 0, demandProfile: rebase(hs.demandForecast, t, sc.windowRealMin),
+        demandNowW: jitter(trueDemandW(hs, t)), demandAgeMin: stale ? 40 : 0, demandProfile: rebase(hs.demandForecast, t, sc.windowRealMin), demandProfileAgeMin: 0,
       };
-      if (hs.solarKind !== "none") household = { ...household, solarNowW: jitter(trueSolarW(hs, t)), solarAgeMin: 0, solarProfile: rebase(hs.solarForecast, t, sc.windowRealMin), solarConfidence: hs.solarConf };
+      if (hs.solarKind !== "none") household = { ...household, solarNowW: jitter(trueSolarW(hs, t)), solarAgeMin: 0, solarProfile: rebase(hs.solarForecast, t, sc.windowRealMin), solarProfileAgeMin: 0, solarConfidence: hs.solarConf };
       if (opt.tweak) household = opt.tweak(household, t);
       const d = controller({
         targetSocPct: sc.targetSocPct, bufferMin: sc.bufferMin,
@@ -490,13 +520,17 @@ export function runHouseholdLoop(sc: HouseholdScenario, controller: typeof planG
     }
     const dem = trueDemandW(hs, t);
     const sol = trueSolarW(hs, t);
-    const want = Math.min((applied ?? 0) * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
-    const room = Math.max(0, hs.gridLimitW - dem + sol);
-    if (applied !== null && applied > 0 && applied + dem - sol > hs.gridLimitW + 1e-6) overLimit++;
+    const want = Math.min((applied ?? 0) * dipFactor(sc, t), acceptW(sc, soc));
+    // grid-side room under the physical limit, in the unit of `want` (battery-side watts in the BATTERY_DC world)
+    const gridRoom = Math.max(0, hs.gridLimitW - dem + sol);
+    const room = battery ? gridRoom * sc.trueEff : gridRoom;
+    const draw = (w: number) => (battery ? w / sc.trueEff : w);
+    if (applied !== null && applied > 0 && draw(applied) + dem - sol > hs.gridLimitW + 1e-6) overLimit++;
     if (room < want - 1e-9) clipped++;
     const delivered = Math.min(want, room);
-    if (delivered + dem - sol > maxImport) maxImport = delivered + dem - sol;
-    soc = Math.min(100, soc + (((delivered / 1000 / 60) * sc.trueEff) / (sc.trueCapacityKwh / 100)));
+    if (draw(delivered) + dem - sol > maxImport) maxImport = draw(delivered) + dem - sol;
+    // grid convention: the charger loses (1 - eff) between the grid and the battery; battery convention: the setpoint IS the battery power
+    soc = Math.min(100, soc + (((delivered / 1000 / 60) * (battery ? 1 : sc.trueEff)) / (sc.trueCapacityKwh / 100)));
   }
   return { sc, deadlineMin: sc.windowRealMin - sc.bufferMin, reachedTolMin: reachedTol, reachedStrictMin: reachedStrict, finalSocPct: soc, peakW: peak, ticks, changes, firstStatus, overLimitMin: overLimit, clippedMin: clipped, maxImportW: maxImport, jumps, slewLimited: slew, fallbackTicks };
 }
@@ -514,7 +548,7 @@ export function runStaticHH(sc: HouseholdScenario): { rateW: number; reachedTolM
     if (reached === null && soc >= sc.targetSocPct - tol) reached = t;
     const dem = trueDemandW(hs, t);
     const sol = trueSolarW(hs, t);
-    const want = Math.min(st.rateW * dipFactor(sc, t), sc.ceilW * trueFraction(soc, sc.trueTaper));
+    const want = Math.min(st.rateW * dipFactor(sc, t), acceptW(sc, soc));
     const room = Math.max(0, hs.gridLimitW - dem + sol);
     if (st.rateW > 0 && st.rateW + dem - sol > hs.gridLimitW + 1e-6) over++;
     if (room < want - 1e-9) clipped++;

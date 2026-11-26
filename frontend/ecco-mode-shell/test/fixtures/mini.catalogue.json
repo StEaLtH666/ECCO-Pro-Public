@@ -1,0 +1,182 @@
+{
+  "schema": "ecco-geek-catalogue/1",
+  "view_id": "intelligence",
+  "title": "ECCO Intelligence",
+  "contract": "ecco-intel-entities/1",
+  "groups": [
+    { "id": "headline", "title": "Headline signals", "order": 1, "description": "The few signals that say whether the advice can be trusted right now." },
+    { "id": "advice", "title": "Advice and forecasts", "order": 2, "description": "What the engine would advise, with ranges." },
+    { "id": "health", "title": "Freshness and health", "order": 3, "description": "Data quality, freshness and the watchdog." },
+    { "id": "controls", "title": "Controls and automations", "order": 4, "description": "The pause helper and the package alert automations." },
+    { "id": "discovered", "title": "Discovered (not yet catalogued)", "order": 90, "description": "Entities with an ecco_intel_ prefix that this catalogue does not describe yet." }
+  ],
+  "sources": [
+    {
+      "id": "S01", "entity_id": "sensor.ecco_intel_status", "group": "headline", "title": "Status",
+      "description": "The overall result of the last advice cycle.", "priority": "headline", "unit": null,
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "contract_version", "description": "Output contract the entities follow.", "unit": null, "priority": "normal" },
+        { "name": "mode", "description": "Always SHADOW in this release.", "unit": null, "priority": "normal" },
+        { "name": "applies_nothing", "description": "True while nothing is applied.", "unit": null, "priority": "headline" },
+        { "name": "generated_at", "description": "When the cycle produced this result.", "unit": null, "priority": "normal" },
+        { "name": "valid_until", "description": "When the result stops being current.", "unit": null, "priority": "normal" },
+        { "name": "next_run_at", "description": "Earliest time of the next cycle.", "unit": null, "priority": "normal" },
+        { "name": "git_sha", "description": "Source revision of the engine.", "unit": null, "priority": "obscure" },
+        { "name": "config_hash", "description": "Short fingerprint of the configuration.", "unit": null, "priority": "obscure" },
+        { "name": "provenance_ok", "description": "Whether the tariff provenance is verified.", "unit": null, "priority": "normal" },
+        { "name": "input_ages", "description": "Age of every input in seconds.", "unit": "s", "priority": "obscure" },
+        { "name": "decisions", "description": "Open and recorded decisions by label.", "unit": null, "priority": "normal" },
+        { "name": "accuracy.n", "description": "Number of scored forecasts.", "unit": null, "priority": "normal" },
+        { "name": "accuracy.coverage_7d", "description": "Share of the last seven days with a score.", "unit": null, "priority": "normal" },
+        { "name": "accuracy.mae_7d", "description": "Mean absolute error over seven days.", "unit": "kWh", "priority": "normal" },
+        { "name": "plan.precharge_by", "description": "Latest time to start charging.", "unit": null, "priority": "normal" },
+        { "name": "options", "description": "Allowed states of this sensor.", "unit": null, "priority": "obscure" },
+        { "name": "device_class", "description": "Home Assistant device class.", "unit": null, "priority": "obscure" },
+        { "name": "friendly_name", "description": "Home Assistant display name.", "unit": null, "priority": "obscure" }
+      ]
+    },
+    {
+      "id": "S02", "entity_id": "sensor.ecco_intel_charge_target", "group": "headline", "title": "Charge target",
+      "description": "The battery level the engine would aim for overnight (advice only).", "priority": "headline", "unit": "%",
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "advice.target_soc_pct", "description": "Advised target state of charge.", "unit": "%", "priority": "headline" },
+        { "name": "advice.window", "description": "The cheap charging window.", "unit": null, "priority": "normal" },
+        { "name": "advice.shortfall_soc_pct", "description": "Shortfall against the desired level.", "unit": "%", "priority": "normal" },
+        { "name": "reason_codes", "description": "Why this value was chosen.", "unit": null, "priority": "normal" },
+        { "name": "blockers", "description": "Conditions that block advice.", "unit": null, "priority": "normal" },
+        { "name": "confidence", "description": "Confidence label.", "unit": null, "priority": "normal" },
+        { "name": "engine_comparison.v1_target_soc_pct", "description": "What the first engine would have said.", "unit": "%", "priority": "obscure" },
+        { "name": "unit_of_measurement", "description": "Home Assistant unit.", "unit": null, "priority": "obscure" }
+      ]
+    },
+    {
+      "id": "S03", "entity_id": "sensor.ecco_intel_pv_tomorrow", "group": "advice", "title": "Solar tomorrow",
+      "description": "Forecast solar energy for tomorrow with a range.", "priority": "normal", "unit": "kWh",
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "p10", "description": "Pessimistic end of the range.", "unit": "kWh", "priority": "normal" },
+        { "name": "p90", "description": "Optimistic end of the range.", "unit": "kWh", "priority": "normal" },
+        { "name": "advice.p50", "description": "Middle of the range.", "unit": "kWh", "priority": "normal" },
+        { "name": "advice.notes", "description": "Free-text notes from the forecaster.", "unit": null, "priority": "obscure" }
+      ]
+    },
+    {
+      "id": "S04", "entity_id": "sensor.ecco_intel_overnight_demand", "group": "advice", "title": "Overnight demand",
+      "description": "Expected household demand overnight.", "priority": "normal", "unit": "kWh",
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "advice.expected_kwh", "description": "Expected demand.", "unit": "kWh", "priority": "normal" },
+        { "name": "advice.nights_used", "description": "Nights in the estimate.", "unit": null, "priority": "obscure" }
+      ]
+    },
+    {
+      "id": "S05", "entity_id": "sensor.ecco_intel_export_event", "group": "advice", "title": "Export event",
+      "description": "Advice for an export event (shadow only).", "priority": "normal", "unit": null,
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "simulated", "description": "True when the value is simulated.", "unit": null, "priority": "headline" },
+        { "name": "blockers", "description": "Conditions that block advice.", "unit": null, "priority": "normal" }
+      ]
+    },
+    {
+      "id": "S06", "entity_id": "sensor.ecco_intel_dump_to_grid", "group": "advice", "title": "Dump to grid",
+      "description": "Advice for dumping to the grid (shadow only).", "priority": "normal", "unit": null,
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "blockers", "description": "Conditions that block advice.", "unit": null, "priority": "normal" }
+      ]
+    },
+    {
+      "id": "S07", "entity_id": "sensor.ecco_intel_data_quality", "group": "health", "title": "Data quality",
+      "description": "How complete and recent the inputs are.", "priority": "headline", "unit": null,
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "reason_codes", "description": "Why the quality is what it is.", "unit": null, "priority": "normal" }
+      ]
+    },
+    {
+      "id": "S08", "entity_id": "sensor.ecco_intel_accuracy", "group": "health", "title": "Accuracy",
+      "description": "Recent forecast accuracy.", "priority": "normal", "unit": null,
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "n", "description": "Number of scored forecasts.", "unit": null, "priority": "normal" },
+        { "name": "coverage_7d", "description": "Share of the last seven days with a score.", "unit": null, "priority": "normal" }
+      ]
+    },
+    {
+      "id": "S09", "entity_id": "binary_sensor.ecco_intel_fresh", "group": "health", "title": "Integration reports fresh",
+      "description": "Whether the integration says its last result is current.", "priority": "normal", "unit": null,
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "generated_at", "description": "When the cycle produced the result.", "unit": null, "priority": "normal" },
+        { "name": "valid_until", "description": "When the result stops being current.", "unit": null, "priority": "normal" }
+      ]
+    },
+    {
+      "id": "S10", "entity_id": "binary_sensor.ecco_intel_watchdog_fresh", "group": "health", "title": "Watchdog",
+      "description": "Home Assistant's own check that a fresh, recognised result exists.", "priority": "headline", "unit": null,
+      "expected_update_s": null, "stale_after_s": null, "origin": "package",
+      "attributes": [
+        { "name": "icon", "description": "Home Assistant icon.", "unit": null, "priority": "obscure" }
+      ]
+    },
+    {
+      "id": "S11", "entity_id": "input_boolean.ecco_intel_paused", "group": "controls", "title": "Pause helper",
+      "description": "On while the owner has paused the advice (advice-side only).", "priority": "normal", "unit": null,
+      "expected_update_s": null, "stale_after_s": null, "origin": "package",
+      "attributes": [
+        { "name": "editable", "description": "Whether the helper can be edited in the UI.", "unit": null, "priority": "obscure" }
+      ]
+    },
+    {
+      "id": "S12", "entity_id": "automation.ecco_intel_alert_self_test_failed", "group": "controls", "title": "Alert: self-test failed",
+      "description": "Package automation that raises a notification when the self-test fails.", "priority": "obscure", "unit": null,
+      "expected_update_s": null, "stale_after_s": null, "origin": "package",
+      "attributes": [
+        { "name": "current", "description": "Number of running instances.", "unit": null, "priority": "obscure" },
+        { "name": "last_triggered", "description": "When it last ran.", "unit": null, "priority": "obscure" },
+        { "name": "mode", "description": "Automation run mode.", "unit": null, "priority": "obscure" },
+        { "name": "id", "description": "Automation id.", "unit": null, "priority": "obscure" }
+      ]
+    },
+    {
+      "id": "S13", "entity_id": "sensor.ecco_intel_predicted_morning_soc", "group": "advice", "title": "Predicted morning level",
+      "description": "Predicted battery level in the morning.", "priority": "normal", "unit": "%",
+      "expected_update_s": 300, "stale_after_s": 900, "origin": "integration",
+      "attributes": [
+        { "name": "verified", "description": "False when the prediction is not verified.", "unit": null, "priority": "normal" },
+        { "name": "p10", "description": "Pessimistic end of the range.", "unit": "%", "priority": "normal" }
+      ]
+    }
+  ],
+  "discover": {
+    "entity_prefixes": ["sensor.ecco_intel_", "binary_sensor.ecco_intel_", "input_boolean.ecco_intel_", "automation.ecco_intel_"],
+    "group": "discovered",
+    "exclude_entity_ids": ["sensor.ecco_intel_excluded_probe"]
+  },
+  "alerts": [
+    { "id": "A01", "severity": "critical", "entity_id": "sensor.ecco_intel_status", "when": { "state_in": ["SELF_TEST_FAILED"] },
+      "text": "The Intelligence self-test failed.", "action": "Do not rely on the advice. Check the Intelligence integration log." },
+    { "id": "A02", "severity": "critical", "entity_id": "sensor.ecco_intel_status", "when": { "unavailable": true },
+      "text": "ECCO Intelligence is not publishing.", "action": "Check that the integration is running." },
+    { "id": "A03", "severity": "warning", "entity_id": "binary_sensor.ecco_intel_watchdog_fresh", "when": { "state_in": ["off"] },
+      "text": "The watchdog says there is no fresh result.", "action": "Wait one cycle; if it stays, check the integration." },
+    { "id": "A04", "severity": "warning", "entity_id": "sensor.ecco_intel_status",
+      "when": { "state_not_in": ["OK", "NO_ADVICE", "BLOCKED", "INSUFFICIENT_DATA", "PAUSED", "STARTING"] },
+      "text": "The Intelligence status is not a recognised result.", "action": "Open Geek Mode to see the status details." },
+    { "id": "A05", "severity": "info", "entity_id": "input_boolean.ecco_intel_paused", "when": { "state_in": ["on"] },
+      "text": "Intelligence advice is paused.", "action": "Turn the pause off when you want advice again." },
+    { "id": "A06", "severity": "critical", "entity_id": "sensor.ecco_intel_status", "when": { "attribute": "applies_nothing", "in": ["false"] },
+      "text": "The output says it applies changes, which this release never does.", "action": "Stop and ask for help before relying on it." },
+    { "id": "A07", "severity": "info", "entity_id": "binary_sensor.ecco_intel_fresh", "when": { "state_in": ["off"] },
+      "text": "The integration reports its result is not fresh.", "action": "No action needed unless it stays that way." }
+  ],
+  "exceptions": [
+    { "id": "X1", "what": "Integration access token", "reason": "secret", "note": "Never exposed as an attribute; listed here so the ledger is complete." },
+    { "id": "X2", "what": "Home location", "reason": "privacy", "note": "Latitude and longitude are not shown." },
+    { "id": "X3", "what": "Inverter register dump", "reason": "unsupported_source", "note": "Not exposed as Home Assistant states." }
+  ],
+  "redaction": { "extra_key_patterns": ["site_owner"] }
+}
