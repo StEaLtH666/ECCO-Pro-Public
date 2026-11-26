@@ -262,6 +262,97 @@ model returns data and says `actuationSupported: false`.
 
 Gentle Smart Charging v2 (18 Nov 2026) changes the CONTENT of those same three added files and of the plan-core `README.md` only: no file is added, so `epc3` is not re-sealed and no declaration changes. It stays read only (`actuationSupported: false`, `guarantee: 'NONE'`); no firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core byte changes, no Modbus operation and no service call.
 
+## 18 Nov 2026: the OVW1 pin correction, the Stage 3 limitation text and the bundle rebuild
+
+- **`test_ovw1_transition` [1] and [2] (owner decision of 17 Nov 2026).** The card folder as of ovw1 has 28 Git-tracked files. After `epc1` and `epc2`
+  added card files, the suite counted every tracked file and failed. It now sets aside exactly the files that a post-export entry NEWER than ovw1
+  declares as added (read from the chain: `LATER_ADDED`, four lines, no new `_pex` call, so the PEX ledger is unchanged). Every frozen file's
+  sha256, the 28-file count, the folder hash, the 26 pre-ovw1 file set and ovw1's fingerprint stay pinned; an undeclared added file, a removed
+  file, an altered frozen file, an altered declaration and a re-ordered chain still fail (regression table in the status update).
+- **Stage 3 limitation text.** The overrides are a partial protection (release gate RG-ST3). The same sentence stands in the card's visible
+  Quick overrides block (`START_BUTTON_LIMITATION` in `src/plan/controls.ts`), the card README (an edit of epc2's README pair), the plan-core README
+  and the headers of the two Stage 3 packages; `home-assistant/tests/test_ecco_stage3_limitation.py` (added by epc2) requires it word for word in
+  each place and in the bundle, and that the card adds no service call or write path. The Start button itself is not bound by this: that needs a
+  firmware gate (a flash), approved separately.
+- **Bundle rebuild and re-seal.** `dist/ecco-energy-actions-card.js` was rebuilt (`node build.mjs`, esbuild 0.28.1, twice, byte-identical). A rebuild of
+  the `HEAD` sources alone would already differ from the committed bundle in minifier names, because `epc3` made `ecco-plan-core/src/index.ts`
+  re-export the controller model; the sources of `53326f2` reproduce the committed bundle byte for byte. `epc2`'s README and bundle pairs and
+  checkpoints were regenerated and `epc2` was re-sealed, then `epc3` (its parent link changed).
+
+## What ptt1 changed
+
+`ptt1` keeps the shared tooltip of the `Power Flow Today` chart inside its card and the viewport (`registry/tests/_ptt1_scope.py`; pinned by
+`home-assistant/tests/test_ecco_power_chart_tooltip.py`). The chart (`custom:apexcharts-card`) exists three times in the dashboard (Overview,
+Intelligence, System; identical but for the chart height and `grid_options`). ApexCharts places its five-reading tooltip from the plot grid only
+and the card's `overflow: hidden` clips it, so on the Overview chart the last reading (SOC) was cut off. It edits no chain-pinned artifact. Its one
+frozen edit is the dashboard: one `apex_config.chart.events.mounted` EVAL string per chart (the chart already evaluates EVAL strings for its
+TOU annotation). The dashboard version is not bumped (the precedent is `wsc1`, which changed the dashboard without a version bump of its own),
+so `VERSION.yaml`, the header notes and the v7.23.0 pins are untouched.
+
+The code is one pure function, `fit(rect, pointer, bounds, gap)`, and a small glue: a `MutationObserver` on the chart sees ApexCharts position
+the tooltip (`.apexcharts-tooltip`), computes the tooltip's rectangle from its `style.left` / `style.top` (the target of ApexCharts' 0.15 s
+transition, not the animated rectangle), intersects the card (`ha-card`) with the visual viewport, inset by 4 px, and moves the tooltip the
+shortest way inside; only if that move would put it under the pointer is it put beside (left or right of) the pointer, or above / below it,
+whichever side was already its own and fits. A tooltip that is already inside is never touched (no loop); bounds smaller than the tooltip
+align it to their top left. The pointer is tracked from `mousemove`, `touchstart` and `touchmove` on the chart. Window `scroll` and `resize`
+re-run the placement of a visible tooltip. Clean-up: a re-render on the same element replaces the previous instance, `chart.destroy()` is
+wrapped to abort every listener and the observer, and the window listeners remove themselves when the card is detached. It writes only
+`style.left` and `style.top`: never the tooltip's content, class or styling. ZERO firmware, Home Assistant package, deployment, registry,
+Intelligence or ecco_core change, ZERO Modbus operation, no service call, no entity, no network access.
+
+The code reads `window.visualViewport` and the card's DOM; it cannot see a clipping ancestor other than `ha-card` (a sticky Home Assistant
+header over the top of the view is not subtracted from the visible area).
+
+## What ovw4 changed
+
+`ovw4` sets the Stage 3 plan options on the Overview's one Energy Actions card in the repository's own dashboard
+(`registry/tests/_ovw4_scope.py`; pinned by `home-assistant/tests/test_ecco_energy_actions_plan_options.py`): `show_plan: true`, the `plan` block
+(`entity_prefix`, the generic quoted default device slug that `tools/ecco_site_render.py` renders per site exactly as it does for the TOU Settings
+cards, and `reserve`, the owner's reserve helper) and `dump_to_grid.guarded_start`. Before it the options existed only on a production dashboard, so
+a render of this repository differed from it and a whole-file dashboard deploy would have removed them. It edits no chain-pinned artifact; its one
+frozen edit is the dashboard (two exact (before, after) pairs). The dashboard version is not bumped (the precedent is `wsc1` and `ptt1`). The site
+policy's protected layer (the Overview's flow card) is byte-identical, so the preservation gate's hash for it is unchanged. ZERO firmware, Home
+Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call of its own.
+
+## What ovw5 changed
+
+`ovw5` gives the Solar series of each of the three `Power Flow Today` charts its own `group_by` block in the repository's own dashboard
+(`registry/tests/_ovw5_scope.py`; pinned by `home-assistant/tests/test_ecco_power_flow_solar_fill.py`): `func: avg`, `duration: 5min`,
+`fill: last`; four lines per chart, twelve in all. The SOC series of the same charts already has such a block. The change was applied to the
+production Overview on 25 Nov 2026 first (the owner saw the tooltip list Solar alone); until this entry the repository's dashboard still had the
+old text, so a whole-file dashboard deployment of a render of this repository would have put it back. It edits no chain-pinned artifact. Its one
+frozen edit is the dashboard: ONE exact (before, after) pair (the Solar series, and the same with its `group_by`), found and made exactly three
+times, once per chart. The post-export layer requires every declared hunk to occur exactly once, so the pair is declared as three hunks, each
+reaching back through its own chart's grid options, title and series list; that also makes each occurrence provably the Solar series of a
+`Power Flow Today` chart. The dashboard version is not bumped (the precedent is `wsc1`, `ptt1` and `ovw4`). The site policy's protected layer (the
+Overview's flow card) is byte-identical. ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus
+operation, no service call, no entity, no network access.
+
+**Why.** apexcharts-card (a third-party card that is not part of this repository; the installed 2.2.3, read from its source) shows the shared
+tooltip with every series only while all series have the same time points; when one series has fewer, it falls back to the series nearest the
+cursor. Every series of the chart is grouped per 5 minutes with `fill: 'null'` (an empty bucket becomes a null point) and the card drops the
+trailing buckets of a series that hold no value (empty, or a single null point). Whenever the PV reading did not change inside the newest bucket
+(evening and night) the Solar series ended one bucket before the others and the tooltip listed Solar alone. With `fill: last` an empty bucket
+takes the last known value, so Solar ends with the others. Only the Solar series changed: House, Battery and Grid keep `fill: 'null'`, SOC keeps
+its own `fill: last`.
+
+**The trade-off (recorded, not removed).**
+
+- `fill: last` has no age limit: the card offers `last`, `zero` and `null` only. A reading that keeps its last value (a held, stale value) is
+  drawn flat, exactly as a steady reading would be; with `fill: 'null'` such a case showed a gap only because its bucket was empty, which is the
+  very artefact that broke the tooltip. A stuck but held PV value is therefore not distinguishable from a steady one on this chart.
+- An entity that goes `unavailable` still draws a gap. The card turns a state that is not a number into a null point; that makes its bucket
+  non-empty, so it is not filled, and the empty buckets after it take that null as their last value, so the gap lasts until a number arrives.
+  `fill: last` does not turn an outage into a flat line.
+- Only buckets up to now are filled; the rest of the 24 hour span stays empty.
+
+**A future freshness limit (not built).** The card has no age bound, so a bounded fill cannot be set on the chart alone (a bounded `last` for
+Solar with `fill: 'null'` for the other four series is not possible). The option is a template sensor, used as the Solar series' entity with
+`fill: last`, that reports `unavailable` unless the dongle's telemetry is live: `binary_sensor.<slug>_telemetry_online` is on and
+`sensor.<slug>_last_telemetry_update` is no older than about 180 s. An outage and stale telemetry would then both draw a gap. It costs one new
+Home Assistant package entity and a dashboard series-entity edit, that is another gated dashboard change and another post-export entry. It is not
+built, not part of ovw5, and needs the owner's go like any dashboard change.
+
 ## What epc4 changed
 
 `epc4` (`registry/tests/_epc4_scope.py`) declares ONE frozen edit: the Energy Actions card's rebuilt `dist/ecco-energy-actions-card.js` after the
@@ -284,19 +375,3 @@ The rebuilt bundle and the entry are ONE commit: dropping both returns to the bu
 (the card corrections) or an older entry changes, the bundle is rebuilt from the new sources, the pairs and the bundle checkpoint are regenerated and
 `epc4` is sealed again (its parent link changed); nothing else moves.
 
-## 18 Nov 2026: the OVW1 pin correction, the Stage 3 limitation text and the bundle rebuild
-
-- **`test_ovw1_transition` [1] and [2] (owner decision of 17 Nov 2026).** The card folder as of ovw1 has 28 Git-tracked files. After `epc1` and `epc2`
-  added card files, the suite counted every tracked file and failed. It now sets aside exactly the files that a post-export entry NEWER than ovw1
-  declares as added (read from the chain: `LATER_ADDED`, four lines, no new `_pex` call, so the PEX ledger is unchanged). Every frozen file's
-  sha256, the 28-file count, the folder hash, the 26 pre-ovw1 file set and ovw1's fingerprint stay pinned; an undeclared added file, a removed
-  file, an altered frozen file, an altered declaration and a re-ordered chain still fail (regression table in the status update).
-- **Stage 3 limitation text.** The overrides are a partial protection (release gate RG-ST3). The same sentence stands in the card's visible
-  Quick overrides block (`START_BUTTON_LIMITATION` in `src/plan/controls.ts`), the card README (an edit of epc2's README pair), the plan-core README
-  and the headers of the two Stage 3 packages; `home-assistant/tests/test_ecco_stage3_limitation.py` (added by epc2) requires it word for word in
-  each place and in the bundle, and that the card adds no service call or write path. The Start button itself is not bound by this: that needs a
-  firmware gate (a flash), approved separately.
-- **Bundle rebuild and re-seal.** `dist/ecco-energy-actions-card.js` was rebuilt (`node build.mjs`, esbuild 0.28.1, twice, byte-identical). A rebuild of
-  the `HEAD` sources alone would already differ from the committed bundle in minifier names, because `epc3` made `ecco-plan-core/src/index.ts`
-  re-export the controller model; the sources of `53326f2` reproduce the committed bundle byte for byte. `epc2`'s README and bundle pairs and
-  checkpoints were regenerated and `epc2` was re-sealed, then `epc3` (its parent link changed).

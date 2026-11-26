@@ -19,7 +19,8 @@ runs.
        judged
   [4] SOC: false zero (raw used / BLOCK without raw), zero while discharging, sources disagreeing, out of range
   [5] online flags without a timeout; inverter not healthy or not a bool
-  [6] the live power balance: CT sign reversal, battery sign reversal, inconsistent; native-load false zero; negative load
+  [6] the live power balance: CT sign reversal, battery sign reversal, inconsistent; native-load false zero; negative load;
+      incomplete or invalid inverter conversion facts (the loss-aware balance itself: test_intel_power_balance.py)
   [7] supervision (the state and stable flag aged by the telemetry poll text: steady supervision is current while the
       poll text moves, old once it is frozen beyond the bound; the heartbeat keeps its own time); tariff and events
       presence and age; the charge window and the inverter clock offset
@@ -531,6 +532,12 @@ check("... negative: a zero load that inverter + grid confirm (below the HD1 thr
 neg = A("load_negative", faults.with_signals(base, {"house.power": -300.0}))
 check("HOUSE_POWER_NEGATIVE: a negative house load is not credible -> export and Dump BLOCKED",
       all("HOUSE_POWER_NEGATIVE" in h.item_codes(neg, i) for i in EXPORT))
+plf = A("power_loss_facts_invalid", replace(base, site_facts=replace(cf.FACTS, inverter_dc_to_ac_factor=0.9)))
+check("POWER_LOSS_FACTS_INVALID: an incomplete set of the optional inverter conversion facts BLOCKs export and Dump (the balance "
+      "stays lossless) and nothing else",
+      all("POWER_LOSS_FACTS_INVALID" in h.item_codes(plf, i) for i in EXPORT) and "charge_target" not in plf.blocked_items
+      and h.codes(plf, "BLOCK") == {"POWER_LOSS_FACTS_INVALID"})
+check("... negative: no inverter conversion facts (the default) raise none", "POWER_LOSS_FACTS_INVALID" not in h.codes(qb))
 
 print("== [7] supervision, tariff and events, charge window and clock")
 for seed in range(4):

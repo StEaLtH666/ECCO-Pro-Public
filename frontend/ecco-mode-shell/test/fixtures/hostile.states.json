@@ -1,0 +1,35 @@
+{
+  "_note": "Synthetic hostile text. Every value must render as inert text: no element or attribute may be created from it. Secret-like values are NOT stored here (they are assembled in code by secrets.mjs so that no committed file holds a token shape).",
+  "sensor.ecco_intel_hostile_markup": {
+    "state": "<script>globalThis.__pwn = 1</script>", "age_s": 10,
+    "attributes": {
+      "friendly_name": "<img src=x onerror=globalThis.__pwn=2>",
+      "note": "\"><svg onload=globalThis.__pwn=3>",
+      "quote_single": "it's a 'quoted' \"mixed\" `tick` value",
+      "<b>bold</b>": "key with markup",
+      "\"><iframe src=javascript:1>": "key with a quote and a tag",
+      "onclick": "globalThis.__pwn=4",
+      "href": "javascript:globalThis.__pwn=5",
+      "style": "background:url(javascript:1)",
+      "template": "{{ states('sensor.x') }} ${globalThis.__pwn=6} <%= 1 %>",
+      "entities": "&lt;already-escaped&gt; &amp; &#x3C;script&#x3E;",
+      "nested": { "list": [ "<u>one</u>", { "deep": "<i>two</i>" } ] }
+    }
+  },
+  "sensor.ecco_intel_hostile_control": {
+    "state": "a\u0000b\u0007c\u001bd\u007fe",
+    "age_s": 10,
+    "attributes": {
+      "zero_width": "visible\u200btext\u200cwith\u200dzero\u2060width\ufeffchars",
+      "bidi": "safe\u202etxet desrever\u202c and \u2066isolates\u2069",
+      "line_sep": "line\u2028separator\u2029paragraph",
+      "newlines": "first\nsecond\r\nthird\ttabbed",
+      "c1_controls": "c1\u0085\u009fend"
+    }
+  },
+  "sensor.ecco_intel_hostile_unicode": {
+    "state": "caf\u00e9 \u2603 \ud83d\ude00",
+    "age_s": 10,
+    "attributes": { "emoji": "\ud83d\ude00\ud83d\ude00", "rtl": "\u05e9\u05dc\u05d5\u05dd", "combining": "e\u0301\u0301\u0301\u0301" }
+  }
+}

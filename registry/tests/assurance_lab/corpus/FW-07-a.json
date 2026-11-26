@@ -1,0 +1,151 @@
+{
+  "actions": [
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 60,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "minutes": 60,
+        "power_w": 1000,
+        "stop_soc": 25
+      },
+      "at_s": 60,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "up": false
+      },
+      "at_s": 180,
+      "do": "set_link"
+    },
+    {
+      "args": {
+        "up": true
+      },
+      "at_s": 480,
+      "do": "set_link"
+    },
+    {
+      "args": {
+        "seconds": 30
+      },
+      "at_s": 480,
+      "do": "run_for"
+    }
+  ],
+  "classification": "PASS",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "dom": "dump_end"
+      },
+      "observe": "status",
+      "op": "==",
+      "value": "TELEMETRY LOST - failing closed"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status",
+      "op": "startswith",
+      "value": "RESTORED OK"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "CLEAR"
+    },
+    {
+      "args": {
+        "addrs": [
+          244,
+          256,
+          257,
+          258,
+          259,
+          260,
+          261
+        ]
+      },
+      "observe": "bank",
+      "op": "==",
+      "value": {
+        "244": 2,
+        "256": 8000,
+        "257": 8000,
+        "258": 7000,
+        "259": 8000,
+        "260": 8000,
+        "261": 5000
+      }
+    },
+    {
+      "args": {},
+      "observe": "invariants",
+      "op": "==",
+      "value": []
+    }
+  ],
+  "failure_outcome": "export continues after the link loss, or the owed restore waits out up to 300 s after the link is back",
+  "finding_priority": null,
+  "grade": "VERIFIED",
+  "id": "FW-07-a",
+  "invariant": "INV-RESTORE-BOUND",
+  "notes": "Key guard decisions: TELEMETRY LOST about 28 s after the loss; supervised retry every 15 s while the SOC is stale; SG-39 completes the restore about 13 s after recovery although a 300 s backoff was pending (the first telemetry read after the recovery makes the SOC fresh again, so the supervision is off by then; the SG-39-removed mutant leaves the restore open).",
+  "ownership": "ECCO-owned Dump lease (owner START, synthetic SITE ORIGINAL); coupled link MODEL; no foreign actor",
+  "scenario_priority": "P2",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "none (PASS): key guard decision - restore completes within 30 s of link recovery",
+  "source_anchors": [
+    {
+      "line_at_record": 24442,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "reason: \"TELEMETRY LOST - failing closed\""
+    },
+    {
+      "line_at_record": 19781,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "(id(dump_restore_failed_ms) != 0 &&"
+    }
+  ],
+  "source_digests": {
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "Link down 300 s during an ACTIVE Dump lease: TELEMETRY LOST, then the SG-39 retry at link recovery",
+  "trace_digest": "777711513b064e049c8563dd518d4975eacc75f25d3a6505025594bd995b3536",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {}
+}
