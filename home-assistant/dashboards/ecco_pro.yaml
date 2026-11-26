@@ -1012,6 +1012,10 @@ views:
           - type: custom:ecco-energy-actions-card
             title: Energy Actions
             layout: tabbed
+            show_plan: true
+            plan:
+              entity_prefix: "ecco_clock_dongle"
+              reserve: input_number.ecco_minimum_reserve_soc
 
             free_power:
               active: binary_sensor.ecco_clock_dongle_free_power_active
@@ -1077,6 +1081,7 @@ views:
                 last_result: input_text.ecco_dump_to_grid_schedule_last_result
                 status: sensor.ecco_dump_to_grid_schedule_status
                 cancel: script.ecco_dump_to_grid_cancel_schedule
+              guarded_start: script.ecco_dump_to_grid_start_guarded
 
             grid_options:
               columns: full
@@ -1803,6 +1808,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
@@ -3935,6 +3944,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
@@ -7096,6 +7109,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
