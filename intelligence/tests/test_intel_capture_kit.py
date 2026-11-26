@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import validate_capture as vc  # noqa: E402
 from intelligence.config import SiteConfig  # noqa: E402
+from intelligence.quality import QUALITY_VERSION  # noqa: E402
 from intelligence.synthetic import make_history  # noqa: E402
 from intelligence.timeutil import UTC, zone  # noqa: E402
 
@@ -254,6 +255,10 @@ with tempfile.TemporaryDirectory(prefix="ecco_dq_capture_") as td:
     st = (tmp / "out" / vc.SUMMARY_TXT).read_text(encoding="utf-8")
     check("the JSON and text summaries carry the banner", sj.get("banner") == vc.BANNER and st.startswith(vc.BANNER)
           and st.rstrip().endswith(vc.BANNER))
+    check("the summaries record the rule set they were judged under: QUALITY_VERSION 0.3.2 (the live power balance with the optional "
+          "inverter conversion), so a summary made under the previous rule set (0.3.1) is told apart",
+          sj.get("quality_version") == QUALITY_VERSION == "intel-quality-0.3.2-cfg" and QUALITY_VERSION in st
+          and sj["quality_version"] != "intel-quality-0.3.1-cfg", str(sj.get("quality_version")))
     a = sj["audit"]
     check(f"every generated hour comes back ({hours})", a["hours_present"] == hours and a["hours_missing"] == 0, str(a)[:200])
     check("the autumn clock-change night of 2030 is listed with its 25 hours present",
