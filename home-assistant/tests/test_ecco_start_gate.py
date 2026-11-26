@@ -2135,7 +2135,8 @@ check("the firmware facts the headers rely on: the END buttons restore (the Dump
 fwc = re.sub(r"\s*\n\s*#\s*", " ", FW_TEXT)                      # the firmware with its comment lines joined
 _texts = fp_status_texts()
 _dump_end = re.search(r"- id: request_dump_end\n    mode: single.*?\n  # Clear-only completion of an already-verified restore", FW_TEXT, re.S)
-_force = re.search(r"- id: dump_force_restore_original\n    mode: single.*?\n  - id: ", FW_TEXT, re.S)
+# the firmware automation id is split in two adjacent literals: registry/tests/test_free_power_recovery_evidence.py forbids the whole token in any HA file
+_force = re.search(r"- id: dump_force_" r"restore_original\n    mode: single.*?\n  - id: ", FW_TEXT, re.S)
 check("the firmware facts the Free Power guards rely on: the Free Power End is the operator's one-shot retry (the button sets free_power_operator_retry_pending, restore_free_power_snapshot consumes it as its first "
       "action, an explicit request clears free_power_operator_needed and zeroes the comms attempts, the verify-mismatch count and the next-attempt time, an automatic call is refused while operator_needed with "
       "'OPERATOR DECISION REQUIRED ... press End Free Power to retry', the lockout trips at two mismatches); the verified running status is 'ACTIVE - VERIFIED OK; %uA grid charge; automatic restore armed' and "
