@@ -133,7 +133,8 @@
 #     template is not rendered, and an unchanged result is not delivered again when it turns true); that a binary template sensor with a delay restores its
 #     last on or off state when it is created, on a reload as on a restart; that an unavailable entity drops its attributes; that a list rendered by a
 #     template arrives as a list attribute; that strptime(text, format, default) is Python's; and how as_timestamp() reads a naive datetime (as local time
-#     in Home Assistant's own zone: the R9 assumption above).
+#     in Home Assistant's own zone: the R9 assumption above). Recalled from ESPHome in the same way: that the dongle's API sends every entity's cached
+#     state when a connection begins, which is the premise of the LIVE condition.
 #
 # INSTALL. One file copy to /config/packages/ecco_time_trust.yaml, a configuration check, then RELOAD the template entities (Developer tools,
 # YAML, Template entities, or the template.reload service): no restart, no other package needed, no helper to create. It adds eleven entities

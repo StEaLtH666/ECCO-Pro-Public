@@ -330,13 +330,23 @@ README = (PKGS / "README.md").read_text(encoding="utf-8")
 README_FLAT = re.sub(r"\s+", " ", README)
 CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 BULLET = next((ln for ln in CHANGELOG.splitlines() if "ecco_time_trust.yaml" in ln), "")
-check("the packages README has a Time trust section that names the eleven entities, every rule and constant, the time-zone assumption, the fail-safe rule, the limits, the install route and "
-      "the replay counts; the CHANGELOG has one bullet that says it is read-only, offline and installs nothing",
+REPLAY_RE = re.compile(r"(\d[\d,]*) reads TRUSTED, (\d+) DEGRADED, (\d+) UNKNOWN, (\d+) UNTRUSTED")
+_rm, _bm = REPLAY_RE.search(README_FLAT), REPLAY_RE.search(BULLET)
+_rc = tuple(int(g.replace(",", "")) for g in _rm.groups()) if _rm else None
+_bc = tuple(int(g.replace(",", "")) for g in _bm.groups()) if _bm else None
+check("the packages README has a Time trust section that names the eleven entities, every rule and constant, the freshness conditions, the time-zone assumption, the fail-safe rule, the limits, the install route "
+      "and the replay counts, and says what the replay infers (three counters and a synthesized inverter time text); the CHANGELOG has one bullet that says it is read-only, offline and installs nothing and "
+      "carries the same replay counts, which add up to the 10,140 recorded reads",
       all(s in README_FLAT for s in ("## Time trust", "sensor.ecco_time_trust_ha_clock", "sensor.ecco_time_trust_dongle_ntp", "sensor.ecco_time_trust_inverter_clock",
                                      "binary_sensor.ecco_time_trusted_for_leases", "binary_sensor.ecco_time_trusted_for_ha_schedules",
-                                     "binary_sensor.ecco_time_trusted_for_slot_edits", "UNKNOWN never reads better than DEGRADED", "reload the template entities",
-                                     "Replay of the saved 10 days", "never longer in the saved data", "time-zone assumption", "NOT ESTABLISHED"))
-      and all(s in BULLET for s in ("read-only", "nothing installed", "It writes nothing", "never produce TRUSTED", "restart_required: false")), "")
+                                     "binary_sensor.ecco_time_trusted_for_slot_edits", "binary_sensor.ecco_time_trust_ntp_text_readable", "_inverter_text_readable",
+                                     "UNKNOWN never reads better than DEGRADED", "reload the template entities", "Eleven template entities in all", "Freshness is judged by the values",
+                                     "VALUE (the proof)", "LIVE (an extra)", "ARRIVAL (an extra", "3 minutes 30 seconds of continuous ON", "four consecutive reads", "creates no trust",
+                                     "super template", "Replay of the saved 10 days", "Four inputs of this replay are inferred, not recorded", "SYNTHESIZED", "a fourth inferred input",
+                                     "not exercised by real data", "time-zone assumption", "NOT ESTABLISHED"))
+      and all(s in BULLET for s in ("read-only", "nothing installed", "It writes nothing", "never produce TRUSTED", "restart_required: false", "eleven", "3 minutes 30 seconds", "creates no trust",
+                                    "SYNTHESIZED", "fourth inferred input", "not exercised by real data"))
+      and _rc is not None and _rc == _bc and sum(_rc) == 10140, f"{_rc} {_bc}")
 
 # the firmware facts the header relies on, pinned to the repository (a changed firmware breaks the claim here, not silently)
 fw_flat = re.sub(r"\s+", " ", FW_TEXT)
