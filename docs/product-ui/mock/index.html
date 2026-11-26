@@ -1,0 +1,1407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none'">
+<title>ECCO Energy Plan - offline design mock</title>
+<!--
+  ECCO Energy Plan: OFFLINE DESIGN MOCK (phase 1).
+  - Static HTML/JS. No network access (the Content-Security-Policy above forbids every fetch, socket and external file).
+  - Fictional, generic data only. It is not connected to Home Assistant, the controller or an inverter, and it cannot be.
+  - Every widget is tagged: "Works today" (an existing feature, shown with fictional values), "Proposal" (not a working
+    feature), "Derived" (read-only view) or "Simulation" (fake backend for the design's test cases).
+  The plan model (script#plan-model) is pure: no DOM, no clock, no randomness. test/plan-model.test.mjs runs its checks
+  under Node; the "Cross-card checks" panel in Advanced runs the same checks in the page.
+-->
+<style>
+:root{
+  --bg:#0e1420;--surface:#151d2e;--surface-2:#1b2539;--surface-3:#222e46;--line:#2b3956;--text:#e9eefb;--muted:#9fadca;
+  --charge:#4cc79f;--charge-soft:rgba(76,199,159,.16);--export:#f2b450;--export-soft:rgba(242,180,80,.16);
+  --gap:#8c98ba;--danger:#ff8080;--danger-soft:rgba(255,128,128,.14);--warn:#ffd36e;--warn-soft:rgba(255,211,110,.13);
+  --ok:#5ad6a0;--info:#8fb5ff;--on-info:#0b1220;--info-soft:rgba(143,181,255,.14);--focus:#9cc0ff;--radius:16px;--shadow:0 6px 24px rgba(0,0,0,.28);
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme: light){:root{
+  --bg:#f2f4f9;--surface:#ffffff;--surface-2:#f3f6fb;--surface-3:#e9eef7;--line:#d7deec;--text:#17213a;--muted:#55627f;
+  --charge:#0f7f59;--charge-soft:rgba(15,127,89,.11);--export:#9a5c00;--export-soft:rgba(154,92,0,.11);
+  --gap:#66729a;--danger:#b42318;--danger-soft:rgba(180,35,24,.08);--warn:#8a5a00;--warn-soft:rgba(255,190,60,.16);
+  --ok:#11794f;--info:#2d5bd7;--on-info:#ffffff;--info-soft:rgba(45,91,215,.09);--focus:#2d5bd7;--shadow:0 6px 20px rgba(23,33,58,.10);
+}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 var(--font)}
+body{padding-bottom:180px}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:8px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mockbar{background:repeating-linear-gradient(135deg,var(--warn-soft) 0 12px,transparent 12px 24px),var(--surface);
+  border-bottom:1px solid var(--line);padding:8px 16px;font-size:13px;color:var(--text);text-align:center}
+.mockbar b{color:var(--warn)}
+header.app{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line)}
+.app-in{max-width:1180px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:12px}
+.brand{font-weight:700;letter-spacing:.06em}
+.brand small{display:block;font-weight:500;letter-spacing:0;color:var(--muted);font-size:12px}
+.status{margin-left:auto;display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:var(--surface-2);
+  border:1px solid var(--line);font-size:13px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--ok);flex:none}
+.dot.warn{background:var(--warn)}.dot.bad{background:var(--danger)}
+nav.tabs{display:none}
+main{max-width:1180px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 12px}
+h2{font-size:17px;margin:0}
+h3{font-size:15px;margin:0}
+p{margin:6px 0}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+.grid{display:grid;gap:16px}
+.cols-2{grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))}
+.cols-3{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);min-width:0}
+.card.inset{background:var(--surface-2);box-shadow:none}
+.card-h{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.card-h .grow{flex:1;min-width:160px}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.tag.exists{background:var(--info-soft);color:var(--info);border-color:transparent}
+.tag.proposal{background:repeating-linear-gradient(135deg,var(--warn-soft) 0 6px,transparent 6px 12px);color:var(--warn);border-color:var(--warn)}
+.tag.derived{background:var(--surface-3);color:var(--muted)}
+.tag.sim{background:var(--danger-soft);color:var(--danger);border-color:transparent}
+.chip{display:inline-block;font-size:12px;padding:3px 9px;border-radius:999px;background:var(--surface-3);color:var(--text);margin:2px 4px 2px 0}
+.chip.charge{background:var(--charge-soft);color:var(--charge)}.chip.export{background:var(--export-soft);color:var(--export)}
+.chip.draft{background:var(--info-soft);color:var(--info)}.chip.bad{background:var(--danger-soft);color:var(--danger)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.master{border-top:4px solid var(--charge)}
+.master.exp{border-top-color:var(--export)}
+.icon{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;font-size:18px;flex:none}
+.icon.charge{background:var(--charge-soft);color:var(--charge)}.icon.export{background:var(--export-soft);color:var(--export)}
+.seg{display:flex;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px;margin:8px 0 12px}
+.seg button{flex:1;border:0;background:transparent;padding:8px 6px;border-radius:9px;cursor:pointer;color:var(--muted);font-weight:600;font-size:14px}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:0 1px 4px rgba(0,0,0,.18)}
+.field{margin:12px 0}
+.field label,.field .lbl{display:flex;justify-content:space-between;gap:8px;font-weight:600;font-size:14px;margin-bottom:4px}
+.field output{font-variant-numeric:tabular-nums;color:var(--text);font-weight:700}
+.field .hint{font-size:12px;color:var(--muted);margin-top:3px}
+.field .err{font-size:13px;color:var(--danger);background:var(--danger-soft);border-radius:8px;padding:6px 8px;margin-top:6px}
+input[type=range]{width:100%;accent-color:var(--charge);min-height:28px}
+.exp input[type=range]{accent-color:var(--export)}
+input[type=number],input[type=time],select{width:100%;min-height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);padding:6px 10px}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1;min-width:120px}
+.btn{border:1px solid var(--line);background:var(--surface-2);border-radius:12px;padding:10px 14px;cursor:pointer;font-weight:600;min-height:42px}
+.btn.primary{background:var(--info);border-color:var(--info);color:var(--on-info)}
+.btn[disabled]{opacity:.55;cursor:not-allowed}
+.btn.ghost{background:transparent}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.kv{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:6px 12px;font-size:14px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;overflow-wrap:anywhere}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;flex:1;min-width:180px}
+.note{border-radius:10px;padding:8px 10px;font-size:13px;margin:6px 0;background:var(--surface-2)}
+.note.warn{background:var(--warn-soft)}.note.bad{background:var(--danger-soft)}.note.info{background:var(--info-soft)}
+details{border-top:1px solid var(--line);margin-top:12px;padding-top:8px}
+summary{cursor:pointer;font-weight:600;padding:6px 0;list-style-position:inside}
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat b{font-size:22px;font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:13px}
+.ring{--p:50;width:116px;height:116px;border-radius:50%;flex:none;
+  background:conic-gradient(var(--charge) calc(var(--p)*1%),var(--surface-3) 0);display:grid;place-items:center}
+.ring>div{width:92px;height:92px;border-radius:50%;background:var(--surface);display:grid;place-items:center;text-align:center}
+.ring b{font-size:26px;line-height:1}
+.flowph{border:2px dashed var(--line);border-radius:var(--radius);min-height:160px;display:grid;place-items:center;text-align:center;padding:16px;color:var(--muted)}
+/* timeline */
+.tl{position:relative;margin-top:8px;user-select:none}
+.tl-axis{position:relative;height:18px;font-size:11px;color:var(--muted)}
+.tl-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.tl-axis span:first-child{transform:none}
+.tl-row{position:relative;height:46px;border-radius:10px;background:var(--surface-2);margin:4px 0;overflow:hidden}
+.tl-row.plan{height:30px}
+.tl-slot{position:absolute;top:0;bottom:0;border:0;border-right:2px solid var(--surface);background:var(--surface-3);color:var(--text);
+  font-size:12px;padding:3px 6px;text-align:left;cursor:pointer;overflow:hidden;line-height:1.2}
+.tl-slot.gc{background:var(--charge-soft);color:var(--charge);font-weight:600}
+.tl-slot[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--focus)}
+.tl-slot small{display:block;color:var(--muted);font-weight:500}
+.tl-seg{position:absolute;top:4px;bottom:4px;border-radius:6px;font-size:11px;padding:2px 6px;overflow:hidden;white-space:nowrap;color:var(--text)}
+.tl-seg.export{background:var(--export-soft);border:1px solid var(--export);color:var(--export)}
+.tl-seg.gap{background:repeating-linear-gradient(135deg,var(--surface-3) 0 5px,transparent 5px 10px);border:1px dashed var(--gap);color:var(--muted)}
+.tl-seg.charge{background:linear-gradient(90deg,var(--charge-soft),color-mix(in srgb,var(--charge) 35%,transparent));border:1px solid var(--charge);color:var(--charge)}
+.tl-seg.buffer{background:repeating-linear-gradient(135deg,var(--charge-soft) 0 5px,transparent 5px 10px);border:1px dashed var(--charge);color:var(--muted)}
+.tl-now{position:absolute;top:18px;bottom:0;width:2px;background:var(--danger);pointer-events:none}
+.tl-now::before{content:"now";position:absolute;top:-16px;left:-12px;font-size:10px;color:var(--danger)}
+.tl-soc{display:block;width:100%;height:70px;background:var(--surface-2);border-radius:10px;margin-top:4px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:14px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.cycle{display:flex;gap:6px;flex-wrap:wrap;align-items:stretch}
+.cycle>div{flex:1;min-width:120px;border-radius:12px;padding:8px 10px;background:var(--surface-2);font-size:13px}
+.cycle>div b{display:block;font-size:14px}
+.cycle .c-ex{border-left:4px solid var(--export)}.cycle .c-gap{border-left:4px dashed var(--gap)}
+.cycle .c-ch{border-left:4px solid var(--charge)}.cycle .c-buf{border-left:4px dashed var(--charge)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.pass{color:var(--ok);font-weight:700}.fail{color:var(--danger);font-weight:700}
+.reviewbar{position:fixed;left:50%;transform:translateX(-50%);bottom:76px;z-index:30;width:min(640px,calc(100% - 24px));
+  background:var(--surface);border:1px solid var(--info);border-radius:14px;box-shadow:var(--shadow);padding:10px 12px;display:flex;gap:10px;align-items:center}
+.reviewbar .grow{flex:1;font-size:14px}
+.sheet-bg{position:fixed;inset:0;background:rgba(5,8,15,.55);z-index:40;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--surface);width:min(760px,100%);max-height:88vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px 16px 24px;border:1px solid var(--line)}
+@media (min-width:760px){.sheet-bg{align-items:center}.sheet{border-radius:18px}}
+.sheet h2{margin-bottom:6px}
+.sheet ol,.sheet ul{padding-left:20px;margin:6px 0}
+.sheet li{margin:4px 0}
+.three{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}
+.state-h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.state-h .n{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--surface-3);font-weight:700;font-size:13px}
+.meter{height:8px;border-radius:999px;background:var(--surface-3);overflow:hidden;margin-top:4px}
+.meter>i{display:block;height:100%;background:var(--info)}
+.bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:25;background:var(--surface);border-top:1px solid var(--line);display:flex;
+  padding:6px max(8px,env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom))}
+.bottomnav button{flex:1;border:0;background:transparent;padding:6px 2px;border-radius:12px;cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;min-height:52px}
+.bottomnav button span{display:block;font-size:20px;line-height:1.1}
+.bottomnav button[aria-current="page"]{color:var(--text);background:var(--surface-2)}
+@media (min-width:900px){
+  body{padding-bottom:130px}
+  .bottomnav{display:none}
+  nav.tabs{display:flex;gap:4px}
+  nav.tabs button{border:0;background:transparent;padding:8px 14px;border-radius:10px;cursor:pointer;color:var(--muted);font-weight:600}
+  nav.tabs button[aria-current="page"]{background:var(--surface-2);color:var(--text)}
+  nav.tabs button span{margin-right:6px}
+  .reviewbar{bottom:20px}
+}
+@media (prefers-reduced-motion:no-preference){.seg button,.btn,.tl-slot{transition:background .15s,box-shadow .15s}}
+</style>
+</head>
+<body>
+<div class="mockbar" role="note"><b>Offline design mock.</b> Fictional data. Not connected to Home Assistant or an inverter, and it cannot send anything. Items tagged <b>Proposal</b> are not working features.</div>
+<div id="app"></div>
+
+<script id="plan-model">
+/* ECCO Energy Plan model: pure functions, no DOM, no clock, no randomness. Fictional example data. */
+(function (root) {
+  'use strict';
+
+  var LIMITS = Object.freeze({
+    slots: 6, gridMin: 5, minSlotMin: 5,
+    bufferMin: 0, bufferMax: 120, bufferStep: 5,
+    gapMin: 10, gapMax: 120, gapStep: 5,
+    chargeTargetMin: 20, chargeTargetMax: 100,
+    chargePowerMin: 500, chargePowerStep: 100,
+    exportStopSocMin: 10, exportStopSocMax: 90,
+    exportPowerMin: 500, exportDurationMax: 240,
+    provenExportCeilingW: 3000,
+    rateHysteresisW: 500,
+    applySpacingMin: 5,
+    minChargeMinutes: 30
+  });
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function toMin(s) {
+    var m = /^(\d{1,2}):(\d{2})$/.exec(String(s));
+    if (!m) return NaN;
+    var h = +m[1], mm = +m[2];
+    return (h > 23 || mm > 59) ? NaN : h * 60 + mm;
+  }
+  function norm(min) { return ((Math.round(min) % 1440) + 1440) % 1440; }
+  function fmt(min) { var m = norm(min); return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
+  function span(a, b) { return norm(b - a); }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function ceilTo(x, s) { return Math.ceil(x / s - 1e-9) * s; }
+  function floorTo(x, s) { return Math.floor(x / s + 1e-9) * s; }
+  function kwh(w, minutes) { return w * minutes / 60000; }
+  function pct(k, cap) { return k / cap * 100; }
+  function round1(x) { return Math.round(x * 10) / 10; }
+  function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  function fw(v) { return String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' W'; }
+
+  function exampleTou() {
+    return [
+      { start: '23:30', power: 5000, soc: 90, source: 'Grid' },
+      { start: '05:00', power: 5000, soc: 15, source: 'None' },
+      { start: '09:00', power: 5000, soc: 15, source: 'None' },
+      { start: '13:00', power: 5000, soc: 15, source: 'None' },
+      { start: '16:00', power: 5000, soc: 15, source: 'None' },
+      { start: '19:00', power: 5000, soc: 15, source: 'None' }
+    ];
+  }
+  function exampleCtx() {
+    return {
+      nowMin: 19 * 60 + 40, socNow: 78, capacityKwh: 12.0, learnedCapacityKwh: 12.4,
+      pvNowW: 0, houseLoadW: 450, overnightLoadW: 300, chargeEff: 0.95, dischargeEff: 0.95,
+      maxExportW: 3680, inverterMaxChargeW: 5000, planningReserveSoc: 40, haReserveSoc: 20, shutdownSoc: 10,
+      batteryV: 52, batteryMaxChargeA: 100, gridChargeA: 100, maxGridChargeW: 5000,
+      clockChangeNight: false, telemetryFresh: true, haOnline: true, activeLease: null,
+      prices: { nowP: 28.0, exportP: 15.0, cheapImportP: 7.5, wearP: 3.0 },
+      solar: { forecastKwh: 18, confidence: 0.45, onsetMin: 10 * 60 + 45, dayLoadKwh: 6.0, morningLoadW: 400 }
+    };
+  }
+  function defaultPlan() {
+    return {
+      profile: 'normal',
+      charge: { strategy: 'gentle', targetSoc: 90, bufferMin: 60, maxChargeW: 5000, stepped: false,
+        day: { targetSoc: 60, byTime: '17:00' } },
+      export: { enabled: true, stopSoc: 30, finishMode: 'before_charge', gapMin: 30, finishAt: '22:30' },
+      summer: { enabled: false, minReserveSoc: 40, confidenceMin: 0.7, maxPreSolarKwh: 5, gapBeforePvMin: 30 }
+    };
+  }
+  var PROFILES = {
+    normal: { 'charge.targetSoc': 90, 'summer.enabled': false },
+    summer: { 'charge.targetSoc': 70, 'summer.enabled': true }
+  };
+  function newState() {
+    var tou = exampleTou();
+    return { ctx: exampleCtx(), readback: { tou: tou },
+      saved: { revision: 7, plan: defaultPlan(), basisTou: clone(tou) },
+      draft: null, outcome: null, partial: null, log: [] };
+  }
+  /* export plans use the smaller capacity (the firmware stops at Stop SOC anyway); charge plans use the larger, so that a
+     finish-by plan is not too slow */
+  function usableKwh(c) { return Math.min(c.capacityKwh, c.learnedCapacityKwh || c.capacityKwh); }
+  function chargeKwh(c) { return Math.max(c.capacityKwh, c.learnedCapacityKwh || c.capacityKwh); }
+
+  /* ---------- the six-slot table ---------- */
+  function validateTou(tou) {
+    if (!Array.isArray(tou) || tou.length !== LIMITS.slots) return { ok: false, why: 'the table does not have six slots' };
+    var st = tou.map(function (s) { return toMin(s.start); });
+    for (var i = 0; i < st.length; i++) if (!isFinite(st[i]) || st[i] % LIMITS.gridMin !== 0) return { ok: false, why: 'a slot start is unreadable or off the 5-minute grid' };
+    var total = 0;
+    for (var k = 0; k < 6; k++) {
+      var d = span(st[k], st[(k + 1) % 6]);
+      if (d < LIMITS.minSlotMin) return { ok: false, why: 'slot ' + (k + 1) + ' is shorter than 5 minutes' };
+      total += d;
+    }
+    if (total !== 1440) return { ok: false, why: 'the six starts are not one 24-hour cycle in slot order' };
+    return { ok: true };
+  }
+  function slotSpans(tou) {
+    return tou.map(function (s, i) { var a = toMin(s.start), b = toMin(tou[(i + 1) % 6].start); return { i: i, start: a, end: b, minutes: span(a, b) }; });
+  }
+  function slotAt(tou, t) {
+    var sp = slotSpans(tou);
+    for (var i = 0; i < sp.length; i++) if (span(sp[i].start, t) < sp[i].minutes) return i;
+    return -1;
+  }
+  function chargeRuns(tou) {
+    var st = tou.map(function (s) { return toMin(s.start); });
+    var g = tou.map(function (s) { return s.source === 'Grid'; });
+    if (!g.some(Boolean)) return [];
+    if (g.every(Boolean)) return [{ slots: [0, 1, 2, 3, 4, 5], start: st[0], minutes: 1440 }];
+    var runs = [];
+    for (var i = 0; i < 6; i++) {
+      if (g[i] && !g[(i + 5) % 6]) {
+        var slots = [], j = i;
+        while (g[j % 6]) { slots.push(j % 6); j++; }
+        runs.push({ slots: slots, start: st[i], minutes: span(st[i], st[j % 6]) });
+      }
+    }
+    return runs;
+  }
+  function nextRun(runs, now) {
+    var best = null, key = Infinity;
+    runs.forEach(function (r) {
+      var k = span(r.start, now) < r.minutes ? -1 : span(now, r.start);
+      if (k < key) { key = k; best = r; }
+    });
+    if (!best) return null;
+    var out = clone(best); out.inProgress = key === -1; return out;
+  }
+  function firstChargeSlotHit(tou, start, duration) {
+    /* same shape as the firmware's START check: every minute from start to start + duration inclusive */
+    for (var k = 0; k <= duration; k++) {
+      var i = slotAt(tou, start + k);
+      if (i >= 0 && tou[i].source !== 'None') return i + 1;
+    }
+    return 0;
+  }
+  function crossesClockChangeHours(start, duration) {
+    for (var k = 0; k <= duration; k += 5) if (norm(start + k) < 180) return true;
+    return false;
+  }
+
+  /* ---------- derived plan ---------- */
+  function deriveExport(state, plan, run) {
+    var c = state.ctx, ex = plan.export, cap = usableKwh(c);
+    var r = { enabled: !!ex.enabled, refusals: [], notes: [], warnings: [] };
+    if (!r.enabled) return r;
+    var floor = (c.shutdownSoc == null || !isFinite(c.shutdownSoc)) ? null : Math.max(LIMITS.exportStopSocMin, c.shutdownSoc);
+    r.floorSoc = floor;
+    if (floor === null) { r.refusals.push('The inverter\'s battery shutdown level cannot be read, so the export floor cannot be confirmed.'); return r; }
+    if (ex.stopSoc < floor) { r.refusals.push('Export down to ' + ex.stopSoc + ' % is below the floor of ' + floor + ' % (the greater of 10 % and the inverter\'s battery shutdown level).'); return r; }
+    var start = norm(ceilTo(c.nowMin + 5, 5));
+    var finishBy;
+    if (ex.finishMode === 'before_charge') {
+      if (!run) { r.refusals.push('There is no grid-charge window in the TOU table, so "finish before the next charge window" has nothing to link to.'); return r; }
+      if (run.inProgress) { r.refusals.push('The charge window is already running.'); return r; }
+      finishBy = norm(run.start - ex.gapMin);
+    } else {
+      finishBy = toMin(ex.finishAt);
+      if (!isFinite(finishBy)) { r.refusals.push('The finish time is not a valid time.'); return r; }
+      if (run && !run.inProgress && span(start, finishBy) > span(start, run.start)) {
+        r.refusals.push('That finish time is after the next charge window opens at ' + fmt(run.start) + '. Choose "Before next charge window", or a time before ' + fmt(run.start) + '.');
+        return r;
+      }
+    }
+    r.finishBy = finishBy;
+    var avail = span(start, finishBy);
+    if (avail < 10 || avail > 1200) { r.refusals.push('There is not enough time left to finish by ' + fmt(finishBy) + '.'); return r; }
+    if (avail > LIMITS.exportDurationMax) {
+      start = norm(finishBy - LIMITS.exportDurationMax); avail = LIMITS.exportDurationMax;
+      r.notes.push('Starts at ' + fmt(start) + ' so it can finish by ' + fmt(finishBy) + ' within the 4-hour session limit.');
+    }
+    var socAtStart = c.socNow - pct(kwh(c.houseLoadW, span(c.nowMin, start)) / c.dischargeEff, cap);
+    r.start = start; r.socAtStart = socAtStart;
+    if (socAtStart <= ex.stopSoc) { r.refusals.push('The battery (about ' + Math.round(socAtStart) + ' %) is already at or below the ' + ex.stopSoc + ' % target.'); return r; }
+    var exportRoom = c.maxExportW - Math.max(100, 0.03 * c.maxExportW);
+    var battRoom = LIMITS.provenExportCeilingW - c.houseLoadW + c.pvNowW;
+    var netCap = floorTo(Math.min(exportRoom, battRoom), 100);
+    r.netCapW = netCap;
+    r.binding = exportRoom < battRoom ? 'your maximum grid export (less its safety margin)' : 'the ' + fw(LIMITS.provenExportCeilingW) + ' hardware-tested battery limit, less the house load';
+    if (netCap < LIMITS.exportPowerMin) { r.refusals.push('With the house using about ' + fw(c.houseLoadW) + ', the allowed net export is below the 500 W minimum.'); return r; }
+    var energyKwh = (socAtStart - ex.stopSoc) / 100 * cap;
+    var battAcW = energyKwh * c.dischargeEff * 1000 / (avail / 60);
+    var netW = ceilTo(battAcW - c.houseLoadW + c.pvNowW, 100);
+    var limitedBy = null;
+    if (netW < LIMITS.exportPowerMin) { netW = LIMITS.exportPowerMin; limitedBy = 'minimum'; }
+    if (netW > netCap) { netW = netCap; limitedBy = 'ceiling'; }
+    var battW = netW + c.houseLoadW - c.pvNowW;
+    var toTarget = energyKwh * c.dischargeEff * 1000 / battW * 60;
+    var duration = Math.min(avail, Math.ceil(toTarget));
+    var endSoc = Math.max(ex.stopSoc, socAtStart - pct(kwh(battW, duration) / c.dischargeEff, cap));
+    r.netW = netW; r.battW = battW; r.energyKwh = energyKwh; r.duration = duration;
+    r.end = norm(start + duration); r.endSoc = endSoc; r.limitedBy = limitedBy;
+    r.feasible = toTarget <= avail + 1e-9; r.exportedKwh = kwh(netW, duration);
+    if (limitedBy === 'minimum') r.notes.push('Even the 500 W minimum gets there early, at about ' + fmt(r.end) + '.');
+    if (!r.feasible) r.warnings.push('Limited by ' + r.binding + ', the battery gets to about ' + Math.round(endSoc) + ' %, not ' + ex.stopSoc + ' %, by ' + fmt(finishBy) + '.');
+    if (ex.stopSoc < c.haReserveSoc) r.warnings.push(ex.stopSoc + ' % is below your Home Assistant reserve setting of ' + c.haReserveSoc + ' %.');
+    if (ex.stopSoc < c.planningReserveSoc) r.notes.push(ex.stopSoc + ' % is below your ' + c.planningReserveSoc + ' % Intelligence planning reserve. That reserve is advice, not a hard limit; the hard floor here is ' + floor + ' %, and it is not a statement of battery safety.');
+    var hit = firstChargeSlotHit(state.readback.tou, start, duration);
+    if (hit) r.refusals.push('The session would run into slot ' + hit + ', which charges from the grid (the end minute counts). The firmware refuses an export that overlaps a charge slot.');
+    if (c.clockChangeNight && crossesClockChangeHours(start, duration)) r.refusals.push('No export session between 00:00 and 03:00 on a clock-change night.');
+    if (run && !run.inProgress) {
+      r.gapToCharge = span(r.end, run.start);
+      if (!hit && r.gapToCharge < LIMITS.gapMin) r.refusals.push('Only ' + r.gapToCharge + ' min between the end of the export and the charge window; at least ' + LIMITS.gapMin + ' min are needed to restore and verify.');
+    }
+    /* value of the cycle: only the exported energy counts; the house would have used its share of the battery anyway */
+    var fromBattKwh = r.exportedKwh / c.dischargeEff;
+    r.benefitP = r.exportedKwh * c.prices.exportP - fromBattKwh / c.chargeEff * c.prices.cheapImportP - fromBattKwh * c.prices.wearP;
+    return r;
+  }
+
+  function deriveCharge(state, plan, run, ex) {
+    var c = state.ctx, ch = plan.charge, cap = chargeKwh(c), tou = state.readback.tou;
+    var r = { refusals: [], notes: [], warnings: [], strategy: ch.strategy };
+    if (!run) { r.refusals.push('There is no grid-charge window in your TOU table. Charge Battery can still run Now or on a Schedule.'); return r; }
+    var windowEnd = norm(run.start + run.minutes);
+    r.window = { start: run.start, end: windowEnd, minutes: run.minutes, slots: run.slots.map(function (i) { return i + 1; }) };
+    /* if the window is already running, plan from now with the minutes that are left */
+    var t0 = run.inProgress ? c.nowMin : run.start;
+    var left = run.inProgress ? run.minutes - span(run.start, c.nowMin) : run.minutes;
+    var avail = left - ch.bufferMin;
+    if (avail < LIMITS.minChargeMinutes) { r.refusals.push('A ' + ch.bufferMin + '-minute buffer leaves less than ' + LIMITS.minChargeMinutes + ' minutes of the ' + left + ' minutes left in the window.'); return r; }
+    r.finishBy = norm(t0 + avail);
+    var socFrom = c.socNow, fromMin = c.nowMin;
+    r.basis = 'now';
+    if (!run.inProgress && ex && ex.enabled && !ex.refusals.length && isFinite(ex.endSoc) && span(c.nowMin, ex.end) <= span(c.nowMin, run.start)) {
+      socFrom = ex.endSoc; fromMin = ex.end; r.basis = 'export';
+    }
+    var idle = run.inProgress ? 0 : span(fromMin, run.start);
+    var socStart = Math.max(0, socFrom - pct(kwh(c.overnightLoadW, idle) / c.dischargeEff, cap));
+    r.socStart = socStart;
+    var energyKwh = Math.max(0, (ch.targetSoc - socStart) / 100 * cap);
+    r.energyKwh = energyKwh; r.gridKwh = energyKwh / c.chargeEff;
+    var hw = [['the inverter', c.inverterMaxChargeW], ['the battery\'s configured charge current', c.batteryMaxChargeA * c.batteryV],
+      ['the grid-charge current setting', c.gridChargeA * c.batteryV], ['the maximum grid-charge power', c.maxGridChargeW]];
+    var hwMax = Infinity, hwBy = '';
+    hw.forEach(function (l) { if (isFinite(l[1]) && l[1] < hwMax) { hwMax = l[1]; hwBy = l[0]; } });
+    var maxW = floorTo(Math.min(ch.maxChargeW, hwMax), LIMITS.chargePowerStep);
+    r.maxW = maxW; r.maxBy = ch.maxChargeW <= hwMax ? 'your maximum' : hwBy;
+    var slotW = tou[run.slots[0]].power, stdW = Math.min(slotW, floorTo(hwMax, LIMITS.chargePowerStep));
+    r.slotPowerW = slotW;
+    function finishAfter(w) { return energyKwh * 1000 / c.chargeEff / w * 60; }
+    if (energyKwh <= 0) {
+      r.notes.push('The battery should already be at or above ' + ch.targetSoc + ' % when the window opens: nothing to charge.');
+      r.rateW = 0; r.gentleW = 0; r.feasible = true; r.estFinish = t0; r.dwellMin = left;
+      r.standard = { rateW: stdW, finish: t0, dwellMin: left };
+      return r;
+    }
+    var needW = energyKwh * 1000 / c.chargeEff / (avail / 60);
+    var gentleW = Math.max(LIMITS.chargePowerMin, ceilTo(needW, LIMITS.chargePowerStep));
+    r.feasible = gentleW <= maxW;
+    if (!r.feasible) gentleW = maxW;
+    r.gentleW = gentleW; r.needW = needW;
+    var stdFin = finishAfter(stdW);
+    r.standard = { rateW: stdW, finish: norm(t0 + Math.ceil(Math.min(stdFin, left))), dwellMin: Math.max(0, left - Math.ceil(stdFin)) };
+    var rateW = ch.strategy === 'gentle' ? gentleW : stdW;
+    r.rateW = rateW;
+    var fin = finishAfter(rateW);
+    if (fin > left) {
+      var reach = socStart + pct(kwh(rateW, left) * c.chargeEff, cap);
+      r.reachSoc = Math.min(ch.targetSoc, reach); r.estFinish = windowEnd; r.dwellMin = 0;
+      r.warnings.push('At ' + fw(rateW) + ' the battery reaches about ' + Math.floor(reach) + ' % by ' + fmt(windowEnd) + ', not ' + ch.targetSoc + ' %.');
+    } else {
+      r.estFinish = norm(t0 + Math.ceil(fin)); r.dwellMin = left - Math.ceil(fin);
+    }
+    if (ch.strategy === 'gentle' && !r.feasible) r.warnings.push('Finishing ' + ch.bufferMin + ' min early needs about ' + fw(ceilTo(needW, 100)) + ', above the ' + fw(maxW) + ' allowed by ' + r.maxBy + '.');
+    return r;
+  }
+
+  function deriveSolar(state, plan, chargeD) {
+    var c = state.ctx, s = plan.summer, cap = usableKwh(c);
+    if (!s.enabled) return { enabled: false };
+    var charged = chargeD && !chargeD.refusals.length;
+    var morningSoc = !charged ? c.socNow : (isFinite(chargeD.reachSoc) ? chargeD.reachSoc : plan.charge.targetSoc);
+    var conf = c.solar.confidence;
+    var surplusLow = Math.max(0, c.solar.forecastKwh * 0.6 - c.solar.dayLoadKwh);
+    var headroom = (100 - morningSoc) / 100 * cap;
+    var r = { enabled: true, confidence: conf, threshold: s.confidenceMin, onset: c.solar.onsetMin, surplusLowKwh: surplusLow, headroomKwh: headroom };
+    var floorSoc = Math.max(s.minReserveSoc, LIMITS.exportStopSocMin, isFinite(c.shutdownSoc) ? c.shutdownSoc : 100);
+    var aboveFloor = Math.max(0, (morningSoc - floorSoc) / 100 * cap);
+    var from = charged ? chargeD.window.end : c.nowMin;
+    var windowMin = Math.min(LIMITS.exportDurationMax, span(from, c.solar.onsetMin - s.gapBeforePvMin));
+    var netW = Math.max(0, LIMITS.provenExportCeilingW - c.solar.morningLoadW);
+    var rateCapKwh = kwh(netW, windowMin) / c.dischargeEff;
+    var want = Math.max(0, surplusLow - headroom);
+    var propose = Math.min(want, s.maxPreSolarKwh, aboveFloor, rateCapKwh);
+    r.proposeKwh = round1(propose);
+    r.benefitP = r.proposeKwh * c.dischargeEff * c.prices.exportP - r.proposeKwh * c.prices.wearP;
+    if (conf < s.confidenceMin) {
+      r.outcome = 'hold';
+      r.text = 'PV forecast uncertain (confidence ' + Math.round(conf * 100) + ' %, your threshold ' + Math.round(s.confidenceMin * 100) + ' %): holding the battery rather than exporting.';
+    } else if (r.proposeKwh < 0.5) {
+      r.outcome = 'none';
+      r.text = 'The battery should have enough room for the expected surplus: no export needed.';
+    } else if (r.benefitP <= 0) {
+      r.outcome = 'none';
+      r.text = 'Exporting before solar would not pay at these prices after losses and wear: holding the battery.';
+    } else {
+      r.outcome = 'propose';
+      r.text = 'Solar surplus probable: propose exporting ' + r.proposeKwh + ' kWh before ' + fmt(c.solar.onsetMin - s.gapBeforePvMin) + ', creating ' + r.proposeKwh + ' kWh more room for solar.';
+    }
+    return r;
+  }
+
+  function driftOf(state) {
+    var a = state.saved.basisTou, b = state.readback.tou, out = [];
+    for (var i = 0; i < 6; i++) ['start', 'power', 'soc', 'source'].forEach(function (k) {
+      if (a[i][k] !== b[i][k]) out.push({ slot: i + 1, field: k, from: a[i][k], to: b[i][k] });
+    });
+    return out;
+  }
+
+  var FIELD_LABEL = { target_soc: 'target SOC', power: 'power', start: 'start time', source: 'charge source', soc: 'target SOC' };
+  function showVal(field, v) { return field === 'power' ? fw(v) : (field === 'target_soc' || field === 'soc') ? v + ' %' : String(v); }
+  function nativeEdit(i, field, from, to) {
+    return { kind: 'native', slot: i + 1, field: field, from: from, to: to,
+      gate: 'Review, typed confirmation, Apply, verified readback',
+      text: 'Slot ' + (i + 1) + ' ' + FIELD_LABEL[field] + ' ' + showVal(field, from) + ' → ' + showVal(field, to) };
+  }
+
+  function compile(state, plan, d) {
+    var c = state.ctx, tou = state.readback.tou, actions = [], refusals = [], notes = [];
+    if (d.blockers.length) return { actions: [], refusals: d.blockers.slice(), notes: [], compensation: [], changeCount: 0, paused: true };
+    var ch = d.charge, ex = d.export;
+    if (d.run && !ch.refusals.length) {
+      if (plan.charge.stepped) {
+        var need = 3, have = d.run.slots.length;
+        if (have < need) refusals.push('Charge: a 3-step charge profile needs 3 slots inside the charge window; this window has ' + have + '. That means ' + (LIMITS.slots - have + need) + ' slots in a day that has exactly ' + LIMITS.slots + ', all in use. ECCO will not restructure the day schedule automatically; use one gentle rate instead.');
+        else refusals.push('Charge: this window has ' + have + ' slots, but a stepped profile across them is not designed yet; use one gentle rate instead.');
+      } else {
+        d.run.slots.forEach(function (i) {
+          if (tou[i].soc !== plan.charge.targetSoc) actions.push(nativeEdit(i, 'target_soc', tou[i].soc, plan.charge.targetSoc));
+          if (plan.charge.strategy === 'gentle' && ch.rateW > 0) {
+            if (Math.abs(tou[i].power - ch.rateW) >= LIMITS.rateHysteresisW) actions.push(nativeEdit(i, 'power', tou[i].power, ch.rateW));
+            else if (tou[i].power !== ch.rateW) notes.push('Slot ' + (i + 1) + ': the rate differs by less than ' + LIMITS.rateHysteresisW + ' W, so the slot is not edited.');
+          }
+        });
+      }
+    }
+    if (ex.enabled && !ex.refusals.length) {
+      actions.push({ kind: 'session', feature: 'Export to Grid', via: 'the existing scheduled Dump to Grid fields',
+        start: ex.start, duration: ex.duration, netW: ex.netW, stopSoc: plan.export.stopSoc,
+        text: 'Scheduled export ' + fmt(ex.start) + '–' + fmt(ex.end) + ': net export ' + fw(ex.netW) + ', stop at ' + plan.export.stopSoc + ' %, ' + ex.duration + ' min' });
+    }
+    ex.refusals.forEach(function (t) { refusals.push('Export: ' + t); });
+    ch.refusals.forEach(function (t) { refusals.push('Charge: ' + t); });
+    if (state.partial) refusals.push('A partial result is waiting for your decision; nothing else is proposed until then.');
+    if (d.drift.length) refusals.push('The inverter table changed outside the plan (drift). Review the plan against the new readback before anything is proposed.');
+    actions.forEach(function (a) {
+      a.status = 'proposed';
+      if (state.partial) { a.status = 'blocked'; a.why = 'a partial result needs your decision first'; return; }
+      if (d.drift.length) { a.status = 'blocked'; a.why = 'the drift must be reviewed first'; return; }
+      if (c.activeLease) { a.status = 'deferred'; a.why = 'waits until the active ' + c.activeLease + ' session has ended and its restore is verified (one writer at a time)'; return; }
+      if (a.kind === 'native' && c.clockChangeNight) { a.status = 'deferred'; a.why = 'slot edits wait until the clock-change night is over'; }
+    });
+    var native = actions.filter(function (a) { return a.kind === 'native'; });
+    var compensation = native.slice().reverse().map(function (a) {
+      return { slot: a.slot, field: a.field, from: a.to, to: a.from, text: 'Slot ' + a.slot + ' ' + FIELD_LABEL[a.field] + ' ' + showVal(a.field, a.to) + ' → ' + showVal(a.field, a.from) };
+    });
+    return { actions: actions, refusals: refusals, notes: notes, compensation: compensation, changeCount: native.length, spacingMin: LIMITS.applySpacingMin };
+  }
+
+  function socTrajectory(state, d) {
+    var c = state.ctx, cap = usableKwh(c), pts = [], soc = c.socNow;
+    var ex = d.export, ch = d.charge, run = d.run;
+    var horizon = run ? span(c.nowMin, norm(run.start + run.minutes)) : 720;
+    if (run && run.inProgress) horizon = span(c.nowMin, norm(run.start + run.minutes));
+    var exOn = ex.enabled && !ex.refusals.length;
+    for (var t = 0; t <= horizon; t += 5) {
+      pts.push({ t: norm(c.nowMin + t), soc: soc });
+      var abs = norm(c.nowMin + t), w;
+      if (exOn && span(ex.start, abs) < ex.duration && soc > ex.endSoc) { w = -ex.battW / c.dischargeEff; }
+      else if (run && span(run.start, abs) < run.minutes && ch.rateW > 0) { w = soc < (ch.reachSoc || d.plan.charge.targetSoc) ? ch.rateW * c.chargeEff : 0; }
+      else { w = -(abs >= 23 * 60 || abs < 7 * 60 ? c.overnightLoadW : c.houseLoadW) / c.dischargeEff; }
+      soc = Math.max(0, Math.min(100, soc + pct(kwh(w, 5), cap)));
+      if (exOn && soc < ex.endSoc && span(ex.start, abs) < ex.duration) soc = ex.endSoc;
+      if (run && ch.rateW > 0 && soc > d.plan.charge.targetSoc) soc = d.plan.charge.targetSoc;
+    }
+    return pts;
+  }
+
+  function summary(d) {
+    var ex = d.export, ch = d.charge, p = d.plan, parts = [];
+    if (ex.enabled) {
+      if (ex.refusals.length) parts.push('Export: not planned (' + ex.refusals[0].replace(/\.$/, '') + ')');
+      else if (!ex.feasible) parts.push('Export toward ' + p.export.stopSoc + ' % until ' + fmt(ex.end) + ', reaching only about ' + Math.round(ex.endSoc) + ' % (limit reached)');
+      else parts.push('Export to ' + p.export.stopSoc + ' % by ' + fmt(ex.end) + ' at about ' + fw(ex.netW) + ' net');
+      if (!ex.refusals.length && isFinite(ex.gapToCharge)) parts.push(ex.gapToCharge + ' min to restore and settle');
+    }
+    if (ch.refusals.length) parts.push('Charge: ' + ch.refusals[0].replace(/\.$/, ''));
+    else if (ch.rateW === 0) parts.push('no overnight charge needed');
+    else {
+      var how = p.charge.strategy === 'gentle' ? 'charge gently' : 'charge at the slot rate';
+      if (isFinite(ch.reachSoc)) parts.push(how + ' at about ' + fw(ch.rateW) + ', reaching only about ' + Math.floor(ch.reachSoc) + ' % (not ' + p.charge.targetSoc + ' %) by ' + fmt(ch.window.end));
+      else if (p.charge.strategy === 'gentle' && !ch.feasible) parts.push(how + ' to ' + p.charge.targetSoc + ' % at about ' + fw(ch.rateW) + ', done about ' + fmt(ch.estFinish) + ', after your ' + fmt(ch.finishBy) + ' finish-by');
+      else if (p.charge.strategy === 'gentle') parts.push('charge gently to ' + p.charge.targetSoc + ' % by ' + fmt(ch.finishBy) + ' at about ' + fw(ch.rateW));
+      else parts.push('charge at the slot rate (' + fw(ch.rateW) + ') to ' + p.charge.targetSoc + ' %, done about ' + fmt(ch.estFinish));
+    }
+    var s = parts.join(', then ');
+    s = s.charAt(0).toUpperCase() + s.slice(1) + '.';
+    if (d.blockers.length) s = 'Paused: ' + d.blockers[0] + ' Last plan: ' + s;
+    return s;
+  }
+
+  function planOf(state, which) { return (which === 'saved' || !state.draft) ? state.saved.plan : state.draft.plan; }
+  function derive(state, which) {
+    var plan = planOf(state, which), c = state.ctx, tou = state.readback.tou;
+    var d = { plan: plan, touCheck: validateTou(tou), blockers: [] };
+    if (!d.touCheck.ok) d.blockers.push('The TOU table cannot be read as a valid six-slot day: ' + d.touCheck.why + '.');
+    if (!c.telemetryFresh) d.blockers.push('Live readings are stale: planning is paused until fresh readings arrive.');
+    if (!c.haOnline) d.blockers.push('Home Assistant is offline: the inverter keeps running its own TOU table; nothing is planned or sent.');
+    d.run = d.touCheck.ok ? nextRun(chargeRuns(tou), c.nowMin) : null;
+    d.export = deriveExport(state, plan, d.run);
+    d.charge = deriveCharge(state, plan, d.run, d.export);
+    d.solar = deriveSolar(state, plan, d.charge);
+    d.drift = driftOf(state);
+    d.compiled = compile(state, plan, d);
+    d.summary = summary(d);
+    return d;
+  }
+
+  /* ---------- canonical fields and edits ---------- */
+  var FIELDS = {
+    'profile': { label: 'Energy plan profile', options: ['normal', 'summer'] },
+    'charge.strategy': { label: 'Charge mode', options: ['gentle', 'standard'] },
+    'charge.targetSoc': { label: 'Charge target', unit: '%', min: 20, max: 100, step: 1 },
+    'charge.bufferMin': { label: 'Finish before the window ends', unit: 'min', min: 0, max: 120, step: 5 },
+    'charge.maxChargeW': { label: 'Maximum charge power', unit: 'W', min: 500, max: 5000, step: 100 },
+    'charge.stepped': { label: 'Stepped charge profile', bool: true },
+    'charge.day.targetSoc': { label: 'Daytime target', unit: '%', min: 20, max: 100, step: 1 },
+    'charge.day.byTime': { label: 'Daytime target by', time: true },
+    'export.enabled': { label: 'Smart Export', bool: true },
+    'export.stopSoc': { label: 'Export down to', unit: '%', min: 10, max: 90, step: 1,
+      belowMin: 'Below 10 % is not available. The firmware and the scheduled package refuse it. A lower floor would need a separate battery, BMS and inverter safety review and your explicit decision.' },
+    'export.finishMode': { label: 'Finish', options: ['before_charge', 'at_time'] },
+    'export.gapMin': { label: 'Handover gap before charging', unit: 'min', min: 10, max: 120, step: 5 },
+    'export.finishAt': { label: 'Finish by', time: true },
+    'summer.confidenceMin': { label: 'Forecast confidence needed', min: 0.5, max: 0.95, step: 0.05 },
+    'summer.maxPreSolarKwh': { label: 'Most to export before solar', unit: 'kWh', min: 1, max: 10, step: 0.5 },
+    'summer.minReserveSoc': { label: 'Keep at least', unit: '%', min: 10, max: 90, step: 1 },
+    'summer.gapBeforePvMin': { label: 'Finish before solar arrives', unit: 'min', min: 10, max: 120, step: 5 }
+  };
+  function getPath(o, path) { return path.split('.').reduce(function (x, k) { return x == null ? x : x[k]; }, o); }
+  function setPath(o, path, v) { var ks = path.split('.'), last = ks.pop(); ks.reduce(function (x, k) { return x[k]; }, o)[last] = v; }
+  function validate(path, raw) {
+    var f = FIELDS[path];
+    if (!f) return { ok: false, error: 'Unknown setting.' };
+    if (f.bool) return { ok: true, value: raw === true || raw === 'true' || raw === 'on' };
+    if (f.options) return f.options.indexOf(raw) >= 0 ? { ok: true, value: raw } : { ok: false, error: 'Not an available choice.' };
+    if (f.time) {
+      var m = toMin(raw);
+      if (!isFinite(m)) return { ok: false, error: 'Enter a time as HH:MM.' };
+      if (m % 5) return { ok: false, error: 'Times use the 5-minute grid (for example 22:30 or 22:35).' };
+      return { ok: true, value: fmt(m) };
+    }
+    var v = Number(raw);
+    if (raw === '' || !isFinite(v)) return { ok: false, error: 'Enter a number.' };
+    if (v < f.min) return { ok: false, error: f.belowMin || (f.label + ' must be at least ' + f.min + (f.unit ? ' ' + f.unit : '') + '.') };
+    if (v > f.max) return { ok: false, error: f.label + ' can be at most ' + f.max + (f.unit ? ' ' + f.unit : '') + '.' };
+    var steps = (v - f.min) / f.step;
+    if (Math.abs(steps - Math.round(steps)) > 1e-6) return { ok: false, error: f.label + ' moves in steps of ' + f.step + (f.unit ? ' ' + f.unit : '') + '.' };
+    return { ok: true, value: Math.round(v * 100) / 100 };
+  }
+  function edit(state, path, raw) {
+    var r = validate(path, raw);
+    if (!r.ok) return { ok: false, error: r.error, state: state };
+    var next = clone(state);
+    if (!next.draft) next.draft = { revision: next.saved.revision + 1, plan: clone(next.saved.plan) };
+    setPath(next.draft.plan, path, r.value);
+    if (path === 'profile') Object.keys(PROFILES[r.value]).forEach(function (k) { setPath(next.draft.plan, k, PROFILES[r.value][k]); });
+    if (same(next.draft.plan, next.saved.plan)) next.draft = null;
+    next.outcome = null;
+    return { ok: true, state: next };
+  }
+  function setCtx(state, key, value) { var next = clone(state); setPath(next.ctx, key, value); return next; }
+  function discard(state) { var n = clone(state); n.draft = null; n.outcome = { kind: 'discarded', text: 'Draft discarded. Every view shows the saved plan.' }; return n; }
+  function saveDraft(state) {
+    if (!state.draft) return state;
+    var n = clone(state);
+    n.saved = { revision: n.draft.revision, plan: n.draft.plan, basisTou: clone(n.readback.tou) };
+    n.draft = null;
+    n.outcome = { kind: 'saved', text: 'Plan revision ' + n.saved.revision + ' saved (in this page only). Nothing was sent: the inverter still shows its own table.' };
+    n.log.push('saved revision ' + n.saved.revision);
+    return n;
+  }
+
+  var LABELS = {};
+  Object.keys(FIELDS).forEach(function (k) { LABELS[k] = FIELDS[k].label; });
+  LABELS['summer.enabled'] = 'Summer Solar Priority';
+  function flatten(o, pre, out) {
+    out = out || {};
+    Object.keys(o).forEach(function (k) {
+      var p = pre ? pre + '.' + k : k;
+      if (o[k] && typeof o[k] === 'object') flatten(o[k], p, out); else out[p] = o[k];
+    });
+    return out;
+  }
+  function diffPlans(a, b) {
+    var fa = flatten(a), fb = flatten(b), out = [];
+    Object.keys(fb).forEach(function (k) { if (fa[k] !== fb[k]) out.push({ path: k, label: LABELS[k] || k, from: fa[k], to: fb[k] }); });
+    return out;
+  }
+  function consequences(b, a) {
+    var out = [];
+    function cmp(label, x, y, f) { if (x !== y && !(x == null && y == null)) out.push(label + ': ' + (x == null ? 'none' : f(x)) + ' → ' + (y == null ? 'none' : f(y))); }
+    var t = function (m) { return isFinite(m) ? fmt(m) : 'none'; }, w = fw, p = function (v) { return Math.round(v) + ' %'; };
+    cmp('Export ends', b.export.end, a.export.end, t);
+    cmp('Export rate (net)', b.export.netW, a.export.netW, w);
+    cmp('Charge finish-by', b.charge.finishBy, a.charge.finishBy, t);
+    cmp('Charge rate', b.charge.rateW, a.charge.rateW, w);
+    cmp('Charge starts from about', b.charge.socStart == null ? null : Math.round(b.charge.socStart), a.charge.socStart == null ? null : Math.round(a.charge.socStart), p);
+    cmp('Estimated charge finish', b.charge.estFinish, a.charge.estFinish, t);
+    cmp('Slot edits proposed', b.compiled.changeCount, a.compiled.changeCount, String);
+    return out;
+  }
+  function review(state) {
+    if (!state.draft) return null;
+    var before = derive(state, 'saved'), after = derive(state, 'draft');
+    return { revision: state.draft.revision, changes: diffPlans(state.saved.plan, state.draft.plan), consequences: consequences(before, after), compiled: after.compiled, drift: after.drift };
+  }
+
+  /* ---------- simulated backend (fake; for the design's test cases only) ---------- */
+  function applyNative(tou, a) { tou[a.slot - 1][a.field === 'target_soc' ? 'soc' : a.field] = a.to; }
+  function simulateApply(state, outcome) {
+    if (!state.draft) return state;
+    var n = clone(state), d = derive(n, 'draft'), acts = d.compiled.actions;
+    function stop(text) { n.outcome = { kind: 'not-sent', text: text }; return n; }
+    if (d.compiled.paused) return stop('Nothing was sent: planning is paused. ' + d.blockers[0]);
+    if (acts.some(function (a) { return a.status === 'blocked'; })) return stop('Nothing was sent: the plan is blocked (see the review).');
+    var deferred = acts.filter(function (a) { return a.status === 'deferred'; });
+    if (deferred.length) return stop('Nothing was sent: ' + deferred.length + ' action(s) are deferred; ' + deferred[0].why + '.');
+    var todo = acts.filter(function (a) { return a.kind === 'native' && a.status === 'proposed'; });
+    var session = acts.some(function (a) { return a.kind === 'session'; });
+    if (outcome === 'rejected') {
+      n.draft = null;
+      n.outcome = { kind: 'rejected', text: 'Simulated refusal: the backend refused the first edit ("a scheduled session starts within 15 minutes"). Nothing was written. The draft was discarded and every view shows the saved plan again.' };
+      n.log.push('rejected revision ' + state.draft.revision);
+      return n;
+    }
+    if (outcome === 'partial') {
+      if (todo.length < 2) return stop('A partial result needs at least two slot edits; this draft compiles to ' + todo.length + '. Nothing changed. (Try a lower charge target.)');
+      applyNative(n.readback.tou, todo[0]);
+      n.partial = { applied: [todo[0].text], failed: todo[1].text, compensation: [{ text: 'Slot ' + todo[0].slot + ' ' + FIELD_LABEL[todo[0].field] + ' ' + showVal(todo[0].field, todo[0].to) + ' → ' + showVal(todo[0].field, todo[0].from) }] };
+      n.outcome = { kind: 'partial', text: 'Simulated partial result: "' + todo[0].text + '" was applied and verified; "' + todo[1].text + '" failed its readback. The edits are not atomic, so the inverter now differs from both plans. Everything else waits until you choose: keep the result, or run the listed compensation edit (itself a guarded edit).' };
+      n.log.push('partial apply');
+      return n;
+    }
+    todo.forEach(function (a) { applyNative(n.readback.tou, a); });
+    n.saved = { revision: n.draft.revision, plan: n.draft.plan, basisTou: clone(n.readback.tou) };
+    n.draft = null;
+    n.outcome = { kind: 'verified', text: 'Simulated: ' + todo.length + ' slot edit(s) applied one at a time, each verified by readback; the plan is saved as revision ' + n.saved.revision + '.' + (session ? ' The scheduled export would then be armed by you, as today.' : '') };
+    n.log.push('applied revision ' + n.saved.revision);
+    return n;
+  }
+  function simulateExternalEdit(state, slot, field, value) {
+    var n = clone(state);
+    n.readback.tou[slot - 1][field] = value;
+    n.outcome = { kind: 'external', text: 'The inverter table changed outside ECCO (simulated: slot ' + slot + ' ' + FIELD_LABEL[field] + ' is now ' + showVal(field, value) + '). Drafts and proposals are blocked until you review.' };
+    return n;
+  }
+  function acceptDrift(state) {
+    var n = clone(state);
+    n.saved.basisTou = clone(n.readback.tou); n.partial = null;
+    n.outcome = { kind: 'drift-accepted', text: 'You reviewed the new readback; the plan is re-derived from it.' };
+    return n;
+  }
+  function simulateRestart(state) {
+    var n = clone(state);
+    n.draft = null; n.ctx.haOnline = true;
+    n.outcome = { kind: 'restart', text: 'Simulated Home Assistant restart: after reconnecting, the page reloaded the saved plan (revision ' + n.saved.revision + ') and a fresh readback. Drafts are not stored in Home Assistant, so the unsaved draft was discarded. Nothing was re-sent.' };
+    n.log.push('restart');
+    return n;
+  }
+
+  /* ---------- cross-card checks (the design's acceptance tests) ---------- */
+  function runChecks() {
+    var out = [];
+    function check(id, name, fn) {
+      var res;
+      try { res = fn(); } catch (e) { res = { pass: false, detail: 'threw: ' + e.message }; }
+      out.push({ id: id, name: name, pass: !!res.pass, detail: res.detail || '' });
+    }
+    var base = newState(), d0 = derive(base);
+    check('C1', 'A TOU charge-start change re-derives the linked export finish', function () {
+      var s = simulateExternalEdit(base, 1, 'start', '00:00'), d = derive(s);
+      return { pass: d0.export.finishBy === toMin('23:00') && d.export.finishBy === toMin('23:30') && d.drift.length === 1,
+        detail: 'finish-by ' + fmt(d0.export.finishBy) + ' -> ' + fmt(d.export.finishBy) + ', drift ' + d.drift.length };
+    });
+    check('C2', 'The handover gap is one field: export, timeline and Home summary all move', function () {
+      var r = edit(base, 'export.gapMin', 60), d = derive(r.state);
+      return { pass: r.ok && d.export.finishBy === toMin('22:30') && d.export.end !== d0.export.end && d.summary !== d0.summary && d.summary.indexOf(fmt(d.export.end)) >= 0 && review(r.state).changes.length === 1,
+        detail: d.summary };
+    });
+    check('C3', 'A finish-buffer change is a preview only', function () {
+      var r = edit(base, 'charge.bufferMin', 90), d = derive(r.state);
+      var untouched = same(r.state.readback.tou, base.readback.tou) && same(r.state.saved, base.saved);
+      return { pass: r.ok && untouched && !!r.state.draft && d.charge.finishBy === norm(d0.charge.finishBy - 30) && d.charge.rateW > d0.charge.rateW,
+        detail: 'rate ' + d0.charge.rateW + ' -> ' + d.charge.rateW + ' W; readback and saved plan untouched: ' + untouched };
+    });
+    check('C4', 'A backend refusal reconciles every view to the saved plan', function () {
+      var r = edit(base, 'charge.bufferMin', 90), s = simulateApply(r.state, 'rejected');
+      return { pass: s.draft === null && s.saved.revision === base.saved.revision && same(derive(s).summary, d0.summary) && same(s.readback, base.readback),
+        detail: s.outcome && s.outcome.kind };
+    });
+    check('C5', 'An external inverter edit invalidates the draft preview', function () {
+      var r = edit(base, 'export.gapMin', 45), s = simulateExternalEdit(r.state, 1, 'soc', 80), d = derive(s);
+      return { pass: d.drift.length === 1 && d.compiled.actions.length > 0 && d.compiled.actions.every(function (a) { return a.status === 'blocked'; }) && d.compiled.refusals.some(function (t) { return /drift/.test(t); }),
+        detail: d.compiled.actions.length + ' action(s) blocked' };
+    });
+    check('C6', 'Restart / reconnect: saved plan kept, nothing re-sent', function () {
+      var r = edit(base, 'export.gapMin', 45), s = simulateRestart(r.state);
+      return { pass: s.draft === null && s.saved.revision === base.saved.revision && same(s.readback, base.readback) && s.log.indexOf('restart') >= 0 && !s.log.some(function (l) { return /^applied/.test(l); }),
+        detail: s.outcome.kind };
+    });
+    check('C7', 'Clock-change night: slot edits deferred, an export over 00:00-03:00 refused', function () {
+      /* move the grid-charge run out of 00:00-03:00 so that only the clock-change rule can refuse the export */
+      var s = simulateExternalEdit(base, 1, 'source', 'None'); s = simulateExternalEdit(s, 2, 'source', 'Grid'); s = acceptDrift(s);
+      var on = edit(setCtx(s, 'clockChangeNight', true), 'export.finishMode', 'at_time'); on = edit(on.state, 'export.finishAt', '02:00');
+      var off = edit(s, 'export.finishMode', 'at_time'); off = edit(off.state, 'export.finishAt', '02:00');
+      var dOn = derive(on.state), dOff = derive(off.state), dN = derive(setCtx(base, 'clockChangeNight', true));
+      var nat = dN.compiled.actions.filter(function (a) { return a.kind === 'native'; });
+      var cc = function (d) { return d.export.refusals.some(function (t) { return /clock-change/.test(t); }); };
+      return { pass: nat.length > 0 && nat.every(function (a) { return a.status === 'deferred'; }) && cc(dOn) && !cc(dOff) && dOff.export.refusals.length === 0,
+        detail: 'on: ' + dOn.export.refusals.join(' | ') + ' / off: ' + (dOff.export.refusals.join(' | ') || 'no refusal') };
+    });
+    check('C8', 'No grid-charge window: both cards say so; nothing is compiled for it', function () {
+      var s = simulateExternalEdit(base, 1, 'source', 'None'); s = acceptDrift(s); var d = derive(s);
+      return { pass: d.run === null && d.charge.refusals.length === 1 && d.export.refusals.length === 1 && d.compiled.actions.length === 0,
+        detail: d.charge.refusals[0] };
+    });
+    check('C9', 'More than six slots needed: explicit refusal, nothing truncated', function () {
+      var r = edit(base, 'charge.stepped', true), d = derive(r.state);
+      return { pass: d.compiled.refusals.some(function (t) { return /exactly 6/.test(t); }) && !d.compiled.actions.some(function (a) { return a.kind === 'native' && a.field === 'power'; }),
+        detail: d.compiled.refusals[0] };
+    });
+    check('C10', 'No accidental 5 % export target: refused, not clamped', function () {
+      var r = edit(base, 'export.stopSoc', 5);
+      return { pass: !r.ok && /10 %/.test(r.error) && r.state === base && base.saved.plan.export.stopSoc === 30, detail: r.error };
+    });
+    check('C11', 'Single writer: during an active session, every planned action waits', function () {
+      var s = setCtx(base, 'activeLease', 'Export to Grid'), d = derive(s);
+      return { pass: d.compiled.actions.length > 0 && d.compiled.actions.every(function (a) { return a.status === 'deferred'; }),
+        detail: d.compiled.actions.map(function (a) { return a.status; }).join(', ') };
+    });
+    check('C12', 'An export ending exactly at the charge-slot start is refused (the end minute counts)', function () {
+      /* a low export limit makes the session use its whole time, so it would end exactly at 23:30 */
+      var s = setCtx(setCtx(base, 'socNow', 95), 'maxExportW', 1500); var r = edit(s, 'export.stopSoc', 10); r = edit(r.state, 'export.finishMode', 'at_time'); r = edit(r.state, 'export.finishAt', '23:30'); var d = derive(r.state);
+      return { pass: d.export.refusals.some(function (t) { return /slot 1/.test(t); }), detail: d.export.refusals.join(' | ') };
+    });
+    check('C13', 'The hardware-tested export limit is never exceeded; the shortfall is shown', function () {
+      var s = setCtx(base, 'socNow', 95); var r = edit(s, 'export.stopSoc', 10); r = edit(r.state, 'export.finishMode', 'at_time'); r = edit(r.state, 'export.finishAt', '21:00');
+      var d = derive(r.state);
+      return { pass: d.export.battW <= LIMITS.provenExportCeilingW && d.export.feasible === false && d.export.warnings.some(function (t) { return /^Limited by/.test(t); }) && d.export.endSoc > 10,
+        detail: 'battery ' + d.export.battW + ' W; ends about ' + Math.round(d.export.endSoc) + ' %' };
+    });
+    check('C14', 'Gentle = the lowest steady rate that still finishes by the finish-by time', function () {
+      var ch = d0.charge, avail = ch.window.minutes - base.saved.plan.charge.bufferMin;
+      var minsAt = function (w) { return ch.energyKwh * 1000 / base.ctx.chargeEff / w * 60; };
+      return { pass: minsAt(ch.rateW) <= avail && (ch.rateW - 100 < LIMITS.chargePowerMin || minsAt(ch.rateW - 100) > avail),
+        detail: ch.rateW + ' W finishes about ' + fmt(ch.estFinish) + ' (finish-by ' + fmt(ch.finishBy) + ')' };
+    });
+    check('C15', 'Buffer bounds are validated (0-120 min)', function () {
+      var a = edit(base, 'charge.bufferMin', 150), b = edit(base, 'charge.bufferMin', 0), c2 = edit(base, 'charge.bufferMin', 7);
+      return { pass: !a.ok && b.ok && !c2.ok, detail: a.error + ' / ' + c2.error };
+    });
+    check('C16', 'An interrupted multi-edit is reported as partial, with a compensation edit', function () {
+      var s = setCtx(base, 'socNow', 60); var r = edit(s, 'charge.targetSoc', 85); s = simulateApply(r.state, 'partial'); var d = derive(s);
+      return { pass: !!s.partial && d.drift.length === 1 && s.partial.compensation.length === 1 && s.saved.revision === base.saved.revision,
+        detail: s.partial && s.partial.failed };
+    });
+    check('C17', 'Standard (native) mode compiles no rate edit; gentle does', function () {
+      var r = edit(base, 'charge.strategy', 'standard'), d = derive(r.state);
+      var power = function (dd) { return dd.compiled.actions.some(function (a) { return a.kind === 'native' && a.field === 'power'; }); };
+      return { pass: power(d0) && !power(d), detail: 'gentle ' + d0.compiled.changeCount + ' / standard ' + d.compiled.changeCount + ' slot edit(s)' };
+    });
+    check('C18', 'Unrelated slots are never touched', function () {
+      var r = edit(base, 'charge.targetSoc', 85), d = derive(r.state);
+      var nat = d.compiled.actions.filter(function (a) { return a.kind === 'native'; });
+      return { pass: nat.length > 0 && nat.every(function (a) { return d.run.slots.indexOf(a.slot - 1) >= 0; }),
+        detail: d.compiled.actions.map(function (a) { return a.text; }).join(' | ') };
+    });
+    check('C19', 'A profile switch changes preferences only (a reviewed draft, no action)', function () {
+      var r = edit(base, 'profile', 'summer');
+      return { pass: r.ok && same(r.state.readback, base.readback) && r.state.saved.revision === base.saved.revision && review(r.state).changes.length === 3,
+        detail: review(r.state).changes.map(function (c) { return c.label + ' ' + c.from + '->' + c.to; }).join('; ') };
+    });
+    check('C20', 'Low forecast confidence holds the battery (no pre-solar export)', function () {
+      var r = edit(base, 'profile', 'summer'), d = derive(r.state);
+      var s2 = setCtx(r.state, 'solar.confidence', 0.85), d2 = derive(s2);
+      return { pass: d.solar.outcome === 'hold' && d2.solar.outcome !== 'hold', detail: d.solar.text + ' | ' + d2.solar.text };
+    });
+    check('C21', 'An export that would finish after the next charge window is refused', function () {
+      var r = edit(base, 'export.finishMode', 'at_time'); r = edit(r.state, 'export.finishAt', '10:00'); var d = derive(r.state);
+      return { pass: d.export.refusals.some(function (t) { return /after the next charge window/.test(t); }) && d.charge.basis === 'now',
+        detail: d.export.refusals[0] };
+    });
+    check('C22', 'The one-line summary never hides a shortfall', function () {
+      var a = derive(edit(base, 'charge.maxChargeW', 1000).state);
+      var s = setCtx(base, 'socNow', 95), r = edit(s, 'export.stopSoc', 10); r = edit(r.state, 'export.finishMode', 'at_time'); r = edit(r.state, 'export.finishAt', '21:00');
+      var b = derive(r.state);
+      return { pass: /reaching only about/.test(a.summary) && /reaching only about/.test(b.summary) && !/reaching only/.test(d0.summary),
+        detail: a.summary + ' | ' + b.summary };
+    });
+    check('C23', 'Inside a running charge window the plan starts from now', function () {
+      var s = setCtx(setCtx(base, 'nowMin', 60), 'socNow', 50), d = derive(s);
+      return { pass: d.run.inProgress && d.charge.finishBy === toMin('04:00') && span(toMin('01:00'), d.charge.estFinish) <= span(toMin('01:00'), d.charge.finishBy) && d.export.refusals.length === 1,
+        detail: 'finish-by ' + fmt(d.charge.finishBy) + ', estimated ' + fmt(d.charge.estFinish) + ' at ' + d.charge.rateW + ' W' };
+    });
+    check('C24', 'The export floor is the greater of 10 % and the inverter shutdown level; unreadable means no plan', function () {
+      var r = edit(base, 'export.stopSoc', 10);
+      var hi = derive(setCtx(r.state, 'shutdownSoc', 15)), un = derive(setCtx(r.state, 'shutdownSoc', null)), ok = derive(r.state);
+      return { pass: hi.export.refusals.some(function (t) { return /15 %/.test(t); }) && un.export.refusals.some(function (t) { return /cannot be read/.test(t); }) && ok.export.refusals.length === 0,
+        detail: hi.export.refusals[0] + ' | ' + un.export.refusals[0] };
+    });
+    return out;
+  }
+
+  root.PlanModel = {
+    LIMITS: LIMITS, FIELDS: FIELDS, toMin: toMin, fmt: fmt, span: span, norm: norm,
+    newState: newState, defaultPlan: defaultPlan, exampleTou: exampleTou, usableKwh: usableKwh, chargeKwh: chargeKwh,
+    validateTou: validateTou, slotSpans: slotSpans, chargeRuns: chargeRuns, derive: derive, socTrajectory: socTrajectory,
+    validate: validate, edit: edit, setCtx: setCtx, discard: discard, saveDraft: saveDraft, review: review, getPath: getPath,
+    simulateApply: simulateApply, simulateExternalEdit: simulateExternalEdit, simulateRestart: simulateRestart, acceptDrift: acceptDrift,
+    runChecks: runChecks
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+
+<script id="ui">
+(function () {
+  'use strict';
+  var M = window.PlanModel, fmt = M.fmt, span = M.span, toMin = M.toMin;
+  var S = M.newState();
+  var ui = { view: 'home', chargeTab: 'smart', exportTab: 'smart', anchor: 720, slot: null, sheet: null, errors: {}, checks: null, open: {}, returnFocus: null };
+  var FIELD_NAME = { start: 'start time', power: 'power', soc: 'target SOC', source: 'charge source' };
+  var app = document.getElementById('app');
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function plan() { return S.draft ? S.draft.plan : S.saved.plan; }
+  function val(path) { return M.getPath(plan(), path); }
+  function W(v) { return Math.round(v).toLocaleString('en-GB') + ' W'; }
+  function kWh(v) { return (Math.round(v * 10) / 10).toFixed(1) + ' kWh'; }
+  function P(v) { return Math.round(v) + ' %'; }
+  function money(p) { var s = p < 0 ? '-' : '+'; return s + '£' + (Math.abs(p) / 100).toFixed(2); }
+  var TAG = {
+    exists: '<span class="tag exists" title="An existing feature, shown here with fictional values">Works today</span>',
+    proposal: '<span class="tag proposal" title="Design proposal. Not a working feature.">Proposal</span>',
+    derived: '<span class="tag derived" title="Computed from other settings; read-only">Derived</span>',
+    sim: '<span class="tag sim" title="A fake, in-page backend used for the design test cases">Simulation</span>'
+  };
+
+  /* ---------- small building blocks ---------- */
+  function described(id, path, hint) {
+    var ids = []; if (hint) ids.push(id + '-h'); if (ui.errors[path]) ids.push(id + '-e');
+    return (ids.length ? ' aria-describedby="' + ids.join(' ') + '"' : '') + (ui.errors[path] ? ' aria-invalid="true"' : '');
+  }
+  function range(path, opts) {
+    var f = M.FIELDS[path], v = val(path), id = 'f-' + path.replace(/\./g, '-'), hint = opts && opts.hint;
+    var shown = opts && opts.show ? opts.show(v) : v + (f.unit ? ' ' + f.unit : '');
+    return '<div class="field"><label for="' + id + '"><span>' + esc(f.label) + '</span><output data-out-for="' + path + '" for="' + id + '">' + esc(shown) + '</output></label>' +
+      '<input type="range" id="' + id + '" data-field="' + path + '" min="' + f.min + '" max="' + f.max + '" step="' + f.step + '" value="' + v + '"' + described(id, path, hint) + '>' +
+      (hint ? '<div class="hint" id="' + id + '-h">' + hint + '</div>' : '') + err(path, id) + '</div>';
+  }
+  function number(path, opts) {
+    var f = M.FIELDS[path], v = val(path), id = 'f-' + path.replace(/\./g, '-'), hint = opts && opts.hint;
+    return '<div class="field"><label for="' + id + '"><span>' + esc(f.label) + (f.unit ? ' (' + f.unit + ')' : '') + '</span></label>' +
+      '<input type="number" inputmode="numeric" id="' + id + '" data-field="' + path + '" value="' + v + '" step="' + f.step + '"' + described(id, path, hint) + '>' +
+      (hint ? '<div class="hint" id="' + id + '-h">' + hint + '</div>' : '') + err(path, id) + '</div>';
+  }
+  function time(path, hint) {
+    var f = M.FIELDS[path], id = 'f-' + path.replace(/\./g, '-');
+    return '<div class="field"><label for="' + id + '"><span>' + esc(f.label) + '</span></label><input type="time" step="300" id="' + id + '" data-field="' + path + '" value="' + val(path) + '"' + described(id, path, hint) + '>' +
+      (hint ? '<div class="hint" id="' + id + '-h">' + hint + '</div>' : '') + err(path, id) + '</div>';
+  }
+  function err(path, id) { return ui.errors[path] ? '<div class="err" role="alert" id="' + id + '-e">' + esc(ui.errors[path]) + '</div>' : ''; }
+  function kv(rows) { return '<dl class="kv">' + rows.map(function (r) { return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; }).join('') + '</dl>'; }
+  function notes(list, cls) { return list.map(function (t) { return '<div class="note ' + (cls || '') + '">' + esc(t) + '</div>'; }).join(''); }
+  function seg(name, current, items) {
+    return '<div class="seg" role="group" aria-label="' + esc(name) + '">' + items.map(function (it) {
+      return '<button type="button" data-seg="' + esc(name) + '" data-val="' + it[0] + '" aria-pressed="' + (current === it[0]) + '">' + esc(it[1]) + '</button>';
+    }).join('') + '</div>';
+  }
+  function region(name, d) { return '<div data-region="' + name + '">' + R[name](d) + '</div>'; }
+
+  /* ---------- regions (re-rendered on every edit, never contain the focused input) ---------- */
+  var R = {};
+  R.status = function (d) {
+    var bad = d.blockers.length || d.drift.length, warn = d.export.refusals.length || d.charge.refusals.length || d.export.warnings.length || d.charge.warnings.length;
+    var cls = bad ? 'bad' : warn ? 'warn' : '';
+    var text = bad ? (d.drift.length ? 'Inverter changed outside the plan' : 'Planning paused') : warn ? 'Plan needs a look' : 'All good · advice and planning only';
+    return '<span class="dot ' + cls + '" aria-hidden="true"></span><span>' + esc(text) + '</span>';
+  };
+  R.homeplan = function (d) {
+    return '<p style="font-size:16px">' + esc(d.summary) + '</p>' + R.cycle(d) +
+      '<p class="small muted">' + (S.draft ? '<span class="chip draft">Draft revision ' + S.draft.revision + '</span> Not saved.' : '<span class="chip">Saved revision ' + S.saved.revision + '</span>') +
+      ' Nothing here is on the inverter until a guarded Apply is verified by readback.</p>';
+  };
+  R.cycle = function (d) {
+    var ex = d.export, ch = d.charge, out = [];
+    if (ex.enabled && !ex.refusals.length) {
+      out.push('<div class="c-ex"><b>Export</b>' + fmt(ex.start) + '–' + fmt(ex.end) + '<br>' + (ex.feasible ? 'to ' + val('export.stopSoc') + ' %' : 'only to about ' + P(ex.endSoc) + ' (limit)') + ', ' + W(ex.netW) + ' net</div>');
+      out.push('<div class="c-gap"><b>Stop, restore, settle</b>' + (isFinite(ex.gapToCharge) ? ex.gapToCharge + ' min' : '-') + '<br>restore verified first</div>');
+    } else if (ex.enabled) out.push('<div class="c-gap"><b>Export</b>not planned</div>');
+    if (!ch.refusals.length && ch.window) {
+      var reach = isFinite(ch.reachSoc) ? 'only to about ' + Math.floor(ch.reachSoc) + ' %' : 'to ' + val('charge.targetSoc') + ' %';
+      out.push('<div class="c-ch"><b>' + (val('charge.strategy') === 'gentle' ? 'Gentle charge' : 'Charge') + '</b>' + fmt(ch.window.start) + '–' + fmt(ch.estFinish) + '<br>' + reach + ' at ' + W(ch.rateW) + '</div>');
+      out.push('<div class="c-buf"><b>Buffer</b>' + ch.dwellMin + ' min (planned ' + val('charge.bufferMin') + ')<br>window ends ' + fmt(ch.window.end) + '</div>');
+    } else out.push('<div class="c-ch"><b>Charge</b>' + esc(ch.refusals[0] || 'none') + '</div>');
+    return '<div class="cycle" aria-label="Linked cycle">' + out.join('') + '</div>';
+  };
+  R.chargeout = function (d) {
+    var ch = d.charge;
+    if (ch.refusals.length) return notes(ch.refusals, 'bad');
+    var rows = [
+      ['Cheap-rate window (from your TOU table)', fmt(ch.window.start) + '–' + fmt(ch.window.end) + ' (slot ' + ch.window.slots.join(', ') + ')'],
+      ['Finish by (window end minus buffer)', fmt(ch.finishBy)],
+      ['Expected start SOC', P(ch.socStart) + (ch.basis === 'export' ? ' (after the planned export)' : '')],
+      ['Energy to add', kWh(ch.energyKwh) + ' (about ' + kWh(ch.gridKwh) + ' from the grid)'],
+      [val('charge.strategy') === 'gentle' ? 'Gentle steady rate' : 'Slot rate (native)', W(ch.rateW)],
+      ['Estimated finish', fmt(ch.estFinish)],
+      ['Time held at target before the window ends', ch.dwellMin + ' min']
+    ];
+    var cmp = val('charge.strategy') === 'gentle' && ch.standard ? '<div class="note info">Standard (native) would charge at ' + W(ch.standard.rateW) + ', finish about ' + fmt(ch.standard.finish) + ' and hold the battery at ' + val('charge.targetSoc') + ' % for ' + ch.standard.dwellMin + ' min.</div>' : '';
+    return kv(rows) + cmp + notes(ch.warnings, 'warn') + notes(ch.notes);
+  };
+  R.exportout = function (d) {
+    var ex = d.export;
+    if (!ex.enabled) return '<p class="muted small">Smart Export is off.</p>';
+    if (ex.refusals.length) return notes(ex.refusals, 'bad') + notes(ex.notes);
+    var c = S.ctx;
+    var rows = [
+      ['Finish by', fmt(ex.finishBy) + (val('export.finishMode') === 'before_charge' ? ' (charge window minus ' + val('export.gapMin') + ' min)' : '')],
+      ['Start', fmt(ex.start)],
+      ['Battery now → at start', P(c.socNow) + ' → ' + P(ex.socAtStart)],
+      ['Energy to export from the battery', kWh(ex.energyKwh)],
+      ['Net export to the grid (what the firmware tracks)', W(ex.netW)],
+      ['Battery discharge (net export + house)', W(ex.battW)],
+      ['Ends', fmt(ex.end) + ' at about ' + P(ex.endSoc)],
+      ['Allowed net export (your limits)', W(ex.netCapW) + ' (hardware-tested ' + W(M.LIMITS.provenExportCeilingW) + ' battery ceiling)'],
+      ['Worth it? (fictional prices, after losses and wear)', money(ex.benefitP)]
+    ];
+    return kv(rows) + notes(ex.warnings, 'warn') + notes(ex.notes) + (ex.benefitP < 0 ? '<div class="note warn">This cycle loses money at these prices. A planner would suggest not exporting.</div>' : '');
+  };
+  R.reviewbar = function (d) {
+    if (!S.draft && !S.outcome) return '';
+    var out = S.outcome ? '<div class="grow" style="flex-basis:100%">' + esc(S.outcome.text) + '</div>' : '';
+    if (!S.draft) return '<div class="reviewbar" role="status" style="flex-wrap:wrap">' + out + '<button class="btn ghost" data-action="clear-outcome" type="button">OK</button></div>';
+    var rv = M.review(S);
+    return '<div class="reviewbar" role="status" style="flex-wrap:wrap">' + out + '<div class="grow"><b>Draft revision ' + rv.revision + '</b> · ' + rv.changes.length + ' change' + (rv.changes.length === 1 ? '' : 's') + ' · ' + rv.consequences.length + ' knock-on effect' + (rv.consequences.length === 1 ? '' : 's') + '</div>' +
+      '<button class="btn primary" type="button" data-action="review">Review</button></div>';
+  };
+  R.timeline = function (d) { return timeline(d); };
+  R.compiled = function (d) { return compiledView(d.compiled); };
+  R.solar = function (d) { return solarOut(d); };
+  R.drift = function (d) {
+    if (!d.drift.length && !S.partial) return '';
+    return '<div class="note bad" role="alert"><b>The inverter table differs from the plan\'s basis.</b> ' + esc(d.drift.map(function (x) { return 'Slot ' + x.slot + ' ' + (FIELD_NAME[x.field] || x.field) + ': ' + x.from + ' → ' + x.to; }).join('; ')) +
+      '. Proposals are blocked until you review. <button class="btn" type="button" data-action="accept-drift">I have reviewed it: re-plan from the readback</button></div>' +
+      (S.partial ? '<div class="note warn"><b>Partial result.</b> Applied: ' + esc(S.partial.applied.join('; ')) + '. Failed: ' + esc(S.partial.failed) + '. Compensation (a guarded edit, not automatic): ' + esc(S.partial.compensation.map(function (c) { return c.text; }).join('; ')) + '.</div>' : '');
+  };
+
+  /* ---------- timeline ---------- */
+  function pos(t) { return span(ui.anchor, t) / 14.4; }
+  function piece(cls, a, len, label, extra) {
+    if (len <= 0) return '';
+    var p = pos(a), w = len / 14.4, out = '';
+    var mk = function (l, ww, lab) { return '<div class="tl-seg ' + cls + '" style="left:' + l.toFixed(3) + '%;width:' + ww.toFixed(3) + '%" ' + (extra || '') + '>' + esc(lab) + '</div>'; };
+    if (p + w <= 100.001) out += mk(p, w, label);
+    else { out += mk(p, 100 - p, label); out += mk(0, p + w - 100, ''); }
+    return out;
+  }
+  function timeline(d) {
+    var tou = S.readback.tou, sp = M.slotSpans(tou), ticks = '';
+    for (var h = 0; h < 24; h += 3) { var t = (ui.anchor + h * 60) % 1440; ticks += '<span style="left:' + (h / 24 * 100) + '%">' + fmt(t) + '</span>'; }
+    var slots = sp.map(function (s) {
+      var x = tou[s.i], grid = x.source === 'Grid';
+      var label = 'Slot ' + (s.i + 1) + ', ' + fmt(s.start) + ' to ' + fmt(s.end) + ', ' + (grid ? 'charges from the grid, ' : 'no grid charge, ') + 'target ' + x.soc + ' %, power ' + x.power + ' W (inverter readback)';
+      var p = pos(s.start), w = s.minutes / 14.4;
+      var inner = '<b>' + (s.i + 1) + '</b> ' + fmt(s.start) + '<small>' + (grid ? 'Grid · ' : '') + esc(x.soc) + ' %</small>';
+      var btn = function (l, ww, body) { return '<button type="button" class="tl-slot' + (grid ? ' gc' : '') + '" data-slot="' + s.i + '" aria-pressed="' + (ui.slot === s.i) + '" aria-label="' + esc(label) + '" style="left:' + l.toFixed(3) + '%;width:' + ww.toFixed(3) + '%">' + body + '</button>'; };
+      if (p + w <= 100.001) return btn(p, w, inner);
+      return btn(p, 100 - p, inner) + btn(0, p + w - 100, '<small>' + (s.i + 1) + '</small>');
+    }).join('');
+    var ex = d.export, ch = d.charge, planRow = '';
+    if (ex.enabled && !ex.refusals.length) {
+      planRow += piece('export', ex.start, ex.duration, 'Export to ' + val('export.stopSoc') + ' %');
+      if (d.run && isFinite(ex.gapToCharge)) planRow += piece('gap', ex.end, ex.gapToCharge, 'restore · settle');
+    }
+    if (!ch.refusals.length && ch.window) {
+      var chMin = span(ch.window.start, ch.estFinish) || (ch.rateW ? ch.window.minutes : 0);
+      planRow += piece('charge', ch.window.start, chMin, (val('charge.strategy') === 'gentle' ? 'Gentle ' : '') + W(ch.rateW));
+      planRow += piece('buffer', ch.estFinish, span(ch.estFinish, ch.window.end), 'hold');
+    }
+    var pts = M.socTrajectory(S, d), poly = pts.map(function (q) { return (span(ui.anchor, q.t)).toFixed(0) + ',' + (100 - q.soc).toFixed(1); });
+    var segs = [], cur = [];
+    poly.forEach(function (pt, i) { var x = +pt.split(',')[0]; if (i && x < +poly[i - 1].split(',')[0]) { segs.push(cur); cur = []; } cur.push(pt); });
+    segs.push(cur);
+    var svg = '<svg class="tl-soc" viewBox="0 0 1440 100" preserveAspectRatio="none" role="img" aria-label="Projected battery level from now to the end of the charge window">' +
+      '<line x1="0" x2="1440" y1="' + (100 - val('charge.targetSoc')) + '" y2="' + (100 - val('charge.targetSoc')) + '" stroke="currentColor" stroke-opacity=".25" stroke-dasharray="6 6" vector-effect="non-scaling-stroke"/>' +
+      '<line x1="0" x2="1440" y1="90" y2="90" stroke="#ff8080" stroke-opacity=".5" stroke-dasharray="3 5" vector-effect="non-scaling-stroke"/>' +
+      segs.map(function (sg) { return '<polyline fill="none" stroke="var(--info)" stroke-width="2.5" vector-effect="non-scaling-stroke" points="' + sg.join(' ') + '"/>'; }).join('') + '</svg>';
+    var now = '<div class="tl-now" style="left:' + pos(S.ctx.nowMin).toFixed(3) + '%" aria-hidden="true"></div>';
+    var detail = ui.slot == null ? '' : slotDetail(d, ui.slot);
+    return '<div class="tl"><div class="tl-axis" aria-hidden="true">' + ticks + '</div>' +
+      '<div class="tl-row" role="group" aria-label="Six TOU slots as read back from the inverter (fictional)">' + slots + '</div>' +
+      '<div class="tl-row plan" role="group" aria-label="' + (S.draft ? 'Draft plan preview, revision ' + S.draft.revision : 'Saved plan, revision ' + S.saved.revision) + ', not on the inverter">' + planRow + '</div>' + svg + now + '</div>' +
+      '<div class="legend"><span><i style="background:var(--charge-soft);border:1px solid var(--charge)"></i>grid-charge slot / charging</span><span><i style="background:var(--export-soft);border:1px solid var(--export)"></i>export</span><span><i style="border:1px dashed var(--gap)"></i>restore + handover gap</span><span><i style="border:1px dashed var(--charge)"></i>finish-early buffer</span><span><i style="background:var(--info)"></i>projected battery level</span><span><i style="background:#ff8080"></i>10 % export floor</span></div>' +
+      '<p class="small muted">Top row: what the inverter reports. Second row: ' + (S.draft ? 'your <b>draft</b> (revision ' + S.draft.revision + ')' : 'your saved plan (revision ' + S.saved.revision + ')') + ', drawn on top; it is not on the inverter.</p>' + detail;
+  }
+  function slotDetail(d, i) {
+    var tou = S.readback.tou, x = tou[i], sp = M.slotSpans(tou)[i], grid = x.source === 'Grid';
+    var crossing = sp.end < sp.start && sp.end !== 0;
+    var body = kv([['Start → end', fmt(sp.start) + ' → ' + fmt(sp.end) + (crossing ? ' (runs past midnight)' : '')], ['Charge source', x.source], ['Power', W(x.power)], ['Target SOC', x.soc + ' %']]);
+    if (crossing) body += '<div class="note info">This slot carries the midnight crossing. A start-time edit that would move the crossing is refused by the guarded editor.</div>';
+    if (grid) {
+      body += '<div class="card-h" style="margin-top:12px"><h3 class="grow">Your plan for charge windows</h3>' + TAG.proposal + '</div>' +
+        '<div class="field"><label for="slot-mode"><span>Charge mode (all charge windows)</span></label><select id="slot-mode" data-field="charge.strategy">' +
+        '<option value="gentle"' + (val('charge.strategy') === 'gentle' ? ' selected' : '') + '>Gentle Smart (ECCO plan)</option>' +
+        '<option value="standard"' + (val('charge.strategy') === 'standard' ? ' selected' : '') + '>Standard / native</option>' +
+        '<option disabled>Lowest Cost (needs verified rates)</option><option disabled>Intelligence suggested (review first)</option></select>' +
+        '<div class="hint">The same setting as in Charge Battery: change it here or there. It is an ECCO planning preference, not an inverter register. Per-window settings are a later design step.</div></div>' +
+        '<div class="btns"><button class="btn" type="button" data-goto="charge">Configure in Charge Battery</button></div>';
+    }
+    body += '<p class="small muted">Native slot edits live in Advanced → Manual TOU and use the guarded editor (one setting of one slot, Review, typed confirmation, Apply, verified readback).</p>';
+    return '<div class="card inset" style="margin-top:10px" role="region" aria-label="Slot ' + (i + 1) + ' details"><div class="card-h"><h3 class="grow">Slot ' + (i + 1) + ' (inverter readback)</h3>' + TAG.derived + '<button class="btn ghost" type="button" data-action="close-slot" aria-label="Close slot details">Close</button></div>' + body + '</div>';
+  }
+
+  function compiledView(c) {
+    var a = c.actions.map(function (x) {
+      var st = x.status === 'proposed' ? '<span class="chip draft">proposed</span>' : x.status === 'deferred' ? '<span class="chip warn">deferred</span>' : '<span class="chip bad">' + esc(x.status) + '</span>';
+      return '<li>' + st + ' ' + esc(x.text) + (x.kind === 'native' ? ' <span class="muted small">(' + esc(x.gate) + ')</span>' : ' <span class="muted small">(via ' + esc(x.via) + '; you arm it)</span>') + (x.why ? '<br><span class="small muted">' + esc(x.why) + '</span>' : '') + '</li>';
+    }).join('');
+    return (a ? '<ol>' + a + '</ol>' : '<p class="muted small">No inverter action is needed for this plan.</p>') +
+      (c.changeCount ? '<p class="small muted">' + c.changeCount + ' single-field slot edit(s), each its own Review and confirmation, at least ' + c.spacingMin + ' min apart. Not atomic: if one fails, the earlier ones stay.</p>' : '') +
+      (c.compensation.length ? '<p class="small"><b>Compensation if you want to go back</b> (each again a guarded edit): ' + esc(c.compensation.map(function (x) { return x.text; }).join('; ')) + '</p>' : '') +
+      notes(c.refusals, 'bad') + notes(c.notes);
+  }
+
+  function solarOut(d) {
+    var s = d.solar;
+    if (!s.enabled) return '<p class="muted small">Summer Solar Priority is off. Switch the profile to Summer to preview it.</p>';
+    return '<div class="note ' + (s.outcome === 'propose' ? 'info' : '') + '">' + esc(s.text) + '</div>' +
+      kv([['Forecast confidence', Math.round(s.confidence * 100) + ' % (needs ' + Math.round(s.threshold * 100) + ' %)'], ['Learned solar onset (fictional)', fmt(s.onset)], ['Conservative surplus after the house', kWh(s.surplusLowKwh)], ['Room in the battery by then', kWh(s.headroomKwh)], ['Largest sensible pre-solar export', kWh(s.proposeKwh)]]) +
+      '<div class="meter" aria-hidden="true"><i style="width:' + Math.round(s.confidence * 100) + '%"></i></div>' +
+      '<p class="small muted">Never a fixed amount: limited by your reserve, the 10 % floor, the hardware-tested export limit, time before solar and the forecast\'s confidence. It never starts on its own.</p>';
+  }
+
+  /* ---------- views ---------- */
+  function homeView(d) {
+    var c = S.ctx, cap = M.usableKwh(c);
+    return '<h1>Home</h1><div class="grid cols-2">' +
+      '<section class="card" aria-labelledby="h-now"><div class="card-h"><h2 id="h-now" class="grow">Right now</h2>' + TAG.derived + '</div>' +
+      '<div class="row" style="align-items:center"><div class="ring" style="--p:' + c.socNow + '"><div><div><b>' + c.socNow + '%</b><br><span class="small muted">' + kWh(c.socNow / 100 * cap) + '</span></div></div></div>' +
+      '<div class="stats"><div class="stat"><b>0.0 kW</b><span>Solar</span></div><div class="stat"><b>' + (c.houseLoadW / 1000).toFixed(2) + ' kW</b><span>House</span></div>' +
+      '<div class="stat"><b>0.00 kW</b><span>Grid (idle)</span></div><div class="stat"><b>' + c.prices.nowP.toFixed(1) + 'p</b><span>Price now · cheap from ' + (d.run ? fmt(d.run.start) : '-') + '</span></div></div></div></section>' +
+      '<section class="card" aria-labelledby="h-plan"><div class="card-h"><h2 id="h-plan" class="grow">Tonight\'s plan</h2>' + TAG.proposal + '</div>' + region('homeplan', d) + '</section>' +
+      '<section class="card" aria-labelledby="h-flow"><div class="card-h"><h2 id="h-flow" class="grow">Energy flow</h2>' + TAG.exists + '</div><div class="flowph">Your existing energy-flow card stays here, unchanged.<br>This mock deliberately contains no house artwork.</div></section>' +
+      '<section class="card" aria-labelledby="h-intel"><div class="card-h"><h2 id="h-intel" class="grow">Intelligence</h2>' + TAG.exists + '</div><p>Advice only: nothing is applied.</p><p><b>Suggested overnight target: 88 %</b> <span class="chip">confidence medium</span></p><p class="small muted">Expected overnight use 3.1 kWh (likely 2.4–3.9). Tomorrow\'s solar forecast is uncertain.</p><div class="btns"><button class="btn" type="button" data-view="intel">See why</button></div></section>' +
+      '</div>';
+  }
+
+  function chargeCard(d) {
+    var tab = ui.chargeTab, body = '';
+    if (tab === 'now') {
+      body = '<div class="card-h"><span class="grow small muted">Today\'s Free Power NOW, renamed in the UI only. Entity ids do not change.</span>' + TAG.exists + '</div>' +
+        '<div class="field"><div class="lbl"><span>Charge power</span><span>3,000 W</span></div><input type="range" min="500" max="5000" step="100" value="3000" disabled aria-label="Charge power (mock)"></div>' +
+        '<div class="field"><div class="lbl"><span>Duration</span><span>60 min</span></div><input type="range" min="1" max="240" value="60" disabled aria-label="Duration (mock)"></div>' +
+        '<div class="note">Charges toward 100 % at a fixed rate for the duration, then the controller restores your settings and verifies them.</div>' +
+        '<div class="btns"><button class="btn" disabled type="button">Arm</button><button class="btn" disabled type="button">Start</button><span class="small muted" style="align-self:center">Disabled in the mock</span></div>';
+    } else if (tab === 'schedule') {
+      body = '<div class="card-h"><span class="grow small muted">Today\'s Scheduled Free Power (LATER): one start, one fixed power, one duration.</span>' + TAG.exists + '</div>' +
+        '<div class="row"><div class="field"><div class="lbl"><span>Start</span></div><input type="time" value="13:00" disabled aria-label="Start (mock)"></div><div class="field"><div class="lbl"><span>Duration</span></div><input type="number" value="90" disabled aria-label="Duration (mock)"></div><div class="field"><div class="lbl"><span>Power (W)</span></div><input type="number" value="2500" disabled aria-label="Power (mock)"></div></div>' +
+        '<div class="btns"><button class="btn" disabled type="button">Arm schedule</button><span class="small muted" style="align-self:center">Disabled in the mock</span></div>';
+    } else {
+      body = '<section class="card inset" aria-labelledby="h-gentle"><div class="card-h"><h3 id="h-gentle" class="grow">Gentle Overnight</h3>' + TAG.proposal + '</div>' +
+        '<div class="field"><label for="f-charge-strategy"><span>Charge mode</span></label><select id="f-charge-strategy" data-field="charge.strategy">' +
+        '<option value="gentle"' + (val('charge.strategy') === 'gentle' ? ' selected' : '') + '>Gentle: use more of the window (default)</option>' +
+        '<option value="standard"' + (val('charge.strategy') === 'standard' ? ' selected' : '') + '>Standard / native: the slot\'s own rate</option>' +
+        '<option disabled>Lowest Cost (needs verified rates)</option><option disabled>Intelligence suggested (review first)</option></select></div>' +
+        range('charge.targetSoc') +
+        range('charge.bufferMin', { hint: 'Finish this many minutes before the cheap window ends. 60 min is only a starting value: anything from 0 to 120 min in 5-minute steps.' }) +
+        range('charge.maxChargeW', { show: function (v) { return W(v); }, hint: 'Upper limit for the plan. The inverter, the battery and the grid-charge current setting can limit charging further.' }) +
+        region('chargeout', d) +
+        '<details data-open-key="dyn"' + (ui.open.dyn ? ' open' : '') + '><summary>Advanced dynamic settings (simulation only)</summary>' +
+        '<div class="field"><label><span>Stepped charge profile (3 steps)</span><input type="checkbox" data-field="charge.stepped"' + (val('charge.stepped') ? ' checked' : '') + '></label><div class="hint">Shows why a stepped profile cannot fit the six native slots. A variable rate within the night needs new controller firmware and live proof first.</div></div>' +
+        '<p class="small muted">Not operational: minimum rate, ramp and hysteresis, update cadence. They become settings only after the controller exists and is proven.</p></details></section>' +
+        '<section class="card inset" style="margin-top:12px" aria-labelledby="h-smartcharge"><div class="card-h"><h3 id="h-smartcharge" class="grow">Smart Charge (daytime goal)</h3>' + TAG.proposal + '</div>' +
+        '<div class="row">' + number('charge.day.targetSoc') + time('charge.day.byTime') + '</div>' +
+        '<div class="note warn">Today\'s Free Power has a fixed rate and no stop at a target SOC: it runs for its duration. A goal like this needs a new, reviewed stop-at-target step and live proof.</div></section>';
+    }
+    return '<section class="card master" aria-labelledby="h-charge"><div class="card-h"><div class="icon charge" aria-hidden="true">⚡</div><div class="grow"><h2 id="h-charge">Charge Battery</h2><span class="small muted">Grid charging and smart schedules</span></div>' +
+      (d.charge.refusals.length ? '<span class="chip bad">Not planned</span>' : '<span class="chip charge">' + (S.draft ? 'Planned (draft)' : 'Planned') + '</span>') +
+      (S.ctx.activeLease === 'Charge Battery' ? '<span class="chip warn">Running</span>' : '<span class="chip">Not running</span>') + '</div>' +
+      seg('Charge Battery mode', tab, [['now', 'Now'], ['schedule', 'Schedule'], ['smart', 'Smart Target']]) + body + '</section>';
+  }
+
+  function exportCard(d) {
+    var tab = ui.exportTab, body = '';
+    if (tab === 'now') {
+      body = '<div class="card-h"><span class="grow small muted">Today\'s Dump to Grid NOW, renamed in the UI only.</span>' + TAG.exists + '</div>' +
+        '<div class="row"><div class="field"><div class="lbl"><span>Net export (W)</span></div><input type="number" value="1500" disabled aria-label="Net export (mock)"></div><div class="field"><div class="lbl"><span>Stop at (%)</span></div><input type="number" value="30" min="10" disabled aria-label="Stop SOC (mock)"></div><div class="field"><div class="lbl"><span>Duration (min)</span></div><input type="number" value="60" disabled aria-label="Duration (mock)"></div></div>' +
+        '<div class="note">The controller tracks the net export at the grid meter, stops at the Stop SOC or the duration, then restores and verifies your settings. Stop SOC cannot go below 10 %.</div>' +
+        '<div class="btns"><button class="btn" disabled type="button">Arm</button><button class="btn" disabled type="button">Start</button><span class="small muted" style="align-self:center">Disabled in the mock</span></div>';
+    } else if (tab === 'schedule') {
+      body = '<div class="card-h"><span class="grow small muted">Today\'s Scheduled Dump to Grid: one start, power, Stop SOC and duration. It refuses windows that overlap a grid-charge slot.</span>' + TAG.exists + '</div>' +
+        '<div class="row"><div class="field"><div class="lbl"><span>Start</span></div><input type="time" value="20:00" disabled aria-label="Start (mock)"></div><div class="field"><div class="lbl"><span>Stop at (%)</span></div><input type="number" value="30" disabled aria-label="Stop SOC (mock)"></div></div>' +
+        '<div class="btns"><button class="btn" disabled type="button">Arm schedule</button><span class="small muted" style="align-self:center">Disabled in the mock</span></div>';
+    } else {
+      var fm = val('export.finishMode');
+      body = '<section class="card inset exp" aria-labelledby="h-smartexp"><div class="card-h"><h3 id="h-smartexp" class="grow">Smart Export</h3>' + TAG.proposal + '</div>' +
+        '<div class="field"><label><span>Plan an export tonight</span><input type="checkbox" data-field="export.enabled"' + (val('export.enabled') ? ' checked' : '') + '></label></div>' +
+        number('export.stopSoc', { hint: 'Hard floor: the greater of 10 % (firmware) and your inverter’s battery shutdown level. Your 40 % Intelligence planning reserve is separate advice.' }) +
+        seg('Export finish', fm, [['before_charge', 'Before next charge window'], ['at_time', 'At a time']]) +
+        (fm === 'before_charge' ? range('export.gapMin', { hint: 'Time to stop, restore and verify your settings, then settle, before the charge window opens.' }) : time('export.finishAt', 'Times use the 5-minute grid.')) +
+        region('exportout', d) + '<p class="small muted">It would use the existing scheduled Dump to Grid, which is not live-proven yet.</p></section>' +
+        '<details class="exp" data-open-key="summer"' + (ui.open.summer ? ' open' : '') + '><summary>Make room for predicted solar (Summer)</summary>' + TAG.proposal +
+        range('summer.confidenceMin', { show: function (v) { return Math.round(v * 100) + ' %'; }, hint: 'Below this forecast confidence, nothing is proposed.' }) +
+        range('summer.maxPreSolarKwh', { show: function (v) { return v + ' kWh'; } }) + range('summer.minReserveSoc') + range('summer.gapBeforePvMin') +
+        region('solar', d) + '</details>';
+    }
+    return '<section class="card master exp" aria-labelledby="h-export"><div class="card-h"><div class="icon export" aria-hidden="true">⇄</div><div class="grow"><h2 id="h-export">Export to Grid</h2><span class="small muted">Export stored energy when permitted</span></div>' +
+      (!d.export.enabled ? '<span class="chip">Off</span>' : d.export.refusals.length ? '<span class="chip bad">Not planned</span>' : '<span class="chip export">' + (S.draft ? 'Planned (draft)' : 'Planned') + '</span>') +
+      (S.ctx.activeLease === 'Export to Grid' ? '<span class="chip warn">Running</span>' : '<span class="chip">Idle</span>') + '</div>' +
+      seg('Export to Grid mode', tab, [['now', 'Now'], ['schedule', 'Schedule'], ['smart', 'Smart Target']]) + body + '</section>';
+  }
+
+  function controlsView(d) {
+    return '<h1>Controls</h1>' + region('drift', d) +
+      '<section class="card" style="margin-bottom:16px" aria-labelledby="h-profile"><div class="card-h"><h2 id="h-profile" class="grow">Energy plan profile</h2>' + TAG.proposal + '</div>' +
+      seg('Energy plan profile', val('profile'), [['normal', 'Normal'], ['summer', 'Summer Solar Priority']]) +
+      '<p class="small muted">Switching changes linked planning preferences together (for example a lower overnight target in Summer). It is a draft you review; it never starts anything.</p></section>' +
+      '<div class="grid cols-2">' + chargeCard(d) + exportCard(d) + '</div>' +
+      '<section class="card" style="margin-top:16px" aria-labelledby="h-tl"><div class="card-h"><h2 id="h-tl" class="grow">Today\'s TOU schedule</h2>' + TAG.derived +
+      '<button class="btn ghost" type="button" data-action="anchor">' + (ui.anchor === 720 ? 'Show from midnight' : 'Show from noon') + '</button></div>' +
+      '<p class="small muted">Read from the inverter (fictional values) with the plan drawn on top. Tap a slot for details. You do not edit slots here: Charge Battery and Export to Grid are where plans are made.</p>' +
+      region('timeline', d) + '</section>';
+  }
+
+  function intelView(d) {
+    var sugg = { 'charge.targetSoc': 88, 'export.stopSoc': 45 };
+    var diff = Object.keys(sugg).filter(function (k) { return val(k) !== sugg[k]; });
+    return '<h1>Intelligence</h1><div class="note info">SHADOW mode: Intelligence predicts and recommends. It applies nothing and has no way to change the inverter.</div>' +
+      '<div class="three">' +
+      '<section class="card" aria-labelledby="h-pred"><div class="state-h"><span class="n">1</span><h2 id="h-pred">Predicted</h2></div>' + TAG.exists +
+      kv([['Overnight use', '3.1 kWh (likely 2.4–3.9)'], ['Solar tomorrow', S.ctx.solar.forecastKwh + ' kWh, uncertain'], ['Solar becomes useful (learned)', fmt(S.ctx.solar.onsetMin)], ['Cheap window', d.run ? fmt(d.run.start) + '–' + fmt(d.run.start + d.run.minutes) : 'none']]) +
+      '<p class="small muted">Forecasts are still learning. Confidence is shown, never hidden.</p></section>' +
+      '<section class="card" aria-labelledby="h-rec"><div class="state-h"><span class="n">2</span><h2 id="h-rec">Recommended</h2></div>' + TAG.exists +
+      '<p><b>Charge to 88 % overnight</b> <span class="chip">confidence medium</span><br><span class="small muted">Covers expected use until solar with your 40 % planning reserve and a margin.</span></p>' +
+      '<p><b>Export event:</b> none expected.</p>' +
+      '<div class="note warn"><b>Export advice withheld this cycle.</b> Export advice is only valid until the cheap window opens, and that is close. It returns after the window has started; nothing is affected.</div>' +
+      '<p class="small muted">Other reasons an item can be withheld: the inverter clock reading was out of date, so the cheap window could not be confirmed; a reading was too old; a forecast was missing.</p></section>' +
+      '<section class="card" aria-labelledby="h-app"><div class="state-h"><span class="n">3</span><h2 id="h-app">Applied</h2></div>' + TAG.derived +
+      '<p><b>Nothing from Intelligence.</b></p><p class="small">What is actually on the inverter is your own TOU table (see Controls). Your plan is revision ' + S.saved.revision + (S.draft ? ', with an unsaved draft' : '') + '.</p></section></div>' +
+      '<section class="card" style="margin-top:16px" aria-labelledby="h-sugg"><div class="card-h"><h2 id="h-sugg" class="grow">Suggested plan</h2>' + TAG.proposal + '</div>' +
+      '<p>Intelligence proposes a plan in the same form as yours. You can adopt it as a draft and review it like any other change; it never acts by itself.</p>' +
+      (diff.length ? '<ul>' + diff.map(function (k) { return '<li>' + esc(M.FIELDS[k].label) + ': yours ' + val(k) + ' %, suggested ' + sugg[k] + ' %</li>'; }).join('') + '</ul>' : '<p class="muted">Your plan already matches the suggestion.</p>') +
+      '<div class="btns"><button class="btn" type="button" data-action="adopt"' + (diff.length ? '' : ' disabled') + '>Adopt as draft</button></div></section>' +
+      '<section class="card" style="margin-top:16px" aria-labelledby="h-solar"><div class="card-h"><h2 id="h-solar" class="grow">Summer Solar Priority preview</h2>' + TAG.proposal + '</div>' + region('solar', d) +
+      '<div class="field"><div class="lbl"><span>Try a forecast confidence</span><span>' + Math.round(S.ctx.solar.confidence * 100) + ' %</span></div><div class="btns"><button class="btn" type="button" data-conf="0.45">45 %</button><button class="btn" type="button" data-conf="0.85">85 %</button></div></div></section>';
+  }
+
+  function advancedView(d) {
+    var tou = S.readback.tou, sp = M.slotSpans(tou);
+    var rows = sp.map(function (s) { var x = tou[s.i]; return '<tr><td>' + (s.i + 1) + '</td><td>' + fmt(s.start) + '</td><td>' + fmt(s.end) + '</td><td>' + esc(x.source) + '</td><td>' + esc(x.power) + ' W</td><td>' + esc(x.soc) + ' %</td></tr>'; }).join('');
+    var owners = [
+      ['TOU slot start, power, target SOC, source', 'Inverter (fact)', 'Slot readback', 'Guarded slot editor, one setting of one slot', 'Review, typed confirmation, Apply, readback; crossing hold; clock-change nights; refused during sessions'],
+      ['Charge target', 'Your plan', 'Grid-charge slot target SOC', 'Proposed slot edit (owner-reviewed)', 'As above'],
+      ['Finish-before-end buffer, charge mode, maximum charge power', 'Your plan (ECCO only)', 'None: no inverter register', 'Plan helper (proposal)', 'Draft, review, save'],
+      ['Export stop SOC, finish mode, handover gap', 'Your plan', 'Dump to Grid Stop SOC at start', 'Scheduled Dump fields (existing), you arm', 'Firmware 10-90 %, overlap and export checks, snapshot and restore'],
+      ['Export power ceiling, maximum grid export', 'Protected operating limits', 'Firmware', 'Separate arm, idle only (unchanged)', 'Not editable from everyday cards'],
+      ['Planning reserve (40 %)', 'Intelligence settings (advice)', 'n/a', 'Intelligence config', 'Never a hard floor'],
+      ['Now / Schedule values', 'Existing helpers and request numbers', 'Dongle numbers', 'Existing cards (unchanged)', 'Existing gates; SMR1 restores your manual values']
+    ];
+    return '<h1>Advanced</h1>' + region('drift', d) + '<div class="grid cols-2">' +
+      '<section class="card" aria-labelledby="h-mtou"><div class="card-h"><h2 id="h-mtou" class="grow">Manual TOU (native)</h2>' + TAG.exists + '</div>' +
+      '<div class="tablewrap"><table><thead><tr><th>Slot</th><th>Start</th><th>End</th><th>Source</th><th>Power</th><th>Target</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<p class="small">Edits use the existing guarded TOU Settings card: one setting of one slot, Review, typed confirmation, Apply, verified readback, no automatic rollback. A manual edit may conflict with your plan: the plan then shows the change as drift and asks you to review; it is never silently overwritten.</p>' +
+      '<div class="btns"><button class="btn" disabled type="button">Open the guarded editor</button><span class="small muted" style="align-self:center">Disabled in the mock</span></div></section>' +
+      '<section class="card" aria-labelledby="h-comp"><div class="card-h"><h2 id="h-comp" class="grow">Schedule compiler output</h2>' + TAG.proposal + '</div><p class="small muted">What the current ' + (S.draft ? 'draft' : 'saved plan') + ' would ask for. Nothing is sent.</p>' + region('compiled', d) + '</section>' +
+      '<section class="card" aria-labelledby="h-own"><div class="card-h"><h2 id="h-own" class="grow">Who owns each setting</h2>' + TAG.derived + '</div><div class="tablewrap"><table><thead><tr><th>Setting</th><th>Owner</th><th>Readback</th><th>How it changes</th><th>Gate</th></tr></thead><tbody>' +
+      owners.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + esc(c) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div></section>' +
+      '<section class="card" aria-labelledby="h-lab"><div class="card-h"><h2 id="h-lab" class="grow">Scenario lab</h2>' + TAG.sim + '</div><p class="small muted">A fake, in-page backend for the design\'s test cases. It has no connection to anything.</p>' +
+      '<div class="btns">' +
+      '<button class="btn" type="button" data-sim="verified"' + (S.draft ? '' : ' disabled') + '>Apply draft: verified</button>' +
+      '<button class="btn" type="button" data-sim="rejected"' + (S.draft ? '' : ' disabled') + '>Apply draft: refused</button>' +
+      '<button class="btn" type="button" data-sim="partial"' + (S.draft ? '' : ' disabled') + '>Apply draft: partial</button>' +
+      '<button class="btn" type="button" data-sim="external">Inverter edited elsewhere</button>' +
+      '<button class="btn" type="button" data-sim="restart">Home Assistant restart</button>' +
+      '<button class="btn" type="button" data-sim="lease" aria-pressed="' + !!S.ctx.activeLease + '">' + (S.ctx.activeLease ? 'End the active session' : 'An export session is running') + '</button>' +
+      '<button class="btn" type="button" data-sim="dst" aria-pressed="' + S.ctx.clockChangeNight + '">Clock-change night: ' + (S.ctx.clockChangeNight ? 'on' : 'off') + '</button>' +
+      '<button class="btn" type="button" data-sim="stale" aria-pressed="' + !S.ctx.telemetryFresh + '">Stale readings: ' + (S.ctx.telemetryFresh ? 'off' : 'on') + '</button>' +
+      '<button class="btn" type="button" data-sim="nogrid">Remove the grid-charge slot</button>' +
+      '<button class="btn" type="button" data-sim="reset">Reset everything</button></div>' +
+      (S.draft ? '' : '<p class="small muted">Change something in Controls to get a draft, then try an Apply outcome.</p>') + '</section>' +
+      '<section class="card" aria-labelledby="h-chk"><div class="card-h"><h2 id="h-chk" class="grow">Cross-card checks</h2>' + TAG.sim + '</div><p class="small muted">The design\'s acceptance tests, run against the plan model in this page (the same checks run under Node).</p>' +
+      '<div class="btns"><button class="btn primary" type="button" data-action="checks">Run checks</button></div>' + (ui.checks ? checksTable(ui.checks) : '') + '</section>' +
+      '<section class="card" aria-labelledby="h-diag"><div class="card-h"><h2 id="h-diag" class="grow">Diagnostics</h2>' + TAG.exists + '</div><p class="small">Raw registers, recovery tools, proofs and developer data move here from the daily views. The existing technician cards keep working unchanged.</p></section>' +
+      '</div>';
+  }
+  function checksTable(list) {
+    var n = list.filter(function (c) { return c.pass; }).length;
+    return '<p><b>' + n + ' of ' + list.length + ' pass</b></p><div class="tablewrap"><table><thead><tr><th>Id</th><th>Check</th><th>Result</th></tr></thead><tbody>' +
+      list.map(function (c) { return '<tr><td>' + c.id + '</td><td>' + esc(c.name) + '<br><span class="small muted">' + esc(c.detail) + '</span></td><td class="' + (c.pass ? 'pass' : 'fail') + '">' + (c.pass ? 'PASS' : 'FAIL') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  }
+
+  function reviewSheet(d) {
+    var rv = M.review(S);
+    if (!rv) return '';
+    return '<div class="sheet-bg" data-action="close-review"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="h-review" data-stop="1">' +
+      '<div class="card-h"><h2 id="h-review" class="grow">Review draft revision ' + rv.revision + '</h2>' + TAG.proposal + '</div>' +
+      '<h3>What you changed</h3><ul>' + rv.changes.map(function (c) { return '<li>' + esc(c.label) + ': ' + esc(c.from) + ' → ' + esc(c.to) + '</li>'; }).join('') + '</ul>' +
+      '<h3>What follows from it</h3>' + (rv.consequences.length ? '<ul>' + rv.consequences.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul>' : '<p class="muted small">No knock-on effects.</p>') +
+      '<h3>What the inverter would be asked to do</h3>' + compiledView(rv.compiled) +
+      '<div class="btns"><button class="btn" type="button" data-action="save">Save plan (this page only)</button><button class="btn" type="button" data-action="discard">Discard draft</button>' +
+      '<button class="btn primary" type="button" disabled aria-describedby="noapply">Apply to inverter</button></div><p id="noapply" class="small muted">Apply is not a working feature in this mock. In the product it would run each guarded step with your confirmation and show success only after readback.</p>' +
+      '<div class="btns"><button class="btn ghost" type="button" data-action="close-review">Close</button></div></div></div>';
+  }
+
+  var VIEWS = [['home', 'Home', '⌂'], ['controls', 'Controls', '⚙'], ['intel', 'Intelligence', '✦'], ['advanced', 'Advanced', '☰']];
+  function navButtons() { return VIEWS.map(function (v) { return '<button type="button" data-view="' + v[0] + '"' + (ui.view === v[0] ? ' aria-current="page"' : '') + '><span aria-hidden="true">' + v[2] + '</span>' + v[1] + '</button>'; }).join(''); }
+
+  function focusKey(el) {
+    if (!el || el === document.body || !app.contains(el)) return null;
+    if (el.id) return '#' + el.id;
+    var attrs = ['data-view', 'data-seg', 'data-slot', 'data-action', 'data-sim', 'data-conf', 'data-goto'];
+    for (var i = 0; i < attrs.length; i++) if (el.hasAttribute(attrs[i])) {
+      return '[' + attrs[i] + '="' + el.getAttribute(attrs[i]) + '"]' + (attrs[i] === 'data-seg' ? '[data-val="' + el.getAttribute('data-val') + '"]' : '');
+    }
+    return null;
+  }
+  function focusFirstVisible(sel) {
+    var list = app.querySelectorAll(sel);
+    for (var i = 0; i < list.length; i++) if (list[i].offsetParent !== null) { list[i].focus(); return true; }
+    return false;
+  }
+  function render() {
+    var fk = ui.returnFocus || focusKey(document.activeElement); ui.returnFocus = null;
+    var d = M.derive(S);
+    var main = ui.view === 'home' ? homeView(d) : ui.view === 'controls' ? controlsView(d) : ui.view === 'intel' ? intelView(d) : advancedView(d);
+    app.innerHTML = '<header class="app"><div class="app-in"><div class="brand">ECCO<small>Energy Plan</small></div><nav class="tabs" aria-label="Views">' + navButtons() + '</nav>' +
+      '<div class="status" role="status" aria-live="polite" data-region="status">' + R.status(d) + '</div></div></header>' +
+      '<main id="main">' + main + '</main><div data-region="reviewbar">' + R.reviewbar(d) + '</div>' +
+      '<nav class="bottomnav" aria-label="Views">' + navButtons() + '</nav>' + (ui.sheet === 'review' ? reviewSheet(d) : '');
+    if (ui.sheet === 'review') { var b = app.querySelector('.sheet .btn'); if (b) b.focus(); }
+    else if (fk) focusFirstVisible(fk);
+  }
+  function refresh() {
+    var d = M.derive(S);
+    app.querySelectorAll('[data-region]').forEach(function (el) {
+      var n = el.getAttribute('data-region'); if (!R[n]) return;
+      var h = R[n](d); if (el.__h !== h) { el.innerHTML = h; el.__h = h; }
+    });
+    app.querySelectorAll('output[data-out-for]').forEach(function (o) {
+      var p = o.getAttribute('data-out-for'), f = M.FIELDS[p], v = val(p);
+      o.textContent = p === 'charge.maxChargeW' ? W(v) : p === 'summer.confidenceMin' ? Math.round(v * 100) + ' %' : v + (f.unit ? ' ' + f.unit : '');
+    });
+  }
+
+  function doEdit(path, value, live) {
+    var r = M.edit(S, path, value);
+    if (!r.ok) { ui.errors[path] = r.error; render(); var el = document.getElementById('f-' + path.replace(/\./g, '-')); if (el) el.focus(); return; }
+    delete ui.errors[path]; S = r.state;
+    if (live) refresh(); else render();
+  }
+  app.addEventListener('input', function (e) {
+    var t = e.target; if (!t.matches('input[type=range][data-field]')) return;
+    doEdit(t.getAttribute('data-field'), t.value, true);
+  });
+  app.addEventListener('change', function (e) {
+    var t = e.target, path = t.getAttribute('data-field'); if (!path || t.type === 'time') return;
+    var v = t.type === 'checkbox' ? t.checked : t.value;
+    var focusId = t.id;
+    doEdit(path, v, false);
+    var el = focusId && document.getElementById(focusId); if (el && !ui.errors[path]) el.focus();
+  });
+  app.addEventListener('focusout', function (e) {
+    var t = e.target; if (!t.matches || !t.matches('input[type=time][data-field]')) return;
+    /* commit without a full re-render, so that a button clicked right after leaving the field still receives the click */
+    var path = t.getAttribute('data-field'); if (t.value && t.value !== val(path)) doEdit(path, t.value, true);
+  });
+  app.addEventListener('toggle', function (e) {
+    var k = e.target.getAttribute && e.target.getAttribute('data-open-key'); if (k) ui.open[k] = e.target.open;
+  }, true);
+  app.addEventListener('click', function (e) {
+    var t = e.target.closest('button, .sheet-bg'); if (!t) return;
+    if (t.classList.contains('sheet-bg') && e.target !== t) return;
+    var a = t.getAttribute('data-action');
+    if (t.hasAttribute('data-view')) { ui.view = t.getAttribute('data-view'); ui.slot = null; render(); window.scrollTo(0, 0); return; }
+    if (t.hasAttribute('data-goto')) { ui.view = 'controls'; ui.chargeTab = 'smart'; ui.slot = null; render(); var h = document.getElementById('h-charge'); if (h) h.scrollIntoView(); return; }
+    if (t.hasAttribute('data-seg')) {
+      var n = t.getAttribute('data-seg'), v = t.getAttribute('data-val');
+      if (n === 'Charge Battery mode') ui.chargeTab = v; else if (n === 'Export to Grid mode') ui.exportTab = v;
+      else if (n === 'Export finish') return doEdit('export.finishMode', v, false);
+      else if (n === 'Energy plan profile') return doEdit('profile', v, false);
+      render(); return;
+    }
+    if (t.hasAttribute('data-slot')) { var i = +t.getAttribute('data-slot'); ui.slot = ui.slot === i ? null : i; render(); return; }
+    if (t.hasAttribute('data-conf')) { S = M.setCtx(S, 'solar.confidence', +t.getAttribute('data-conf')); render(); return; }
+    if (t.hasAttribute('data-sim')) { sim(t.getAttribute('data-sim')); return; }
+    if (a === 'review') { ui.sheet = 'review'; render(); return; }
+    if (a === 'close-review') { ui.sheet = null; ui.returnFocus = '[data-action="review"]'; render(); return; }
+    if (a === 'save') { S = M.saveDraft(S); ui.sheet = null; render(); return; }
+    if (a === 'discard') { S = M.discard(S); ui.sheet = null; ui.errors = {}; render(); return; }
+    if (a === 'clear-outcome') { S.outcome = null; render(); return; }
+    if (a === 'close-slot') { ui.slot = null; render(); return; }
+    if (a === 'anchor') { ui.anchor = ui.anchor === 720 ? 0 : 720; render(); return; }
+    if (a === 'accept-drift') { S = M.acceptDrift(S); render(); return; }
+    if (a === 'checks') { ui.checks = M.runChecks(); render(); return; }
+    if (a === 'adopt') { var r = M.edit(S, 'charge.targetSoc', 88); if (r.ok) r = M.edit(r.state, 'export.stopSoc', 45); if (r.ok) S = r.state; render(); return; }
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && (ui.sheet || ui.slot != null)) { if (ui.sheet) ui.returnFocus = '[data-action="review"]'; ui.sheet = null; ui.slot = null; render(); } });
+  function sim(k) {
+    if (k === 'verified' || k === 'rejected' || k === 'partial') S = M.simulateApply(S, k);
+    else if (k === 'external') S = M.simulateExternalEdit(S, 1, 'start', S.readback.tou[0].start === '23:30' ? '00:00' : '23:30');
+    else if (k === 'restart') S = M.simulateRestart(S);
+    else if (k === 'lease') S = M.setCtx(S, 'activeLease', S.ctx.activeLease ? null : 'Export to Grid');
+    else if (k === 'dst') S = M.setCtx(S, 'clockChangeNight', !S.ctx.clockChangeNight);
+    else if (k === 'stale') S = M.setCtx(S, 'telemetryFresh', !S.ctx.telemetryFresh);
+    else if (k === 'nogrid') S = M.simulateExternalEdit(S, 1, 'source', 'None');
+    else if (k === 'reset') { S = M.newState(); ui.errors = {}; ui.checks = null; }
+    render();
+  }
+  window.__eccoMock = { get state() { return S; }, model: M, render: render, ui: ui };
+  var h0 = (location.hash || '').slice(1);
+  if (VIEWS.some(function (v) { return v[0] === h0; })) ui.view = h0;
+  render();
+})();
+</script>
+</body>
+</html>

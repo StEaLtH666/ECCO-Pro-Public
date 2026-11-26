@@ -1367,6 +1367,10 @@ class DgsRun:
         w.set("input_boolean.ecco_dump_to_grid_schedule_armed", "off")
         w.set("input_text.ecco_dump_to_grid_schedule_last_result", "")
         w.set("input_boolean.ecco_free_power_schedule_armed", "off")
+        # PLAN (stage 3): the scheduled start reads the plan's two sensors and fails closed without them. Here no override runs and the
+        # effective reserve is below every Stop SOC of this suite; the plan cases are proved by test_ecco_plan_enforcement.py.
+        w.set("sensor.ecco_plan_export_hold", "clear")
+        w.set("sensor.ecco_plan_effective_reserve", "20")
         self.ha.start()
         if setup:
             setup(self)

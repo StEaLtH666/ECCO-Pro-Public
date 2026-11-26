@@ -97,6 +97,10 @@ class Run:
         w.set(ARMED, "off")
         w.set(LAST, "")
         w.set("input_boolean.ecco_free_power_schedule_armed", "off")
+        # PLAN (stage 3): the scheduled start reads the plan's two sensors and fails closed without them. Here no override runs and the
+        # effective reserve is below every Stop SOC of this suite; the plan cases are proved by test_ecco_plan_enforcement.py.
+        w.set("sensor.ecco_plan_export_hold", "clear")
+        w.set("sensor.ecco_plan_effective_reserve", "20")
         self.start_ts = S.parse_local(start)
         self.end_ts = self.start_ts + duration * 60
         self.ha.start()
@@ -140,6 +144,8 @@ def old_package_text() -> str:
 
 
 OLD_TEXT = old_package_text()
+import _pex as _pex  # noqa: E402  (PEX: r9's declared edits are undone below, so the earlier entry's round trip still lands on its package)
+PRE_R9_TEXT = _pex.as_of(PKG_REL, "isp1", PKG_TEXT)   # PEX: the live package with every entry after isp1 undone (r9 and epc2 are each declared by their own entry)
 
 # ======================================================================================================================
 print("[0] static")
@@ -147,19 +153,31 @@ print("[0] static")
 pkg = yaml.safe_load(PKG_TEXT)
 old = yaml.safe_load(OLD_TEXT)
 shape = {k: len(v) for k, v in pkg.items()}
-check("the package keeps its helper, script and automation counts (1/1/3/1 helpers, 2 scripts, 3 automations, 1 template)",
-      shape == {k: len(v) for k, v in old.items()} == {"input_boolean": 1, "input_datetime": 1, "input_number": 3,
-                                                         "input_text": 1, "script": 2, "automation": 3, "template": 1},
+check("the package keeps its helper, script and automation counts, plus r9's captured-start helper and capture automation "
+      "(1/2/3/1 helpers, 2 scripts, 4 automations, 1 template; before r9: 1/1/3/1, 2, 3, 1)",
+      shape == {"input_boolean": 1, "input_datetime": 2, "input_number": 3, "input_text": 1, "script": 2, "automation": 4,
+                "template": 1}
+      and {k: len(v) for k, v in old.items()} == {"input_boolean": 1, "input_datetime": 1, "input_number": 3,
+                                                  "input_text": 1, "script": 2, "automation": 3, "template": 1},
       str(shape))
 check("helper definitions, the cancel script and the template sensor's attributes are unchanged",
-      all(pkg[k] == old[k] for k in ("input_boolean", "input_datetime", "input_number", "input_text"))
+      all(pkg[k] == old[k] for k in ("input_boolean", "input_number", "input_text"))
+      and {k: v for k, v in pkg["input_datetime"].items() if k != "ecco_dump_to_grid_ha_start"} == old["input_datetime"]
       and pkg["script"]["ecco_dump_to_grid_cancel_schedule"] == old["script"]["ecco_dump_to_grid_cancel_schedule"]
       and pkg["template"][0]["sensor"][0]["attributes"] == old["template"][0]["sensor"][0]["attributes"])
 new_av, old_av = (next(a for a in p["automation"] if a["id"] == "ecco_dump_to_grid_schedule_arm_validation") for p in (pkg, old))
-check("the arm validation is unchanged except that a successful arm also clears the two schedule alerts",
+# Owner decision of 20 Nov 2026 (clock changes, proposals P-A and P-B): the arm validation also gains the refusal of a skipped, repeated or unreadable start time and walks the TOU slots on real instants. Both edits are
+# declared as exact pairs (DUMP_7 to DUMP_10) of the r9 scope module, and the expected arm validation is the pre-dgs1 one with exactly those pairs applied: any OTHER change to it still fails this check (it used to
+# require the whole `choose` to equal the old one).
+import _r9_scope as _r9s  # noqa: E402
+_clock_pairs = ((_r9s.DUMP_7_OLD, _r9s.DUMP_7_NEW), (_r9s.DUMP_8_OLD, _r9s.DUMP_8_NEW), (_r9s.DUMP_9_OLD, _r9s.DUMP_9_NEW), (_r9s.DUMP_10_OLD, _r9s.DUMP_10_NEW))
+exp_av = next(a for a in yaml.safe_load(_r9s._apply(OLD_TEXT, _clock_pairs, "arm validation"))["automation"] if a["id"] == "ecco_dump_to_grid_schedule_arm_validation")
+check("the arm validation is unchanged except that a successful arm also clears the two schedule alerts and (owner decision of 20 Nov 2026) refuses a skipped, repeated or unreadable start time and walks the TOU "
+      "slots on real instants: its `choose` is the old one with exactly the declared pairs applied",
       {k: v for k, v in new_av.items() if k != "actions"} == {k: v for k, v in old_av.items() if k != "actions"}
       and new_av["actions"][0] == old_av["actions"][0]
-      and new_av["actions"][1]["choose"] == old_av["actions"][1]["choose"]
+      and new_av["actions"][1]["choose"] == exp_av["actions"][1]["choose"]
+      and exp_av["actions"][1]["choose"] != old_av["actions"][1]["choose"]
       and new_av["actions"][1]["default"][0] == old_av["actions"][1]["default"][0]
       and [a["data"]["notification_id"] for a in new_av["actions"][1]["default"][1:]]
       == ["ecco_dump_to_grid_schedule", "ecco_dump_to_grid_schedule_readiness"])
@@ -198,7 +216,7 @@ services = set(re.findall(r"action: ([a-z_]+\.[a-z_]+)", PKG_TEXT))
 check("the package calls only helper, dongle-control, script and notification services (no register or Modbus path)",
       services <= {"input_text.set_value", "input_boolean.turn_off", "number.set_value", "switch.turn_on", "switch.turn_off",
                    "button.press", "script.ecco_dump_to_grid_start_scheduled", "persistent_notification.create",
-                   "persistent_notification.dismiss"}, str(sorted(services)))
+                   "persistent_notification.dismiss", "input_datetime.set_datetime"}, str(sorted(services)))   # r9: the capture's helper write
 check("the package never calls an ESPHome action, a Modbus service or a register write, and never a recovery button",
       not any(re.search(r"esphome|modbus|register", sv, re.I) for sv in services)
       and "force_restore" + "_original" not in PKG_TEXT and "accept" + "_current_state" not in PKG_TEXT)
@@ -464,9 +482,10 @@ r = down_then_back(PKG_TEXT, ST - 40, ST - 10, ST + 3700)
 check("HA restarted at 17:59:20-17:59:50: starts on time, no alert", r.d.successes == 1 and r.d.started_at - ST < 60
       and r.created() == [])
 r = down_then_back(PKG_TEXT, ST - 120, ST + 600, ST + 3700)
-check("HA down 17:58-18:10 (the start trigger missed): recovered after the restart with an alert, ends inside the window",
-      r.d.successes == 1 and 600 <= r.d.started_at - ST <= 700 and any("missed" in n_[3] for n_ in r.created())
-      and r.d.ends_at <= r.end_ts + 30, f"{r.d.started_at and r.d.started_at - ST} {r.created()}")
+check("HA down 17:58-18:10 (the start trigger missed): R9 - NOT started after the restart; MISSED recorded, alerted, disarmed",
+      r.d.successes == 0 and r.d.press_log == [] and r.last() == "MISSED - not started after a Home Assistant restart"
+      and any("missed" in n_[3] for n_ in r.created()) and r.w.state(ARMED) == "off",
+      f"{r.d.started_at and r.d.started_at - ST} {r.last()} {r.created()}")
 r = down_then_back(PKG_TEXT, ST - 120, ST + 3700, ST + 3800)
 check("HA back only after the window ended: MISSED recorded, alerted, nothing pressed, status FAILED",
       r.last().startswith("MISSED") and any("missed" in n_[3] for n_ in r.created()) and r.d.press_log == []
@@ -496,6 +515,52 @@ def cancel(x):
     x.ha.start_script("ecco_dump_to_grid_cancel_schedule", {})
 
 
+def old_fallback_package(text: str) -> str:
+    """The package with the step after the retry loop as it stood before owner decision r15 (0a488d8): while Dump to Grid is active, EVERY result but STARTED and BLOCKED is replaced by 'STARTED OK - Dump to Grid is
+    active; this run could not confirm the start as its own ...'. Owner decision r15 removed it; it is the mutant the two checks below must kill."""
+    a = text.find("          # Owner decision r15 (19 Nov 2026): the steps after the loop never turn a result into a success.")
+    if a < 0:
+        return text                       # the package before owner decision r15 already has the old step
+    end = ("          - if:\n              - condition: template\n                value_template: >-\n"
+           "                  {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}\n"
+           "                  {{ not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')\n"
+           "                     and not r.startswith('STARTED') and not r.startswith('FAILED') and not r.startswith('CANCELLED')\n")
+    b = text.index(end, a)
+    old = ("          - if:\n              - condition: template\n                value_template: >-\n"
+           "                  {% set r = states('input_text.ecco_dump_to_grid_schedule_last_result') %}\n"
+           "                  {{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') and not r.startswith('STARTED')\n"
+           "                     and not r.startswith('BLOCKED') }}\n"
+           "            then:\n              - action: input_text.set_value\n                target:\n                  entity_id: input_text.ecco_dump_to_grid_schedule_last_result\n"
+           "                data:\n                  value: \"STARTED OK - Dump to Grid is active; this run could not confirm the start as its own (check power, Stop SOC and end time)\"\n")
+    return text[:a] + old + text[b:]
+
+
+OLD_FALLBACK_TEXT = old_fallback_package(PKG_TEXT)
+
+
+def stalled_view_run(text):
+    r = Run(text, phase=5.0, delays=(0.05,))
+    r.d.stalls.append((ST + 1.0, ST + 45))
+    return r.until(900)
+
+
+def stalled_view_ok(r) -> bool:
+    """Owner decision r15 (it replaces the old expectation 'STARTED OK'): the press passed and its start was only seen late, so this run could not confirm it: ONE transaction, never two, the result stays FAILED TO START
+    (unconfirmed, final), the end-of-run alert is raised and says Dump to Grid is active now and this run did not confirm that it started it, nothing is dismissed, the write enable ends off."""
+    notice = r.w.notifications.get("ecco_dump_to_grid_schedule", {}).get("message", "")
+    return (r.passed() == 1 and r.d.successes == 1 and r.last().startswith("FAILED TO START - no answer from the dongle to attempt 1; outcome unconfirmed")
+            and not r.last().startswith("STARTED") and len(r.created()) == 1 and "did not confirm that it started it" in notice and "this run did not start it" not in notice
+            and not [n for n in r.w.notification_log if n[1] == "dismiss"] and not r.arm_left_on())
+
+
+def own_start_ok(r, op) -> bool:
+    """Owner decision r15 (it replaces the old expectation 'STARTED or BLOCKED'): the owner's own START two seconds before the schedule: nothing staged into that transaction, never pressed during it, one transaction. The run
+    cannot confirm the start as its own, so it never reads STARTED: it is BLOCKED (Dump to Grid already active at the start) or the FAILED TO START text that says Dump to Grid is active now and this run did not confirm it."""
+    last = r.last()
+    return (r.passed() == 1 and not any(op[0] <= t <= op[1] for t, _e, _v in r.d.number_log) and not last.startswith("STARTED") and not r.arm_left_on()
+            and (last.startswith("BLOCKED") or (last.startswith("FAILED TO START - retries ended at") and last.endswith("Dump to Grid is active now, but this run did not confirm that it started it"))))
+
+
 for t_cancel in (28.5, 89.0):
     r = Run(setup=lambda x: x.d.rtc.append((ST - 5, ST + 240)))
     r.w.at(ST + t_cancel, lambda x=r: cancel(x))
@@ -517,12 +582,11 @@ r.until(400)
 check("cancel and re-arm for 19:30: today's run stops (no press after the cancel) and the new schedule stays ARMED, text kept",
       r.d.successes == 0 and all(p_ <= 89 for p_ in r.presses()) and r.w.state(ARMED) == "on" and r.last().startswith("ARMED"),
       f"{r.presses()[-2:]} {r.last()}")
-r = Run(phase=5.0, delays=(0.05,))
-r.d.stalls.append((ST + 1.0, ST + 45))
-r.until(900)
-check("Home Assistant's view stalls right after a press that passes: never two transactions; the start is recorded once the "
-      "view recovers; the write enable ends off", r.passed() == 1 and r.d.successes == 1 and r.last().startswith("STARTED OK")
-      and not r.arm_left_on(), f"{r.gate()} {r.last()}")
+r = stalled_view_run(PKG_TEXT)
+check("Home Assistant's view stalls right after a press that passes: never two transactions; the outcome is unconfirmed, so the run ends as FAILED TO START (final: a false negative when the dongle did start, which the alert "
+      "flags with 'Dump to Grid is active now ... this run did not confirm that it started it'; owner decision r15, it replaces the old expectation STARTED OK); the write enable ends off", stalled_view_ok(r), f"{r.gate()} {r.last()}")
+check("...the old fallback restored (STARTED OK for any result but BLOCKED) would turn that unconfirmed outcome into a success again: the check above kills it",
+      not stalled_view_ok(stalled_view_run(OLD_FALLBACK_TEXT)) and stalled_view_run(OLD_FALLBACK_TEXT).last().startswith("STARTED OK - Dump to Grid is active; this run could not confirm"))
 r = Run(phase=5.0, delays=(0.05,), outcome="capture_failed")
 r.d.stalls.append((ST + 1.0, ST + 45))
 r.until(900)
@@ -538,8 +602,12 @@ r.d.manual_start(ST - 2)
 r.until(600)
 op = r.d.op_intervals[0]
 check("the owner's own START two seconds before the schedule: nothing staged into that transaction, never pressed during it; "
-      "one transaction; Dump active", r.passed() == 1 and not any(op[0] <= t <= op[1] for t, _e, _v in r.d.number_log)
-      and r.last().startswith(("STARTED", "BLOCKED")) and not r.arm_left_on(), f"{r.d.number_log} {op} {r.last()}")
+      "one transaction; Dump active; the run never reads STARTED (it cannot confirm the start as its own: BLOCKED, or FAILED TO START saying Dump to Grid is active now and this run did not confirm it; owner decision r15, "
+      "it replaces the old expectation STARTED or BLOCKED)", own_start_ok(r, op), f"{r.d.number_log} {op} {r.last()}")
+_r_old = Run(OLD_FALLBACK_TEXT)
+_r_old.d.manual_start(ST - 2)
+_r_old.until(600)
+check("...the old fallback restored would read STARTED OK for it (the old pin): the check above kills it", not own_start_ok(_r_old, _r_old.d.op_intervals[0]) and _r_old.last().startswith("STARTED OK"), _r_old.last())
 r = Run()
 r.d.manual_start(ST + 1.0)
 r.until(600)
@@ -699,7 +767,7 @@ check("dgs1's fingerprint is the pinned value, linked to rsv1's",
       DGS1.fingerprint == DGS1_FINGERPRINT == _pex.fingerprint(DGS1) and _pex.record(DGS1)["parent"] == RSV1_FINGERPRINT)   # PEX: hash link
 check("undone exactly, the package is its fps1 state byte for byte (press at +2 s, one retry after 12 s, no alert)",
       G.sha(OLD_TEXT).startswith(BEFORE_SHA) and 'delay: "00:00:12"' in OLD_TEXT and "persistent_notification" not in OLD_TEXT)
-check("the dgs1 pair round-trips (applying it to the fps1 text gives the live package)", G.add_dgs1_package(OLD_TEXT) == PKG_TEXT)
+check("the dgs1 pair round-trips (applying it to the fps1 text gives the live package)", G.add_dgs1_package(OLD_TEXT) == PRE_R9_TEXT)
 
 # ======================================================================================================================
 print("")
