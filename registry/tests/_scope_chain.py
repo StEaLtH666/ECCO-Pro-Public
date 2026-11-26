@@ -1546,7 +1546,7 @@ SGT1 = Entry(
     },
     added_files=_sgt1.ADDED_FILES,
     # _pex.fingerprint(SGT1): hashes its parent ttr1's fingerprint and every declaration above
-    fingerprint="c2f24b5a455284c4b7cdeff76d6339a07ff252d5c684e17a8056ad6d84186dd9",
+    fingerprint="979bf4cc6a3eb00296e6cd58f651f1aec580584bc9e806514c077e7ee1a54b50",
     note="the shared start gate (two template binary sensors, the grid-import ceiling helper with no initial value, a guarded Free Power start script) and three in-lease END guards, each its own package file needing "
          "the owner's separate install authorisation (the Free Power guards press the operator's End only for a verified running lease, at most once per lease); the gate is soft (the dongle's own Start button bypasses it), the card is not changed, a missing or unreadable input closes the gate, the guards only press "
          "an existing End button and never act at a restart, a reload or a reconnect; ZERO firmware, registry data, Intelligence or ecco_core change, no register operation of its own",
