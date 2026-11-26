@@ -1,5 +1,5 @@
-"""sgt1 (the shared START GATE for Charge Battery and Export to Grid, a GUARDED FREE POWER START and the IN-LEASE END GUARDS; offline, nothing installed, the gate is SOFT). ADDED: the two packages, their suite and the test
-support module of that suite. CHAIN-PINNED edit: the deployment manifest (two stanzas with their comment blocks). ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation of its own
+"""sgt1 (the shared START GATE for Charge Battery and Export to Grid, a GUARDED FREE POWER START and the IN-LEASE END GUARDS; offline, nothing installed, the gate is SOFT). ADDED: the four packages (the gate and three lease
+guards, one file each), their suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (four stanzas with their comment blocks). ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation of its own
 (the guarded start stages and presses the dongle's existing Free Power start button as the scheduled start and the card do; the guards only press the two existing END buttons); no existing package, card or dashboard is edited.
 
 Same technique as the earlier post-export scope modules: the verbatim manifest edit is held HERE as an exact (before, after) pair, round-trip-checked, and the reverter raises
@@ -14,7 +14,9 @@ from __future__ import annotations
 ID = 'sgt1'
 
 ADDED_FILES = frozenset({
-    'home-assistant/packages/ecco_lease_guards.yaml',
+    'home-assistant/packages/ecco_lease_guard_dump.yaml',
+    'home-assistant/packages/ecco_lease_guard_free_power_import.yaml',
+    'home-assistant/packages/ecco_lease_guard_free_power_time.yaml',
     'home-assistant/packages/ecco_start_gate.yaml',
     'home-assistant/tests/_start_gate_sim.py',
     'home-assistant/tests/test_ecco_start_gate.py',
@@ -75,21 +77,40 @@ dashboard:
 
   # Start gate - sgt1 (NOT installed, NOT LIVE-PROVEN). Item N2 of the architecture reconciliation. Two template binary sensors, binary_sensor.ecco_charge_start_allowed and binary_sensor.ecco_export_start_allowed:
   # ONE shared start gate for Charge Battery (Free Power) and Export to Grid (Dump to Grid), built only from facts ECCO already has (time trust, telemetry, no open recovery obligation, the other function not running;
-  # for Export the Stage 3 hold, reserve, Stop SOC and plan revision; for Charge a grid-import headroom check that is OFF until the owner sets input_number.ecco_grid_import_ceiling_w, a helper with no initial value).
-  # Every missing, unavailable or unknown input closes the gate and is named in its reasons. Also script.ecco_free_power_start_guarded: a guarded Free Power start bound to the gate (a NEW start path; the Energy
-  # Actions card is NOT changed in this step and still presses the dongle's start button directly). THE GATE IS SOFT: the dongle's own Start button bypasses it until a firmware gate exists. Nothing calls the
-  # script and nothing writes to the inverter. Install = copy the file, check the configuration, then reload the template entities, the input_number helpers and the scripts, one at a time (never "reload all"):
-  # no restart, which is why restart_required is false. It needs ecco_time_trust.yaml, ecco_plan_helpers.yaml and the two schedule packages. Delete the file and reload the same three to remove it.
+  # for Export the Stage 3 hold, reserve, Stop SOC and plan revision; for Charge a grid-import headroom check that is OFF until the owner sets input_number.ecco_grid_import_ceiling_w, a helper with no initial value:
+  # only a readable 0 means none configured, a ceiling that cannot be read closes the gate). Every missing, unavailable or unknown input closes the gate and is named in its reasons. Also
+  # script.ecco_free_power_start_guarded: a guarded Free Power start bound to the gate (a NEW start path; the Energy Actions card is NOT changed in this step and still presses the dongle's start button directly, and
+  # the start bypass detector would record a start of it as a bypass; a refused explicit request puts the staged values it replaced back). THE GATE IS SOFT: the dongle's own Start button bypasses it until a firmware gate
+  # exists. Nothing calls the script and nothing writes to the inverter. Install = copy the file, check the configuration, then reload the input_number helpers first, then the template entities, then the scripts,
+  # one at a time (never "reload all"): no restart, which is why restart_required is false. It needs ecco_time_trust.yaml, ecco_plan_helpers.yaml and the two schedule packages. Delete the file and reload the
+  # same three to remove it.
   - source: home-assistant/packages/ecco_start_gate.yaml
     destination: /config/packages/ecco_start_gate.yaml
     method: ssh_file_copy
     restart_required: false
-  # Lease guards - sgt1 (NOT installed, NOT LIVE-PROVEN). EACH GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION. Three automations that only ever press an existing END button: end a Dump to Grid lease when a
-  # Hold battery, Skip tonight or Prepare for power cut turns on or the effective reserve rises above the Stop SOC the lease latched; end a Free Power lease when the time-trust leases sensor has not read on for 5
-  # minutes; end a Free Power lease when the measured grid import stays above the configured ceiling for 30 seconds. They start, arm and write nothing, act only on a change from a reading (never at a Home Assistant
-  # start, a reload or a reconnect) and are SOFT (they run in Home Assistant). Install = copy the file, check the configuration, reload the automations: no restart. Delete the file and reload to remove it.
-  - source: home-assistant/packages/ecco_lease_guards.yaml
-    destination: /config/packages/ecco_lease_guards.yaml
+  # Lease guard, Dump to Grid - sgt1 (NOT installed, NOT LIVE-PROVEN). THIS GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION. One automation that only ever presses END DUMP TO GRID - RESTORE NOW: it ends a Dump
+  # to Grid lease when a Hold battery, Skip tonight or Prepare for power cut turns on, or the effective reserve rises above the Stop SOC the lease latched. The Dump End is not an operator retry in the firmware (it clears
+  # no lockout and resets no backoff), so the guard needs no precondition beyond an active lease. It starts, arms and writes nothing, acts only on a change from a reading (never at a Home Assistant start, a reload or a
+  # reconnect) and is SOFT (it runs in Home Assistant). Install = copy the file, check the configuration, reload the automations: no restart. Delete the file and reload to remove it.
+  - source: home-assistant/packages/ecco_lease_guard_dump.yaml
+    destination: /config/packages/ecco_lease_guard_dump.yaml
+    method: ssh_file_copy
+    restart_required: false
+  # Lease guard, Free Power time trust - sgt1 (NOT installed, NOT LIVE-PROVEN). THIS GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION. One automation that only ever presses END FREE POWER - RESTORE NOW, when
+  # binary_sensor.ecco_time_trusted_for_leases has not read on for 5 minutes. THAT PRESS IS THE OPERATOR'S END (in the firmware the press that retries a restore and clears the operator-decision lockout), so it is made only
+  # for a lease verified running normally (status ACTIVE - VERIFIED OK, no start or restore in progress, an end time in the future) and at most once per lease, and it says why when it declines. It starts, arms and writes
+  # nothing, acts only on a change from a reading (never at a Home Assistant start, a reload or a reconnect) and is SOFT (it runs in Home Assistant). It reads ecco_time_trust.yaml (it is on that package's READERS
+  # allow-list). Install = copy the file, check the configuration, reload the automations: no restart. Delete the file and reload to remove it.
+  - source: home-assistant/packages/ecco_lease_guard_free_power_time.yaml
+    destination: /config/packages/ecco_lease_guard_free_power_time.yaml
+    method: ssh_file_copy
+    restart_required: false
+  # Lease guard, Free Power grid import - sgt1 (NOT installed, NOT LIVE-PROVEN). THIS GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION. One automation that only ever presses END FREE POWER - RESTORE NOW, when the
+  # measured grid import stays above the configured ceiling (input_number.ecco_grid_import_ceiling_w, of the start gate) for 30 seconds. THAT PRESS IS THE OPERATOR'S END, so it is made only for a lease verified running
+  # normally and at most once per lease, and it says why when it declines. A second small automation in the same file only raises a notification, and never presses, when the ceiling cannot be read (the guard is then
+  # inert). They start, arm and write nothing and are SOFT (they run in Home Assistant). Install = copy the file, check the configuration, reload the automations: no restart. Delete the file and reload to remove it.
+  - source: home-assistant/packages/ecco_lease_guard_free_power_import.yaml
+    destination: /config/packages/ecco_lease_guard_free_power_import.yaml
     method: ssh_file_copy
     restart_required: false
 
