@@ -1,0 +1,42 @@
+ECCO Intelligence - Ghost diagnostics (SIMULATION, read-only)
+SIMULATION, read-only. Intelligence controlled nothing; the existing schedule did what it did. The advice run
+is arithmetic on recorded hourly data. Evidence for the owner, never a decision.
+Period 2030-01-14 00:00 to 2030-01-17 00:00 (72 h). Tariff: import VERIFIED_FROM_INTEGRATION, export NOT_VERIFIED
+Advice log rows in the period: 3 (one per kind per slot cycle); followed in the simulation: 3 distinct advice
+  (kind, window, target); rows not followed: none
+EXISTING SCHEDULE = what the battery really did.  INTELLIGENCE ADVICE = the same flows with the logged advice
+applied (simulated).
+
+WHOLE PERIOD
+  Money (pence, before wear; + = advice ahead):
+    existing +543.5   advice +462.9   realised diff -80.6   stock adjustment -17.4   baseline +0.0
+  ADVICE EFFECT -98.0 p; noise +/-11.9 p (efficiency 6.6 + stock rules 5.3 + baseline 0.0; floor 0.5)
+  VERDICT: ADVICE_BEHIND_BEYOND_NOISE (advice behind, beyond the noise)
+  SOC %: minimum existing 40.0, advice 40.0 (+0.0); end of the last day existing 40.0, advice 40.0 (+0.0)
+         closing stored energy, advice minus existing: +0.00 kWh
+  RESERVE 40.0 %: margin to it: existing +0.0, advice +0.0; VERDICT NO_BREACH
+           advice below the reserve: 0 slot(s) on 0 day(s); at efficiency -3/+3 points: 0/0
+           existing schedule below the reserve: 0 slot(s)
+           NO_BREACH: no hourly SOC of the advice run went below the reserve; judged on the hourly-mean or
+             end-of-hour SOC against the base reserve (not the advice's own reserve), so a dip inside an hour
+             can be missed
+  Days: 0 ahead beyond noise, 2 behind beyond noise, 1 within noise, 0 with no advice effect
+
+PER DAY (existing / advice)
+  date        existing p  advice p  effect p   noise  verdict       SOC min  SOC end   margin  breach  adv f/n
+  2030-01-14       245.1     225.0     -21.0     5.1  behind          40/40    40/40    +0/+0  -       2/0
+  2030-01-15        88.1      63.3     -24.8    30.1  within noise    40/40    40/40    +0/+0  -       1/0
+  2030-01-16       210.3     174.6     -52.2    26.8  behind          40/40    40/40    +0/+0  -       0/0
+
+Data: 72 usable of 72 hours in the window; 0 repaired/flagged; flags: OPENING_STOCK_UNPRICED, WEAR_UNKNOWN
+  note: EXPORT_TARIFF_NOT_VERIFIED: export income counted as 0 (understates a ghost that exports)
+Closing stock: closing stock difference valued two ways, the one less favourable to the ghost used: (a) each
+  run's mixed-tank cost basis; (b) deliverable kWh at the period's mean import price
+Limits:
+  - hourly data: SOC is an hourly mean and advice windows snap to whole hours
+  - only advice that was actually logged is simulated; dump advice has no logged window and is not simulated
+  - spilled PV is unknown (taken as 0); the real battery's own limits are replayed as recorded
+  - money needs a verified import rate table covering the period: it covers only the days the tariff
+    integration publishes, so a money period can be much shorter than the history
+  - a simulation of one house over a short period: it is evidence, not proof, and decides nothing
+Read-only simulation. Nothing was changed, deployed or controlled.
