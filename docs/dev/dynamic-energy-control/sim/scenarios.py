@@ -903,6 +903,34 @@ def X_report_between(t0, t1):
     return ("the first unreachable report is between t=%d and %d s" % (t0, t1), f)
 
 
+def X_restore_attempts(n):
+    def f(run):
+        got = [l.get("restore_attempts") for l in run.leases]
+        return bool(got) and got[0] == n, "restore attempts %s" % (got,)
+    return ("the restore was tried exactly %d times" % n, f)
+
+
+def X_alert_between(sub, t0, t1):
+    def f(run):
+        hit = [a for a in run.alerts if sub in a[1]]
+        return bool(hit) and t0 <= hit[0][0] <= t1, "alerts %s" % ([(a[0], a[1][:40]) for a in run.alerts][:2],)
+    return ("the owner was alerted (%s) between t=%d and %d s" % (sub, t0, t1), f)
+
+
+def X_lease_ended_between(reason, t0, t1):
+    def f(run):
+        hit = [l for l in run.leases if l["reason"] == reason]
+        return bool(hit) and t0 <= hit[0]["end_t"] <= t1, "lease ends %s" % ([(l["end_t"], l["reason"]) for l in run.leases],)
+    return ("a lease ended with reason %s between t=%d and %d s" % (reason, t0, t1), f)
+
+
+def X_planned_end_at_most(t_s):
+    def f(run):
+        ends = [l["planned_end"] for l in run.leases]
+        return bool(ends) and max(ends) <= t_s, "planned ends %s" % ([int(e) for e in ends],)
+    return ("the lease's planned end is at most t=%d s" % t_s, f)
+
+
 def X_leases_count(n):
     def f(run):
         return len(run.leases) == n, "%d lease(s)" % len(run.leases)
@@ -1049,7 +1077,7 @@ add(gentle("g15_unbound_response", "H2/H3: the slot power does not bind the char
     covers=("REQ-A7", "REQ-B17", "REQ-B18", "REQ-D3"))
 add(gentle("g15b_charge_floor_weak_response", "The charger cannot throttle below 8.7 kW: a lowered setpoint moves the power by less than a third of what it should; the measured gain leaves its band at the next change, the lease ends and today's rate stands.",
            plant=P.PlantParams(charge_min_ac_w=8700.0)),
-    X_lease_ended_any(("no_response", "implausible_gain")), X_reached(),
+    X_lease_ended("implausible_gain"), X_lease_ended_between("implausible_gain", 2400, 2500), X_reached(),
     covers=("REQ-A7", "REQ-B17", "REQ-B18", "REQ-D3"))
 add(gentle("g16_target_already_reached", "The battery is already above the target: nothing is started and the plan says why.", soc0_pct=92.0, duration_s=3600.0),
     X_no_writes(), X_saw("ha", "stop", "target_reached"),
@@ -1062,7 +1090,7 @@ add(gentle("g18_start_command_lost", "The first command (the start) is lost in t
     covers=("REQ-B22", "REQ-C12"))
 add(gentle("g19_inverter_ignores_write", "From 10 minutes in the inverter takes no new value: the next change fails its readback, the restore fails three times and the owner is alerted (FAULT).",
            events=((600.0, "ignore_writes", {"on": True}),)),
-    X_alert("FAULT"),
+    X_alert("FAULT"), X_alert_between("failed 3 times", 7815, 7900), X_restore_attempts(3), X_saw("dongle", "stop", "response_failed"), X_leases_count(1),
     covers=("REQ-C7", "REQ-C12", "REQ-D5"))
 add(gentle("g20_telemetry_short_gap", "A 75 second telemetry gap that straddles a plan tick (the plan sees a frame 90 s old, under the 90 second bound): nothing stops, and the plan holds instead of deciding on stale data.", tel_gaps=((3840.0, 3915.0),)),
     X_reached(), X_lease_ended("target_reached"), X_saw("ha", "hold", "stale_short"), X_leases_count(1),
@@ -1072,27 +1100,31 @@ add(gentle("g20b_stale_frame_while_a_raise_is_due", "The first raise of a laggin
     X_saw("ha", "hold", "stale_short"), X_no_write_between(4200, 4500, kinds=("change",)), X_first_change_between(4500, 4800), X_leases_count(1),
     covers=("REQ-B3", "REQ-A3"))
 add(gentle("g21_telemetry_long_gap", "A 5 minute telemetry gap: beyond the bound the lease ends and today's rate takes over.", tel_gaps=((3600.0, 3900.0),)),
-    X_lease_ended("stale_telemetry"), X_reached(), X_no_write_between(3600, 3900),
+    X_lease_ended("stale_telemetry"), X_reached(), X_no_write_between(3600, 3900), X_leases_count(1),
     covers=("REQ-B3", "REQ-B9"))
 add(gentle("g22_soc_unavailable_at_start", "No telemetry for the first 12 minutes: nothing is started on missing data.", tel_gaps=((0.0, 700.0),)),
     X_first_write_after(700), X_saw("ha", "blocked", "stale_telemetry"), X_reached(),
     covers=("REQ-B3",))
+add(gentle("g22b_start_arrives_after_telemetry_loss", "The plan starts a session on fresh data, the start command takes 90 seconds, and the telemetry stops just after it was sent: when it arrives the dongle's own frame is older than the 90 s bound and it refuses; nothing is written on data it cannot see.",
+           cmd_delay_s=90.0, react_s=300.0, tel_gaps=((285.0, 600.0),)),
+    X_refused("stale_telemetry"), X_first_write_after(600), X_reached(),
+    covers=("REQ-B3", "REQ-B22"))
 add(gentle("g23_restart_in_lease", "The dongle restarts in the middle of the lease: the snapshot is restored at boot and the lease is never resumed.",
            events=((6000.0, "dongle_restart", {"boot_s": 60.0}),)),
-    X_lease_ended("restart"), X_reached(), X_slot_restored_after(6300), X_changes_at_most(2),
+    X_lease_ended("restart"), X_reached(), X_slot_restored_after(6300), X_changes_at_most(2), X_leases_count(1),
     covers=("REQ-B9", "REQ-B22", "REQ-C7", "REQ-C12"))
 add(gentle("g24_dead_dongle_charge", "The dongle dies for good during the lease: no guard runs, the lowered value stays; the owner is alerted. (The backstop is the alert and the after-window check.)",
            events=((6000.0, "dongle_dead", {}),)),
-    X_alert("dongle unavailable", by_s=6000 + 600),
+    X_alert("dongle unavailable", by_s=6000 + 600), X_alert_between("dongle unavailable", 6300, 6600),
     backstop="no firmware guard runs and the lowered slot power stays every night; only the Home Assistant alert remains (the after-window check of the GRC design is not modelled)",
     covers=("REQ-D4",))
 add(gentle("g25_ha_outage", "Home Assistant is gone for an hour: after 15 minutes without an API client the dongle restarts, which restores the lease.",
            events=((6000.0, "ha_down", {"dur": 3600.0}),)),
-    X_lease_ended("restart"), X_reached(),
+    X_lease_ended("restart"), X_lease_ended_between("restart", 6900, 7000), X_reached(), X_leases_count(1),
     covers=("REQ-B9", "REQ-C7", "REQ-D4"))
 add(gentle("g26_plan_lost", "Home Assistant stays connected but stops handing over plans: after 20 minutes the lease ends (plan lost).",
            events=((6000.0, "plan_stop", {}),)),
-    X_lease_ended("plan_lost"), X_reached(),
+    X_lease_ended("plan_lost"), X_lease_ended_between("plan_lost", 7215, 7260), X_reached(), X_leases_count(1),
     covers=("REQ-B9", "REQ-C7"))
 add(gentle("g27_rtc_untrusted_mid_lease", "The inverter clock becomes untrusted mid-lease: time-dependent actuation fails safe, the lease ends, nothing is raised.",
            trust=((7000.0, 9000.0, "inverter"),)),
@@ -1105,6 +1137,14 @@ add(gentle("g27b_stale_and_untrusted_together", "The telemetry goes stale and th
 add(gentle("g28_rtc_untrusted_at_start", "The inverter clock is untrusted for the first 15 minutes: no start until it is trusted.", trust=((0.0, 900.0, "inverter"),)),
     X_first_write_after(900), X_saw("ha", "blocked", "time_untrusted"), X_reached(),
     covers=("REQ-D1", "REQ-B21"))
+add(gentle("g28b_start_arrives_after_the_clock_is_untrusted", "The plan starts a session while the inverter clock is trusted, the start command takes 90 seconds and the clock becomes untrusted on the way: the dongle's own check refuses the start, and nothing time-dependent is written.",
+           cmd_delay_s=90.0, react_s=300.0, trust=((310.0, 900.0, "inverter"),)),
+    X_refused("time_untrusted"), X_first_write_after(900), X_reached(),
+    covers=("REQ-D1", "REQ-B21"))
+add(gentle("g29b_start_arrives_after_grid_loss", "The plan starts a session on a live grid, the start command takes 90 seconds and the grid is lost on the way: the dongle refuses the start and nothing is written while the grid is down.",
+           cmd_delay_s=90.0, react_s=300.0, events=((320.0, "grid_loss", {"dur": 300.0}),)),
+    X_refused("grid_lost"), X_reached(),
+    covers=("REQ-B21", "REQ-D7"))
 add(gentle("g29_grid_loss_in_lease", "Grid lost mid-lease (and a lowered slot may cap the battery off grid): the lease ends first and the original value is restored at once.",
            plant=P.PlantParams(slot_caps_offgrid_discharge=True), house=Hs((0, 800), (6900, 6000), (7700, 800)),
            events=((7000.0, "grid_loss", {"dur": 600.0}),)),
@@ -1129,8 +1169,16 @@ add(gentle("g31_two_policies", "Another controller tries to start an export whil
     covers=("REQ-B19", "REQ-B20", "REQ-C11"))
 add(gentle("g32_hold_pressed_charge", "The owner presses Hold mid-lease: the session ends, the pre-session values are back, nothing restarts while Hold is on.",
            events=((7000.0, "hold", {"dur": 1800.0}),)),
-    X_lease_ended("owner_end"), X_reached(),
+    X_lease_ended("owner_end"), X_reached(), X_leases_count(1),
     covers=("REQ-C12", "REQ-B21"))
+add(gentle("g35b_power_ceiling_lowered_inside_the_dwell", "The owner lowers the Power Ceiling to 4000 W 11 minutes into the lease, inside the 30 minute dwell after the start write: the lowering is a safety reduction, so the dwell does not hold it back and the setpoint is at the ceiling within one plan period.",
+           events=((1000.0, "power_ceiling", {"w": 4000.0}),)),
+    X_saw("ha", "reduce", "power_ceiling"), X_slot_at_most(4000, 1700), X_leases_count(1),
+    covers=("REQ-B21", "REQ-C10"))
+add(gentle("g36b_charger_runs_away_mid_lease", "The inverter stops following the setpoint with no write to blame (the charge response turns unbound at 50 minutes): the realised AC power sits at its 8.98 kW cap against a 6300 W setpoint, past the runaway bound of 115 percent plus 500 W; only the dongle's measured-power guard can see it, and it ends the lease.",
+           events=((3000.0, "plant", {"charge_response": "unbound"}),)),
+    X_lease_ended("runaway"), X_lease_ended_between("runaway", 3000, 3300), X_leases_count(1),
+    covers=("REQ-D3",))
 add(gentle("g33_plan_catches_up_alone", "The real battery is far larger than the plan (46 kWh against 35): the plan falls behind, raises the rate itself to today's and reaches the target in good time; the target guard has nothing to do and stays quiet.",
            plant=P.PlantParams(capacity_kwh=46.0), soc0_pct=25.0, target_soc_pct=90.0),
     X_reached(), X_reached_by_window_end(), X_saw("dongle", "stop", "target_guard", present=False), X_saw("ha", "increase", "behind_plan"),
@@ -1259,6 +1307,10 @@ add(export("e15b_runaway_between_thresholds", "The battery ignores a 500 W ceili
            target_export_w=500.0, house=P.Series([(0.0, 500.0)]), events=((900.0, "plant", {"ignore_ceiling_w": 2600.0}),), max_export_w=None, duration_s=3600.0),
     X_lease_ended("runaway"), X_lease_ends_within(900.0, 200.0),
     covers=("REQ-D3",))
+add(export("e21_pv_is_not_credited_in_the_duration", "1.5 kW of measured solar while the export starts: the loop uses it (the export needs less from the battery), the planned duration does NOT (it is sized from house + target alone), so the lease is planned to end at about 6300 s, not at the 20000 s the credited solar would give.",
+           soc0_pct=40.0, pv=Hs((0, 1500)), duration_s=9000.0, export_len_s=20000.0),
+    X_planned_end_at_most(8000), X_never_charges_from_export(),
+    covers=("REQ-B15",))
 add(export("e22_healthy_export_across_a_step_down_and_a_gap", "The review's night (sweep seed 23076789): a healthy export whose ceiling is stepped down while the battery is still at the old level and whose telemetry then has a 45 s gap. The first version of the guard counted one 4.7 kW reading twice and ended the healthy lease 'runaway'; the guard counts each NEW reading once and compares with the higher of the old and the new ceiling for 30 s after the write, so the lease runs to its planned end.",
            plant=P.PlantParams(capacity_kwh=37.982262768974216), soc0_pct=67.7217374159024, duration_s=7200.0, plan_s=60.0, react_s=300.0, cmd_delay_s=15.0, noise_w=25.0,
            tel_gaps=((1880.2382309817908, 1925.2382309817908), (5581.448138693851, 5596.448138693851)), seed=23076789,

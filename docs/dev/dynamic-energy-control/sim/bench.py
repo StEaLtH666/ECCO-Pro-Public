@@ -718,7 +718,7 @@ class Bench:
         if self.lease is not None:
             self.lease.soc_end = self.plant.soc()
         self.run.leases = [dict(id=l.id, kind=l.kind, owner=l.owner, start_t=l.start_t, end_t=l.end_t, reason=l.end_reason, soc_start=l.soc_start,
-                                soc_end=l.soc_end, writes=l.st.writes, changes=l.st.changes, fault=l.fault,
+                                soc_end=l.soc_end, writes=l.st.writes, changes=l.st.changes, fault=l.fault, restore_attempts=l.restore_attempts,
                                 planned_end=l.obj.end_s if l.kind == "export" else self.K.lease_end_s(l.obj)) for l in self.all_leases]
         return self.run
 

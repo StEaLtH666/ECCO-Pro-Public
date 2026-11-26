@@ -799,10 +799,10 @@ def _recording_make(reason, detail, *a, **kw):
 
 
 K.make = _recording_make       # record every (reason, detail) the kernel builds while the units and the scenarios run
-def u_bench_no_response():
+def u_bench_no_response(Bm=B):
     """The second weak response ends a Gentle lease (the dongle model's rule, GRC max_ineffective 2): drive the dongle tick directly."""
     sc = replace(S.SPEC_BY_NAME["g01_nominal"].sc, duration_s=1800.0)
-    b = B.Bench(sc, K)
+    b = Bm.Bench(sc, K)
     b.go()
     lease = b.lease
     assert lease is not None and lease.kind == "gentle"
@@ -1275,9 +1275,37 @@ SCENARIO_KILLERS = {
 SWEEP_KILLERS = {"BI12b": ("gentle", 250), "BI12a": ("gentle", 150), "BI03": ("charge_fixed", 150)}
 BSRC = (HERE / "bench.py").read_text(encoding="utf-8")
 BENCH_MUTANTS = [
-    ("BI26 the dongle ignores RAISE_STOP (the Stop SOC is never raised)", '            if lease.kind == "export" and cmd[1] is not None and cmd[1] > (lease.st.stop_soc_pct or 0.0):\n', "            if False:\n"),
+    # ---- the independent review's bench mutants (its labels), each of which survived the first version ----
+    ('BI14 dongle boot resumes the lease instead of restoring it', '            self.restore(t, self.lease, "restart")\n', '            pass\n'),
+    ('BI23 export duration sized with measured PV credited', '(hw if hw is not None else 0.0) + sc.target_export_w))\n', '(hw if hw is not None else 0.0) + sc.target_export_w - (inp.frame.pv_w or 0.0)))\n'),
+    ('BI26 dongle ignores RAISE_STOP (Stop SOC never raised)', '            if lease.kind == "export" and cmd[1] is not None and cmd[1] > (lease.st.stop_soc_pct or 0.0):\n', '            if False:\n'),
+    ('BI27 Home Assistant never alerts on a dead dongle', 'self.run.alerts.append((t, "dongle unavailable', '(lambda x: None)((t, "dongle unavailable'),
+    ('NB1 plan-lost bound doubled (40 min)', '        if lease.kind == "gentle" and t - lease.plan_t > K.PLAN_MAX_AGE_S:\n', '        if lease.kind == "gentle" and t - lease.plan_t > 2 * K.PLAN_MAX_AGE_S:\n'),
+    ('NB2 readback mismatch not detected', '        if got != value:\n', '        if False:\n'),
+    ('NB4 charge runaway guard removed from the dongle tick', '        if since >= K.RUNAWAY_GRACE_S and st.gain is not None and st.v_w is not None:\n', '        if False:\n'),
+    ('NB5 a third weak response needed to end the lease', '        elif verdict == "weak" and st.weak >= K.GRC_MAX_INEFFECTIVE:\n', '        elif verdict == "weak" and st.weak >= K.GRC_MAX_INEFFECTIVE + 1:\n'),
+    ('NB7 restore retried 30 times before the FAULT alert', 'RESTORE_ATTEMPTS = 3 ', 'RESTORE_ATTEMPTS = 30 '),
+    ('NB8 the dongle accepts a START under untrusted time', '        if not self.time_ok(t):\n            return self.refuse(t, kind, "time_untrusted")\n', ''),
+    # ---- more mutants of the dongle and Home Assistant models ----
+    ("B01 the night's one lease is not remembered (a second Gentle lease may start after the first ended)", "                self.night_used = True      # GRC: one lease a night. A Charge Fixed (Free Power) session may be started again, after the dwell\n", "                pass\n"),
+    ("B02 the dongle accepts a START on telemetry it cannot see", "        if not K.frame_fresh(f, (\"soc\", \"grid\")):\n            return self.refuse(t, kind, \"stale_telemetry\")\n", ""),
+    ("B03 the dongle accepts a START while the grid is down", "        if not self.grid_up:\n            return self.refuse(t, kind, \"grid_lost\")\n", ""),
+    ("B04 the dongle accepts a second START while a lease is open (no single writer)", "        if self.lease is not None:\n            return self.refuse(t, kind, \"authority_busy (the setpoint is owned by %s)\" % self.lease.owner)\n", ""),
+    ("B05 a lowered Power Ceiling is not recognised as a safety reduction by the dongle", "            forced = lease.st.v_w is not None and cmd[1] < lease.st.v_w and lease.st.v_w > self.power_ceiling_w + 1e-9\n", "            forced = False\n"),
+    ("B06 Home Assistant's silence is noticed after 20 minutes instead of 15 (the API-client timeout is doubled)", "            if self.api_age >= K.REBOOT_TIMEOUT_S:\n", "            if self.api_age >= 2 * K.REBOOT_TIMEOUT_S:\n"),
+    ("B07 a dongle that has been dead for 10 minutes still reads as available to Home Assistant", "UNAVAIL_S = 60 ", "UNAVAIL_S = 600 "),
+    ("B08 Home Assistant waits 20 minutes before it alerts about a dead dongle", "ALERT_AFTER_S = 120 ", "ALERT_AFTER_S = 1200 "),
+    ("B09 an untrusted inverter clock does not stop a charge", "            if t0 <= t < t1 and (which == \"ntp\" or self.sc.kind in KINDS_CHARGE):\n", "            if t0 <= t < t1 and which == \"ntp\":\n"),
+    ("B10 telemetry gaps are not honoured (the dongle always gets a sample)", "        if not self.d_up or self.in_gap(t):\n            return\n", "        if not self.d_up:\n            return\n"),
+    ("B11 the restore writes a computed value instead of the owner's snapshot", "            if reg in lease.snap and not self.do_write(t, lease, reg, lease.snap[reg], \"restore\"):\n", "            if reg in lease.snap and not self.do_write(t, lease, reg, 0.0, \"restore\"):\n"),
 ]
-BENCH_KILLERS = {"BI26": "e10c_reserve_rise_then_ha_outage"}
+BENCH_KILLERS = {   # bench mutant -> the scenario that must fail on its own with it (a bench unit may kill the rest, see BENCH_UNITS)
+    "BI26": "e10c_reserve_rise_then_ha_outage", "NB1": "g26_plan_lost", "NB2": "g19_inverter_ignores_write", "NB4": "g36b_charger_runs_away_mid_lease",
+    "NB7": "g19_inverter_ignores_write", "NB8": "g28b_start_arrives_after_the_clock_is_untrusted", "BI23": "e21_pv_is_not_credited_in_the_duration",
+    "BI14": "g23_restart_in_lease", "BI27": "g24_dead_dongle_charge", "B01": "g21_telemetry_long_gap", "B02": "g22b_start_arrives_after_telemetry_loss",
+    "B03": "g29b_start_arrives_after_grid_loss", "B04": "g31_two_policies", "B05": "g35b_power_ceiling_lowered_inside_the_dwell", "B06": "g25_ha_outage",
+    "B07": "g24_dead_dongle_charge", "B08": "g24_dead_dongle_charge", "B09": "g27_rtc_untrusted_mid_lease", "B10": "g21_telemetry_long_gap", "B11": "g01_nominal",
+}
 
 check("at least 40 mutants are defined", len(MUTANTS) >= 40, str(len(MUTANTS)))
 survivors = []
@@ -1317,7 +1345,22 @@ check("an unmutated copy of the kernel passes the units and every scenario (the 
 print("")
 print("[9] mutants of the bench (the dongle and Home Assistant models; each must be killed by the scenarios, there are no unit tables for them)")
 # ===========================================================================
+BENCH_UNITS = [("the second weak response ends a Gentle lease", u_bench_no_response)]
+
+
+def first_bench_unit_failure(Bm):
+    for uname, fn in BENCH_UNITS:
+        try:
+            if not fn(Bm):
+                return f"bench unit '{uname}'"
+        except BaseException as exc:
+            return f"bench unit '{uname}' crashed {type(exc).__name__}"
+    return None
+
+
+check("at least 15 mutants of the bench (the dongle and Home Assistant models) are defined", len(BENCH_MUTANTS) >= 15, str(len(BENCH_MUTANTS)))
 bsurv = []
+by_unit = 0
 for name, old, new in BENCH_MUTANTS:
     msrc, problem = apply_mutation(BSRC, old, new)
     if problem is not None:
@@ -1325,6 +1368,9 @@ for name, old, new in BENCH_MUTANTS:
         continue
     bmut = load_mutant(msrc, "bench_mutant")
     why = first_scenario_failure(K, bmut)
+    if why is None:
+        why = first_bench_unit_failure(bmut)
+        by_unit += 1 if why is not None else 0
     mid = name.split()[0]
     check(f"bench mutant {name}: killed ({why})", why is not None)
     if why is None:
@@ -1332,7 +1378,8 @@ for name, old, new in BENCH_MUTANTS:
     if mid in BENCH_KILLERS:
         sf = scenario_failure(K, BENCH_KILLERS[mid], bmut)
         check(f"bench mutant {mid} dies in scenario {BENCH_KILLERS[mid]} on its own ({sf})", sf is not None)
-check(f"every bench mutant is killed ({len(BENCH_MUTANTS) - len(bsurv)} of {len(BENCH_MUTANTS)})", not bsurv, str(bsurv))
+check(f"every bench mutant is killed ({len(BENCH_MUTANTS) - len(bsurv)} of {len(BENCH_MUTANTS)}; {by_unit} by a bench unit, the rest by the scenarios)", not bsurv, str(bsurv))
+check("the bench units pass on the real bench", first_bench_unit_failure(B) is None)
 bunmut = load_mutant(BSRC, "bench_unmutated")
 check("an unmutated copy of the bench passes every scenario (the bench mutation harness itself is sound)", first_scenario_failure(K, bunmut) is None)
 
