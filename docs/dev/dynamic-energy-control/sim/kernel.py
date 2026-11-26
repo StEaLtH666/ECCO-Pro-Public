@@ -13,9 +13,22 @@ Where the numbers come from (test_sim.py parses the sources and fails on drift; 
   * export budgets and guards : firmware/ecco_clock_dongle_stage3_4_free_power.yaml (substitutions, dump_controller_tick)
   * Gentle feasibility maths  : frontend/ecco-plan-core/src/gentleNight.ts (the pessimistic world, ported; golden vectors pinned)
   * charge actuator budgets   : the guarded charge-rate controller design (GRC SPEC revision 3, section 5; branch
-                                dev/gentle-rate-controller, not in this tree, so pinned by value and by the planner's matching
-                                defaults: 30 min dwell, at most 6 changes)
+                                dev/gentle-rate-controller, not in this tree). They are ASSERTED VALUES, not a live pin: vendored in
+                                grc_core_constants.txt with the source commit named (the self-check compares the kernel with that file, and
+                                that file with the header only where the commit is present), and by the planner's matching defaults (30 min
+                                dwell, at most 6 changes), which ARE parsed.
 Everything else is a named ASSUMPTION (marked ASSUMED below) and is listed in SIM_README.md.
+
+WHERE THIS KERNEL DELIBERATELY DIFFERS FROM THE GRC DESIGN (each is also in SIM_README.md; the kernel mirrors the design's budgets, not its code):
+  1. max_changes: the GRC counts the START write in `max_changes` ("START write included"); the kernel's `changes` excludes it. Behaviour is the
+     same because the 10-write night budget binds first (4 of the 10 are reserved for restores: 1 start + 5 changes use the other 6).
+  2. The target guard: the GRC guard derates the REALISED power (guard_derate_pct 85, guard_tail_pct 25, the knee at most taper_max_pct 95); the kernel's
+     guard asks the planner's pessimistic world (knee 90, tail 0.125, capacity band) whether the pre-session rate still reaches the target.
+  3. Response judgement: the GRC judges a change on judge_samples = 4 frames; the kernel judges it once, on the first frame after the settle.
+  4. The week (week_write_ceiling 42) and life (life_write_ceiling 4000) write ceilings are not modelled: one night is simulated.
+  5. The golden-vector check in test_sim.py rebuilds the planner's "knee may be passed" with its setpointOvershoot 1.1 charge-since-reading term;
+     `charge_progress` does not use that term (the bench's reading is current), so its `past` is the planner's rule without it.
+  6. chargeEffMax (EFF_MAX below) is the planner's optimistic efficiency; the kernel pins it and never uses it.
 
 Units: seconds, watts, kWh, percent. Battery power in a Frame follows the firmware (register 190): positive = discharge. Grid follows
 the CT (register 172): positive = import. Inverter AC power: positive = output, negative = input (charging).
@@ -107,6 +120,7 @@ CHARGE_MAX_CHANGES = 6            # planner maxChanges = GRC max_changes
 PLANNER_HYSTERESIS_W = 500        # planner hysteresisW: a decrease is planned only when it saves at least this much
 PLANNER_SLACK_S = 900             # planner decreaseSlackMin 15: a decrease keeps this much slack to the deadline
 EFF_PESSIMISTIC = 0.90            # planner chargeEffMin
+EFF_MAX = 0.97                    # planner chargeEffMax (the optimistic efficiency): pinned to the planner, not used by the kernel
 CAPACITY_BAND_PCT = 6.0           # planner capacityBandPct
 SOC_SCALE_ERR_PCT = 3.0           # planner socScaleErrPct
 SOC_RESOLUTION_PCT = 1.0          # planner socResolutionPct

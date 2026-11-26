@@ -22,6 +22,7 @@ memory; writes nothing.
 import ast
 import json
 import re
+import subprocess
 import sys
 import time
 import types
@@ -158,7 +159,7 @@ PLANNER_PINS = {
     "stepW": K.CHARGE_STEP_W, "dwellMin": K.CHARGE_DWELL_S / 60.0, "maxChanges": K.CHARGE_MAX_CHANGES, "hysteresisW": K.PLANNER_HYSTERESIS_W,
     "decreaseSlackMin": K.PLANNER_SLACK_S / 60.0, "chargeEffMin": K.EFF_PESSIMISTIC, "capacityBandPct": K.CAPACITY_BAND_PCT,
     "socScaleErrPct": K.SOC_SCALE_ERR_PCT, "socResolutionPct": K.SOC_RESOLUTION_PCT, "socNoisePct": K.SOC_NOISE_PCT, "kneeSocPct": K.KNEE_PESSIMISTIC_PCT,
-    "tailFraction": K.TAIL_FRACTION, "dropMin": K.DROP_MIN, "demandMarginPct": K.DEMAND_MARGIN_PCT, "chargeEffMax": K.EFF_MAX if hasattr(K, "EFF_MAX") else 0.97,
+    "tailFraction": K.TAIL_FRACTION, "dropMin": K.DROP_MIN, "demandMarginPct": K.DEMAND_MARGIN_PCT, "chargeEffMax": K.EFF_MAX,
 }
 check("the planner's DEFAULT_NIGHT_PARAMS block was found and parsed", len(planner) > 25, str(len(planner)))
 for k, want in PLANNER_PINS.items():
@@ -198,21 +199,47 @@ for key, (soc, target, elapsed, in_force, ceil_w, dl) in GOLD.items():
         check(f"golden {key}: the pessimistic finish with the first rate held = {want}", (got is None and want is None) or (got is not None and want is not None and abs(got - want) <= 0.011),
               f"port gives {got}")
 
-# the GRC design (branch dev/gentle-rate-controller) is not in this tree: its constants are pinned by value, and by the planner's own defaults
+# the GRC design (branch dev/gentle-rate-controller) is not in this tree. Its numbers are ASSERTED VALUES, not a live pin: vendored in grc_core_constants.txt with
+# the source commit named. The kernel is compared with that file; where the commit is present locally the file is compared with the header too.
+GRC_FIXTURE = (HERE / "grc_core_constants.txt").read_text(encoding="utf-8")
+grc = {k: int(v) for k, v in re.findall(r"^(\w+) = (-?\d+)\s*$", GRC_FIXTURE, re.M)}
+grc_commit = re.search(r"^# source commit: ([0-9a-f]{40})\s*$", GRC_FIXTURE, re.M).group(1)
+check("the vendored GRC constants say what they are: asserted values, not a live pin, with their source commit named", "NOT A LIVE PIN" in GRC_FIXTURE and len(grc) >= 30)
+GRC_KERNEL = {   # the GRC's Config name -> the kernel's constant, in the GRC's unit
+    "floor_w": K.CHARGE_MIN_W, "round_w": K.CHARGE_STEP_W, "fw_bound_w": K.CHARGE_MAX_W, "max_step_w": K.CHARGE_MAX_STEP_W, "hyst_w": K.CHARGE_HYST_W,
+    "reversal_extra_w": K.CHARGE_REVERSAL_EXTRA_W, "dwell_ms": K.CHARGE_DWELL_S * 1000, "settle_ms": K.GRC_SETTLE_S * 1000, "max_changes": K.CHARGE_MAX_CHANGES,
+    "night_write_ceiling": K.CHARGE_NIGHT_WRITES, "plan_max_age_ms": K.PLAN_MAX_AGE_S * 1000, "telemetry_stale_ms": K.TELEMETRY_STALE_S * 1000,
+    "clock_skew_max_s": K.CLOCK_SKEW_MAX_S, "end_margin_s": K.END_MARGIN_S, "charging_min_w": K.GRC_CHARGING_MIN_W, "response_min_pct": round(K.GRC_RESPONSE_MIN * 100),
+    "wrong_dir_w": K.EXPORT_WRONG_DIRECTION_W, "max_ineffective": K.GRC_MAX_INEFFECTIVE, "gain_min_pct": round(K.GRC_GAIN_MIN * 100), "gain_max_pct": round(K.GRC_GAIN_MAX * 100),
+    "runaway_pct": 100 + round(K.CHARGE_RUNAWAY_PCT), "runaway_margin_w": K.CHARGE_RUNAWAY_MARGIN_W, "runaway_samples": K.RUNAWAY_SAMPLES, "guard_margin_s": K.GUARD_MARGIN_S,
+}
+for name, got in GRC_KERNEL.items():
+    check(f"GRC design (asserted value, vendored fixture, not a live pin): {name} = {grc.get(name)} and the kernel has {got}", grc.get(name) == got)
+check("GRC design: 3 restore attempts and 1 owner restore are reserved out of the night's writes (the kernel reserves their sum)",
+      grc["max_restore_attempts"] + grc["owner_restore_reserve"] == K.CHARGE_RESTORE_RESERVE and B.RESTORE_ATTEMPTS == grc["max_restore_attempts"])
+KSRC_HEAD = (HERE / "kernel.py").read_text(encoding="utf-8").split('"""', 2)[1]
+GRC_DIFFERENT = ("judge_samples", "week_write_ceiling", "life_write_ceiling", "guard_derate_pct", "guard_tail_pct", "taper_max_pct", "max_changes")
+check("every number of the GRC design that the kernel does NOT mirror is named in the kernel's list of deliberate differences (judge frames, week and life ceilings, the guard's derate and tail, START in max_changes)",
+      all(n in KSRC_HEAD for n in GRC_DIFFERENT) and "WHERE THIS KERNEL DELIBERATELY DIFFERS FROM THE GRC DESIGN" in KSRC_HEAD and grc["judge_samples"] != 1)
+check("the planner agrees with the GRC on the two numbers both state (30 min dwell, 6 changes): the planner is parsed, so this one is live", planner["dwellMin"] * 60000 == grc["dwell_ms"] and planner["maxChanges"] == grc["max_changes"])
+try:
+    hdr = subprocess.run(["git", "show", f"{grc_commit}:docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h"], cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", timeout=30)
+except Exception:
+    hdr = None
+if hdr is not None and hdr.returncode == 0 and "struct Config" in hdr.stdout:
+    local = {k: int(v) for k, v in re.findall(r"^\s+u?int32_t\s+(\w+)\s*=\s*(-?\d+);", hdr.stdout, re.M)}
+    local.update({k: int(v) for k, v in re.findall(r"^\s+uint32_t\s+(\w+)\s*=\s*(-?\d+);", hdr.stdout, re.M)})
+    check(f"the vendored GRC constants equal the header at commit {grc_commit[:8]} (a local check: that commit is not in a clone of this repository)", all(local.get(k) == v for k, v in grc.items()),
+          str({k: (v, local.get(k)) for k, v in grc.items() if local.get(k) != v}))
+else:
+    notice(f"commit {grc_commit[:8]} of dev/gentle-rate-controller is not in this clone: the vendored GRC constants are compared with the kernel only (asserted values, not a live pin)")
 GRC_REL = "docs/dev/gentle-rate-controller/SPEC.md"
-GRC_BY_VALUE = {"dwell 30 min": K.CHARGE_DWELL_S == 1800, "at most 6 changes": K.CHARGE_MAX_CHANGES == 6, "10 writes a night, 4 reserved for restores": (K.CHARGE_NIGHT_WRITES, K.CHARGE_RESTORE_RESERVE) == (10, 4),
-                "2000 W largest step": K.CHARGE_MAX_STEP_W == 2000, "300 W hysteresis, 300 W extra to reverse": (K.CHARGE_HYST_W, K.CHARGE_REVERSAL_EXTRA_W) == (300, 300),
-                "plan lost after 20 min": K.PLAN_MAX_AGE_S == 1200, "lease ends 10 min before the slot end": K.END_MARGIN_S == 600,
-                "gain 50 to 150 percent": (K.GRC_GAIN_MIN, K.GRC_GAIN_MAX) == (0.5, 1.5), "second weak response ends it": K.GRC_MAX_INEFFECTIVE == 2,
-                "a running charge of 1000 W needed to start": K.GRC_CHARGING_MIN_W == 1000, "runaway 115 percent + 500 W": (K.CHARGE_RUNAWAY_PCT, K.CHARGE_RUNAWAY_MARGIN_W) == (15.0, 500)}
-for k, v in GRC_BY_VALUE.items():
-    check(f"GRC design (pinned by value, SPEC revision 3 section 5): {k}", v)
-check("the planner agrees with the GRC on the two numbers both state (30 min dwell, 6 changes)", planner["dwellMin"] == 30 and planner["maxChanges"] == 6)
 if (ROOT / GRC_REL).exists():
     spec = read(GRC_REL)
-    check("the GRC SPEC in this tree still states 30 min, 6, 10, 2000, 300, 20 min, 600 s", all(s in spec for s in ("30 min", "2000", "300", "20 min")))
+    check("the GRC SPEC in this tree still states 30 min, 6, 10, 2000, 300, 20 min, 600 s", all(s_ in spec for s_ in ("30 min", "2000", "300", "20 min")))
 else:
-    notice(f"{GRC_REL} is not in this tree (branch dev/gentle-rate-controller): its constants are pinned by value above, not parsed")
+    notice(f"{GRC_REL} is not in this tree (branch dev/gentle-rate-controller)")
 
 # ===========================================================================
 print("")
