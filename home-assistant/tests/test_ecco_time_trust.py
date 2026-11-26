@@ -7,22 +7,31 @@ nothing. This suite proves the package against a model of Home Assistant's templ
 installed, nothing was written live, and nothing here wires the input into a gate.
 
 The REAL package YAML runs under the model: dependency-tracked rendering, a render at the start of every minute for a template that uses now(), the
-availability template, attributes, a binary sensor with delay_on (it keeps its state while it counts, a change of the result cancels the count).
+availability template as a super template (while it is false nothing else is rendered, and an unchanged result is not delivered again), attributes,
+a binary sensor with delay_on (it keeps its state while it counts, a changed result cancels the count, it takes back its last on or off state when it
+is created again by a restart or a template reload), strptime and as_timestamp as Home Assistant reads them.
 
-  [0] static      only `template:`; nine entities; no automation, script, helper, trigger, action or service call; the eight dongle entities it reads
+  [0] static      only `template:`; eleven entities; no automation, script, helper, trigger, action or service call; the eight dongle entities it reads
                   exist in the firmware; its own ids are defined nowhere else; ASCII, LF, no site value; the default device slug appears only as
-                  entity ids (the site renderer's exact rules); the header states the constants with their reasons and the limits; the deployment
-                  manifest and the README and the CHANGELOG say the same; the firmware facts the header relies on are pinned
-  [1] model       control experiments on the model itself (delay_on, availability, re-rendering by time alone, an error, unavailable drops attributes)
+                  entity ids (the site renderer's exact rules); a text is parsed only with strptime in the firmware's exact format; the header states the
+                  constants with their reasons and the limits; the deployment manifest and the README and the CHANGELOG say the same; the firmware facts
+                  the header relies on are pinned
+  [1] model       control experiments on the model itself (delay_on, the availability super template, restore on a reload and a restart, re-rendering by
+                  time alone, an error, unavailable drops attributes, how dates are read)
   [2] scenarios   the saved data and the agreed list: a normal 10 s with a flickering stall flag for three hours; 70 s and 130 s; NTP unsynced; the NTP
-                  text frozen for 4, 5 and 6 minutes; the Home Assistant clock 130 s and 310 s out; the stall flag on for 9 and 11 minutes; a correction
-                  stuck for 6 minutes; each input unavailable, unknown or missing, one at a time; all of them at once; failed corrections above 0;
-                  maximum clock error above 120 s; the clock-change hour; a time-zone mismatch; the age of the text; a template reload and a restart with the flag already on
-  [3] boundaries  every limit on both sides (skew +-119 .. 301, difference +-59 .. 121, text age 299 .. 301, stall 9:59 and 10:00, correction 4:59 and 5:00)
+                  text frozen for 4, 5 and 6 minutes; the Home Assistant clock 130 s and 310 s out; the stall flag on for 3:29 and 3:30, for three and
+                  four reads, with the OFF just before the delay; a correction stuck for 6 minutes; each input unavailable, unknown or missing, one at a
+                  time; all of them at once; failed corrections above 0; maximum clock error above 120 s; the clock-change hour; a time-zone mismatch
+  [2b] restarts   a dead read path and a reconnect that re-sends the stale cached values, a restart with a stale text, a stuck correction and a restart, a
+                  Home Assistant clock behind by 150 s and 330 s and a reconnect that re-sends a 59 s old NTP text, a healthy blip, a blip in the middle of a
+                  count, a template reload (a count in progress, a helper that was on, no state to take back), the value bound and the LIVE condition at
+                  the limit, texts in the other spellings Home Assistant's own parser accepts
+  [3] boundaries  every limit on both sides (skew +-119 .. 301 and +-86400, difference +-59 .. 121 and +-3600 and +-43200, failed corrections 0 to 50, maximum
+                  error up to 3600, text age 299 .. 301, value age 599 .. 601, LIVE 10 s and 11 s, stall 3:29 and 3:30, correction 4:59 and 5:00)
   [4] consumers   the truth tables of the overall state and of the three yes/no consumers over every per-clock state and every unreadable value
   [5] differential every rule against an independent model over one-factor sweeps and a seeded random sample
-  [6] totality    a garbage, missing, huge or non-numeric input never makes a template fail and never reads TRUSTED
-  [7] no writes   the model saw no service call, no notification and no write outside the package's own nine entities
+  [6] totality    a garbage, missing, huge, non-numeric or oddly spelled input never makes a template fail and never reads TRUSTED
+  [7] no writes   the model saw no service call, no notification and no write outside the package's own eleven entities
   [8] mutation    in-memory mutants of the package, each caught
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
@@ -78,11 +87,12 @@ READS = {NTP_TEXT, INV_TEXT, DIFF, FAILED, MAXERR, SYNCED, STALL, CORR}
 K = dict(HA="sensor.ecco_time_trust_ha_clock", NTP="sensor.ecco_time_trust_dongle_ntp", INV="sensor.ecco_time_trust_inverter_clock",
          ALL="sensor.ecco_time_trust", LEASES="binary_sensor.ecco_time_trusted_for_leases", SCHED="binary_sensor.ecco_time_trusted_for_ha_schedules",
          SLOT="binary_sensor.ecco_time_trusted_for_slot_edits", STALLS="binary_sensor.ecco_time_trust_rtc_stall_sustained",
-         STUCK="binary_sensor.ecco_time_trust_rtc_correction_stuck")
+         STUCK="binary_sensor.ecco_time_trust_rtc_correction_stuck", RDN="binary_sensor.ecco_time_trust_ntp_text_readable",
+         RDI="binary_sensor.ecco_time_trust_inverter_text_readable")
 OWN = set(K.values())
 OWN_NAMES = {"ECCO Time Trust RTC Stall Sustained", "ECCO Time Trust RTC Correction Stuck", "ECCO Time Trusted For Leases",
              "ECCO Time Trusted For HA Schedules", "ECCO Time Trusted For Slot Edits", "ECCO Time Trust HA Clock", "ECCO Time Trust Dongle NTP",
-             "ECCO Time Trust Inverter Clock", "ECCO Time Trust"}
+             "ECCO Time Trust Inverter Clock", "ECCO Time Trust", "ECCO Time Trust NTP Text Readable", "ECCO Time Trust Inverter Text Readable"}
 NAMES = ["TRUSTED", "DEGRADED", "UNKNOWN", "UNTRUSTED"]      # ranked: a known-bad reading beats an unreadable one, which beats a merely degraded one
 START = "2026-11-25 12:00:00"
 
@@ -167,14 +177,19 @@ OTHER_PKGS = {p.name: p for p in sorted(PKGS.glob("*.yaml")) if p.name != "ecco_
 REPO_IDS = set(FW_IDS)
 for _p in OTHER_PKGS.values():
     REPO_IDS |= package_ids(_p)
-HEADER_PINS = ("NOT INSTALLED, NOT LIVE-PROVEN", "(diagnostic and READ-ONLY)", "BUILDS THE INPUT ONLY", "nothing reads it yet", "nine template entities", "no automation, no script, no helper, no trigger, no action",
-               "no service call", "UNKNOWN never reads better than DEGRADED", "TRUSTED < DEGRADED < UNKNOWN < UNTRUSTED", "TIME-ZONE ASSUMPTION", "R9",
-               "carries NO offset", "whole hours and is UNTRUSTED, never TRUSTED", "repeated hour of the autumn clock change", "kLargeErrorS", "REQ-D1",
-               "|skew| <= 120 s TRUSTED, <= 300 s DEGRADED", "ARRIVED", "text_age_s", "|difference| <= 60 s TRUSTED, <= 120 s DEGRADED", "failed corrections since boot > 0",
-               "maximum clock error since boot > 120 s", "10 minutes of CONTINUOUS ON", "5 minutes of CONTINUOUS ON", "delay_on", "PROXY for the sync age",
-               "item N1", "FAIL SAFE", "can NEVER produce TRUSTED", "allow-lists", "HOW A CONSUMER MUST READ IT", "Never test \"not off\"", "LIMITS, stated plainly",
-               "AGREE, not that either is true", "never clears after the first sync", "Recalled, NOT verified", "INSTALL", "RELOAD the template entities",
-               "no restart", "HARD RULES", "READ-ONLY", "Every template is total")
+HEADER_PINS = ("NOT INSTALLED, NOT LIVE-PROVEN", "(diagnostic and READ-ONLY)", "BUILDS THE INPUT ONLY", "nothing reads it yet", "eleven template entities",
+               "no automation, no script, no helper, no trigger, no action", "no service call", "UNKNOWN never reads better than DEGRADED",
+               "TRUSTED < DEGRADED < UNKNOWN < UNTRUSTED", "TIME-ZONE ASSUMPTION", "R9", "carries NO offset", "whole hours and is UNTRUSTED, never TRUSTED",
+               "repeated hour of the autumn clock change", "kLargeErrorS", "REQ-D1", "|skew| <= 120 s TRUSTED, <= 300 s DEGRADED", "ARRIVED", "text_age_s",
+               "|difference| <= 60 s TRUSTED, <= 120 s DEGRADED", "failed corrections since boot > 0", "maximum clock error since boot > 120 s",
+               "3 minutes 30 seconds of CONTINUOUS ON", "delay_on 00:03:30", "FOUR consecutive reads", "5 minutes of CONTINUOUS ON", "delay_on",
+               "PROXY for the sync age", "item N1", "FAIL SAFE", "can NEVER produce TRUSTED", "allow-lists", "HOW A CONSUMER MUST READ IT",
+               "Never test \"not off\"", "LIMITS, stated plainly", "AGREE, not that either is true", "never clears after the first sync",
+               "NOT verified on a real Home Assistant", "INSTALL", "RELOAD the template entities", "no restart", "HARD RULES", "READ-ONLY",
+               "Every template is total", "FRESHNESS IS JUDGED BY THE VALUES", "VALUE (the proof)", "LIVE (an extra)", "ARRIVAL (an extra",
+               "|now() - text| <= 600 s", "|now() - (inverter text - difference)| <= 600 s", "a stale copy and a Home Assistant clock that is far off cannot be told apart",
+               "more than 10 s after", "A TEXT IS A TIME only in the exact form the firmware writes it", "strptime", "creates no trust",
+               "super template", "restores its last on or off state", "does NOT restart a count in progress", "3600 s) or half a day (43200 s)")
 
 
 def header_problems(text: str) -> list[str]:
@@ -240,12 +255,23 @@ def static_problems(text: str) -> list[str]:
         bad.append(f"not in the firmware: {sorted(READS - FW_IDS)}")
     if not (mentioned & OWN) <= OWN:
         bad.append("own ids")
+    # a text is parsed ONLY with strptime in the firmware's exact format; as_timestamp is handed a datetime (now(), a last_changed, the parsed text), never a text, because Home Assistant's own
+    # parser also reads a date alone, no seconds, a T, fractions and an offset
+    for m in re.finditer(r"as_timestamp\(((?:[^()]|\([^()]*\))*)\)", nc):
+        arg = m.group(1).split(",")[0].strip()
+        if arg not in ("now()", "o.last_changed", "mk.last_changed", "dt"):
+            bad.append(f"as_timestamp of {arg!r}: a text is read with strptime, never handed to as_timestamp")
+    for m in re.finditer(r"strptime\(([^()]*)\)", nc):
+        if re.sub(r"\s+", "", m.group(1)) != "txt,'%Y-%m-%d%H:%M:%S',none":
+            bad.append(f"strptime({m.group(1)[:40]}): not the firmware's exact format with none as the default")
+    if "strptime(" not in nc:
+        bad.append("no strptime: the texts are not parsed in the firmware's exact format")
     return bad + header_problems(text) + privacy_problems(text)
 
 
 print("[0] static")
 sp = static_problems(PKG_TEXT)
-check("the package loads with no repeated key; only `template:`; nine template entities (five binary, four sensors) with exactly the allowed keys; no automation, "
+check("the package loads with no repeated key; only `template:`; eleven template entities (seven binary, four sensors) with exactly the allowed keys; no automation, "
       "script, helper, trigger, action, variables or service call; the only entities it reads are the eight the dongle publishes, and each exists in the firmware",
       sp == [], str(sp[:4]))
 nc0 = "\n".join(line for line in PKG_TEXT.split("\n") if not line.lstrip().startswith("#"))
@@ -258,7 +284,7 @@ own_ids = set(ENT)
 repo_other = set()
 for _p in OTHER_PKGS.values():
     repo_other |= package_ids(_p)
-check("its nine entity ids and unique ids are defined nowhere else in the repository's packages (no repeated key inside any package, no unique_id twice)",
+check("its eleven entity ids and unique ids are defined nowhere else in the repository's packages (no repeated key inside any package, no unique_id twice)",
       own_ids == OWN and not (own_ids & repo_other) and not [n for n, p in OTHER_PKGS.items() if "ecco_time_trust" in p.read_text(encoding="utf-8")])
 seen_u: dict = {}
 dup: list = []
@@ -304,7 +330,7 @@ README = (PKGS / "README.md").read_text(encoding="utf-8")
 README_FLAT = re.sub(r"\s+", " ", README)
 CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 BULLET = next((ln for ln in CHANGELOG.splitlines() if "ecco_time_trust.yaml" in ln), "")
-check("the packages README has a Time trust section that names the nine entities, every rule and constant, the time-zone assumption, the fail-safe rule, the limits, the install route and "
+check("the packages README has a Time trust section that names the eleven entities, every rule and constant, the time-zone assumption, the fail-safe rule, the limits, the install route and "
       "the replay counts; the CHANGELOG has one bullet that says it is read-only, offline and installs nothing",
       all(s in README_FLAT for s in ("## Time trust", "sensor.ecco_time_trust_ha_clock", "sensor.ecco_time_trust_dongle_ntp", "sensor.ecco_time_trust_inverter_clock",
                                      "binary_sensor.ecco_time_trusted_for_leases", "binary_sensor.ecco_time_trusted_for_ha_schedules",
@@ -331,6 +357,12 @@ check("the clock difference is published only by a successful read against valid
       "id(clock_difference).publish_state(difference);" in FW_TEXT and FW_TEXT.count("id(clock_difference).publish_state(") == 1
       and FW_TEXT.index("id(inverter_clock).publish_state(buffer);") < FW_TEXT.index("Waiting for confirmed NTP") < FW_TEXT.index("id(clock_difference).publish_state(difference);")
       and re.search(r'name: "Clock Difference"\s+id: clock_difference\s+unit_of_measurement: "s"\s+accuracy_decimals: 0\s+update_interval: never', FW_TEXT) is not None)
+check("the inverter time text is the firmware's YYYY-MM-DD HH:MM:SS string of the inverter's own year, month, day, hour, minute and second (the same form as the NTP text), and the clock "
+      "difference is the inverter's seconds of the day minus NTP's, wrapped to +-12 h: so the inverter text minus the difference is the NTP time of that read, on the right date, which is what "
+      "the VALUE rule measures",
+      'snprintf( buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second ); id(inverter_clock).publish_state(buffer);' in fw_flat
+      and "int difference = inverter_seconds - ntp_seconds;" in fw_flat and "if (difference > 43200) difference -= 86400;" in fw_flat
+      and "if (difference < -43200) difference += 86400;" in fw_flat and "year < 2020 || year > 2099" in fw_flat)
 check("the regular clock read is a 60 s interval skipped only while a correction or a manual write runs",
       re.search(r"- interval: 60s\s+startup_delay: 30s\s+then:\s+- if:\s+condition:\s+lambda: \|-\s+return !id\(correction_in_progress\) && !id\(manual_write_in_progress\);\s+then:\s+"
                 r"- button\.press:\s+id: read_inverter_clock", FW_TEXT) is not None)
@@ -361,30 +393,37 @@ def readable(raw, nonneg=False):
     return v
 
 
-def o_ha(text_kind, skew, age):
-    """text_kind 'time' | 'not_time' | 'unreadable' | 'missing'; skew whole seconds; age whole seconds (None = unreadable)."""
-    if text_kind != "time" or age is None or age > 300:
+def o_ha(text_kind, skew, age, live=True):
+    """text_kind 'time' | 'not_time' | 'unreadable' | 'missing'; skew whole seconds; age whole seconds (None = unreadable); live: the text changed since it became readable."""
+    if text_kind != "time" or age is None or age > 300 or not live:
         return "UNKNOWN"
     a = abs(skew)
     return "TRUSTED" if a <= 120 else ("DEGRADED" if a <= 300 else "UNTRUSTED")
 
 
-def o_ntp(synced, text_kind, age):
+def o_ntp(synced, text_kind, age, vage=0, live=True):
+    """vage: Home Assistant's clock minus the time the text carries (whole seconds)."""
     r1 = 0 if synced == "on" else (3 if synced == "off" else 2)
     r2 = {"time": 0, "not_time": 3}.get(text_kind, 2)
     r3 = 0 if r2 > 0 else (2 if age is None else (3 if age > 300 else 0))
-    return NAMES[max(r1, r2, r3)]
+    r4 = 0 if (r2 > 0 or r3 > 0) else (2 if abs(vage) > 600 else 0)
+    r5 = 0 if (r2 > 0 or r3 > 0) else (0 if live else 2)
+    return NAMES[max(r1, r2, r3, r4, r5)]
 
 
-def o_inv(diff, failed, maxerr, stall, stuck, synced, text_kind, text_age):
+def o_inv(diff, failed, maxerr, stall, stuck, synced, text_kind, text_age, rage=0, live=True):
+    """text_kind 'time' | 'not_time' | 'unreadable' | 'missing'; rage: Home Assistant's clock minus (the inverter text minus the difference), whole seconds."""
     d, f, m = readable(diff), readable(failed, True), readable(maxerr, True)
+    unread = text_kind in ("unreadable", "missing") or text_age is None or text_age > 300
     ranks = [2 if d is None else (3 if abs(d) > 120 else (1 if abs(d) > 60 else 0)),
              2 if f is None else (1 if f > 0 else 0),
              2 if m is None else (1 if m > 120 else 0),
              {"off": 0, "on": 1}.get(stall, 2),
              {"off": 0, "on": 3}.get(stuck, 2),
              0 if synced == "on" else 2,
-             2 if (text_kind != "time" or text_age is None or text_age > 300) else 0]
+             2 if unread else 0,
+             0 if (unread or d is None) else (2 if (text_kind != "time" or abs(rage) > 600) else 0),
+             0 if unread else (0 if live else 2)]
     return NAMES[max(ranks)]
 
 
@@ -405,10 +444,11 @@ class Killed(Exception):
 
 
 def world(text, *, diff="10", failed="0", maxerr="77", synced="on", stall="off", corr="off", ha_offset=0, ntp="live", inv="live", warm=120,
-          start=START, ha_zone="Europe/London", dongle_zone=None, restore_off=False):
+          start=START, ha_zone="Europe/London", dongle_zone=None, restore=None, readable_age=86400.0):
     """A healthy dongle (published every 60 s, on the minute) and Home Assistant, run for `warm` seconds. A value of None leaves the entity absent; `ntp` and `inv` are
-    'live' (a text every 60 s), None (never published) or a constant text."""
-    tw = T.TrustWorld(text, start=start, zone=ha_zone, restore_off=restore_off)
+    'live' (a text every 60 s), None (never published) or a constant text. `readable_age`: how long the two texts have been readable (a day by default: the LIVE
+    condition is long satisfied); None leaves the helpers as the world made them. `restore`: the state a delayed helper takes back when it is created ('on', 'off' or None)."""
+    tw = T.TrustWorld(text, start=start, zone=ha_zone, restore=restore)
     tw.w.clock_offset = ha_offset
     for eid, v in ((DIFF, diff), (FAILED, failed), (MAXERR, maxerr), (SYNCED, synced), (STALL, stall), (CORR, corr)):
         if v is not None:
@@ -416,15 +456,125 @@ def world(text, *, diff="10", failed="0", maxerr="77", synced="on", stall="off",
     tw.h_ntp = tw.feed(NTP_TEXT, zone=dongle_zone) if ntp == "live" else None
     if ntp not in ("live", None):
         tw.put(NTP_TEXT, ntp)
-    tw.h_inv = tw.feed(INV_TEXT, offset_s=7) if inv == "live" else None
+    tw.h_inv = tw.feed(INV_TEXT, offset_s=7, zone=dongle_zone) if inv == "live" else None
     if inv not in ("live", None):
         tw.put(INV_TEXT, inv)
     tw.advance(warm)
+    if readable_age is not None:
+        tw.age(K["RDN"], readable_age)
+        tw.age(K["RDI"], readable_age)
     return tw
 
 
+def inv_text(tw, read_age, difference=10.0):
+    """An inverter time text recording a read that is `read_age` seconds old by Home Assistant's own clock (the text minus the difference is the NTP time of the read)."""
+    return tw.local_text(tw.w.t + tw.w.clock_offset - read_age + difference)
+
+
+def _raw(tw, eid):
+    st = tw.w.states.get(eid)
+    return None if st is None else st[0]
+
+
+def _text_view(tw, eid, helper, now):
+    """What a dongle text is, read from the world's raw states and timestamps alone (no template): (text, unreadable, time as local epoch or None, arrival age, value age, live)."""
+    s = _raw(tw, eid)
+    txt = "unknown" if s is None else s
+    unreadable = txt in ("unknown", "unavailable", "")
+    ts = None
+    if not unreadable:
+        try:
+            ts = T.datetime.strptime(txt, T.FMT).replace(tzinfo=tw.zone).timestamp()
+        except ValueError:
+            ts = None
+    lc = tw.w.changed_at.get(eid) if s is not None else None
+    age = None if lc is None else round(now - lc)
+    vage = None if ts is None else round(now - ts)
+    hlc = tw.w.changed_at.get(K[helper])
+    live = lc is not None and hlc is not None and _raw(tw, K[helper]) == "on" and (lc - hlc) > 10
+    return txt, unreadable, ts, age, vage, live
+
+
+def expected_reasons(tw, key) -> list[str]:
+    """The fragments, in order, that the `reasons` of a per-clock sensor must show, from the world's raw states alone (independent of the templates)."""
+    now = tw.rendered_at[K[key]] + tw.w.clock_offset
+    if key == "HA":
+        _txt, unreadable, ts, age, _v, live = _text_view(tw, NTP_TEXT, "RDN", now)
+        if unreadable:
+            return ["NTP time text cannot be read ("]
+        if ts is None:
+            return ["NTP time text is not a time, so the Home Assistant clock"]
+        if age is None:
+            return ["age of the dongle NTP time text cannot be read"]
+        if age > 300:
+            return [("has not changed for", r"changed for (\d+) s", age)]
+        if not live:
+            return ["since it became readable"]
+        lc = tw.w.changed_at.get(NTP_TEXT)
+        skew = round(lc - ts)
+        return [("Home Assistant clock minus the dongle NTP time text", r"skew ([+-]\d+) s", skew)]
+    if key == "NTP":
+        _txt, unreadable, ts, age, vage, live = _text_view(tw, NTP_TEXT, "RDN", now)
+        sy = _raw(tw, SYNCED)
+        out = []
+        if sy == "off":
+            out.append("reports that NTP is not synced")
+        elif sy != "on":
+            out.append("NTP synced flag cannot be read")
+        if unreadable:
+            out.append("NTP time text cannot be read (")
+        elif ts is None:
+            out.append("NTP time text is not a time")
+        elif age is None:
+            out.append("age of the dongle NTP time text cannot be read")
+        elif age > 300:
+            out.append(("has not changed for", r"changed for (\d+) s", age))
+        else:
+            if abs(vage) > 600:
+                out.append(("from the Home Assistant clock (limit 600 s)", r"is (\d+) s from the Home Assistant clock", abs(vage)))
+            if not live:
+                out.append("since it became readable")
+        return out or ["TRUSTED: synced, and the NTP time text is advancing"]
+    _txt, unreadable, ts, age, _v, live = _text_view(tw, INV_TEXT, "RDI", now)
+    d, f, m = readable(_raw(tw, DIFF)), readable(_raw(tw, FAILED), True), readable(_raw(tw, MAXERR), True)
+    out = []
+    if d is None:
+        out.append("clock difference cannot be read")
+    elif abs(d) > 120:
+        out.append(("is above 120 s", r"clock difference (-?\d+) s is above", int(round(d))))
+    elif abs(d) > 60:
+        out.append(("is above 60 s", r"clock difference (-?\d+) s is above", int(round(d))))
+    if f is None:
+        out.append("failed corrections counter cannot be read")
+    elif f > 0:
+        out.append(("failed RTC correction(s)", r"DEGRADED: (\d+) failed RTC", int(f)))
+    if m is None:
+        out.append("maximum clock error since boot cannot be read")
+    elif m > 120:
+        out.append(("clock error reached", r"reached (\d+) s since", int(m)))
+    st, cs, sy = _raw(tw, K["STALLS"]), _raw(tw, K["STUCK"]), _raw(tw, SYNCED)
+    if st not in ("on", "off"):
+        out.append("stall flag cannot be read")
+    elif st == "on":
+        out.append("stall flag has been on for 3 minutes 30 seconds")
+    if cs not in ("on", "off"):
+        out.append("correction flag cannot be read")
+    elif cs == "on":
+        out.append("correction has been in progress for 5 minutes")
+    if sy != "on":
+        out.append("NTP is not synced or its flag cannot be read")
+    if unreadable or age is None or age > 300:
+        out.append("cannot be read or has not changed for more than 300 s")
+    else:
+        if d is not None and (ts is None or abs(round(now - (ts - d))) > 600):
+            out.append(("the read it records", r"is (\d+) s from the Home Assistant clock", None if ts is None else abs(round(now - (ts - d)))))
+        if not live:
+            out.append("since it became readable")
+    return out or ["TRUSTED: every rule is within its limit"]
+
+
 def reasons_problems(tw) -> list[str]:
-    """Each per-clock sensor's `reasons` is a non-empty list whose strongest tag is the state."""
+    """Each per-clock sensor's `reasons` is a non-empty list whose strongest tag is the state, and which names exactly the causes an independent reading of the raw states finds."""
     bad = []
     for key in ("HA", "NTP", "INV"):
         st, rs = tw.state(K[key]), tw.attr(K[key], "reasons")
@@ -434,6 +584,17 @@ def reasons_problems(tw) -> list[str]:
             bad.append(f"{key} reasons {str(rs)[:60]!r}")
         elif NAMES[max(NAMES.index(r.split(":", 1)[0]) for r in rs)] != st:
             bad.append(f"{key} reasons say {NAMES[max(NAMES.index(r.split(':', 1)[0]) for r in rs)]}, state {st}")
+        else:
+            want = [w if isinstance(w, tuple) else (w, None, None) for w in expected_reasons(tw, key)]
+            if len(want) != len(rs) or not all(w[0] in r for w, r in zip(want, rs)):
+                bad.append(f"{key} reasons {[r[:70] for r in rs]} do not name {[w[0] for w in want]}")
+            else:
+                for (frag, rx, num), r in zip(want, rs):
+                    if rx is None or num is None:
+                        continue
+                    m = re.search(rx, r)
+                    if m is None or int(m.group(1)) != num:
+                        bad.append(f"{key} reason {r[:90]!r} does not show {num}")
     return bad
 
 
@@ -528,8 +689,9 @@ def exp(**kw):
 # ===========================================================================================================================
 # the battery: every proof that depends on the package text (also run on each mutant)
 # ===========================================================================================================================
-def battery(text: str, mode: str = "kill") -> list[str]:
-    """mode 'report': every proof is a check() line. mode 'kill': return at the first failing proof (a mutant is caught) with its name, else []."""
+def battery(text: str, mode: str = "kill", prefer=None, info=None) -> list[str]:
+    """mode 'report': every proof is a check() line. mode 'kill': return at the first failing proof (a mutant is caught) with its name, else []. `prefer`: the section to try first
+    (the one that caught the last mutant of the same family: the verdict never depends on the order, only the time it takes); `info['section']` names the section that caught it."""
     rec = make_rec(mode)
     try:
         sp = static_problems(text)
@@ -537,10 +699,15 @@ def battery(text: str, mode: str = "kill") -> list[str]:
         thorough = mode == "report"
         if thorough:                  # the report reads in the order of the sections above; a mutant meets the cheap, sharp proofs first
             sec_model(rec)
-            order = (sec_scenarios, sec_boundaries, sec_consumers, sec_differential, sec_totality, sec_nowrite)
+            order = (sec_scenarios, sec_restarts, sec_boundaries, sec_consumers, sec_differential, sec_totality, sec_nowrite)
         else:
-            order = (sec_boundaries, sec_consumers, sec_differential, sec_scenarios, sec_totality, sec_nowrite)
+            order = [sec_boundaries, sec_consumers, sec_differential, sec_restarts, sec_scenarios, sec_totality, sec_nowrite]
+            if prefer in order:
+                order.remove(prefer)
+                order.insert(0, prefer)
         for sec in order:
+            if info is not None:
+                info["section"] = sec
             if sec in (sec_differential, sec_totality):
                 sec(text, rec, thorough=thorough)
             else:
@@ -550,7 +717,7 @@ def battery(text: str, mode: str = "kill") -> list[str]:
     return []
 
 
-# --- [1] the model itself ---------------------------------------------------------------------------------------------------
+# --- [1] the model itself -------------------------------------------------------------------------
 MODEL_PKG = """
 template:
   - binary_sensor:
@@ -572,6 +739,9 @@ template:
         state: "{{ states('sensor.in') | int }}"
       - name: probe other
         state: "{{ states('sensor.other') }}"
+      - name: probe super
+        availability: "{{ states('sensor.gate') == 'go' }}"
+        state: "{{ states('sensor.val') }}"
 """
 
 
@@ -597,11 +767,51 @@ def sec_model(rec):
     tw.advance(1)
     e2 = tw.state(d)
     rec("model: a change of the result cancels the count (9 min on, 1 s off, then 599 s on: still off; on only after 600 s of continuous on)", e1 == "off" and e2 == "on", f"{e1} {e2}")
+    # the availability template is a super template: a blip of unavailability neither restarts a count nor delivers an unchanged result again
+    sw = T.TrustWorld(MODEL_PKG)
+    sw.put("sensor.in", "off")
+    sw.put("sensor.in", "on")
+    sw.advance(300)
+    sw.put("sensor.in", "unavailable")
+    un = (sw.state(d), sw.state(p))
+    sw.advance(5)
+    sw.put("sensor.in", "on")
+    sw.advance(294)
+    f1 = sw.state(d)
+    sw.advance(1)
+    f2 = sw.state(d)
+    rec("model: the availability template is a super template: an unreadable input makes the delayed entity unavailable (a plain one reads off) and does NOT restart the count "
+        "(on, unavailable for 5 s at 300 s, on again: still off at 599 s, on at 600 s counted from the first on)", un == ("unavailable", "off") and f1 == "off" and f2 == "on", f"{un} {f1} {f2}")
+    sw = T.TrustWorld(MODEL_PKG)
+    sw.put("sensor.in", "on")
+    sw.advance(100)
+    sw.put("sensor.in", "unavailable")
+    sw.advance(600)
+    during = sw.state(d)
+    sw.put("sensor.in", "on")
+    after = sw.state(d)
+    rec("model: a count that ends while the entity is unavailable (its timer is not cancelled by the gap) leaves it on as soon as the input is readable again", during == "unavailable" and after == "on", f"{during} {after}")
+    sw = T.TrustWorld(MODEL_PKG)
+    sw.put("sensor.in", "on")
+    sw.advance(100)
+    sw.put("sensor.in", "unavailable")
+    sw.advance(50)
+    sw.put("sensor.in", "off")
+    sw.advance(2000)
+    rec("model: an input that returns with a CHANGED result (off) after the gap cancels the count: the entity never turns on", not any(h[1] == d and h[2] == "on" for h in sw.w.history), "")
+    sw = T.TrustWorld(MODEL_PKG)
+    sw.put("sensor.gate", "stop")
+    sw.put("sensor.val", "1")
+    r0 = sw.renders.get("sensor.probe_super", 0)
+    sw.put("sensor.val", "2")
+    sw.put("sensor.val", "3")
+    shut = (sw.state("sensor.probe_super"), sw.renders.get("sensor.probe_super", 0) - r0)
+    sw.put("sensor.gate", "go")
+    rec("model: while the availability template is false the state template is not rendered (a change of what it reads does not render the entity) and the entity is unavailable; "
+        "when it turns true the entity shows the current value", shut == ("unavailable", 0) and sw.state("sensor.probe_super") == "3", f"{shut} {sw.state('sensor.probe_super')}")
     tw.put("sensor.in", "unavailable")
-    un = (tw.state(d), tw.state(p))
     tw.put("sensor.in", "on")
     tw.advance(300)
-    rec("model: an unreadable input makes the delayed entity unavailable and the count restarts (on, unavailable, on for 5 min: not on)", un == ("unavailable", "off") and tw.state(d) == "off", f"{un} {tw.state(d)}")
     n0 = tw.state("sensor.probe_now")
     r_now, r_plain, r_other = tw.renders.get("sensor.probe_now", 0), tw.renders.get("sensor.probe_no_now", 0), tw.renders.get("sensor.probe_other", 0)
     tw.advance(180)
@@ -609,7 +819,7 @@ def sec_model(rec):
         tw.state("sensor.probe_now") != n0 and tw.renders["sensor.probe_now"] - r_now == 3 and tw.renders.get("sensor.probe_no_now", 0) == r_plain, f"{tw.renders}")
     tw.put("sensor.unrelated", "1")
     tw.put("sensor.other", "z")
-    rec("model: an entity is rendered again only when an entity it read changes",
+    rec("model: an entity is rendered again only when an entity it read changed",
         tw.renders.get("sensor.probe_no_now", 0) == r_plain and tw.renders.get("sensor.probe_other", 0) > r_other)
     tw.put("sensor.in", "abc")
     rec("model: a render error leaves the entity unknown and is recorded", tw.state("sensor.probe_error") == "unknown" and any("probe_error" in e for e in tw.errors), str(tw.errors[:1]))
@@ -618,17 +828,74 @@ def sec_model(rec):
     rec("model: attributes are parsed natively (a list, a number)", attrs.get("a") == ["x", 1] and attrs.get("n") == 12, str(attrs))
     # a cold start with the input already on, with and without a restored state
     cold = T.TrustWorld(MODEL_PKG, preload={"sensor.in": "on"})
-    restored = T.TrustWorld(MODEL_PKG, restore_off=True, preload={"sensor.in": "on"})
+    restored = T.TrustWorld(MODEL_PKG, restore="off", preload={"sensor.in": "on"})
+    kept = T.TrustWorld(MODEL_PKG, restore="on", preload={"sensor.in": "on"})
     cold.advance(599)
     restored.advance(599)
-    c1, r1 = cold.state(d), restored.state(d)
+    c1, r1, k1 = cold.state(d), restored.state(d), kept.state(d)
     cold.advance(1)
     restored.advance(1)
-    rec("model: a delayed binary sensor whose first result is true (the input already on when it is first rendered) reads unknown (off when a state is restored) and is on after the delay",
-        (c1, r1, cold.state(d), restored.state(d)) == ("unknown", "off", "on", "on"), f"{c1} {r1}")
+    rec("model: a delayed binary sensor whose first result is true (the input already on when it is first rendered) reads unknown with no state to take back, off when it takes back off "
+        "and on when it takes back on; the first two are on after the delay", (c1, r1, k1, cold.state(d), restored.state(d)) == ("unknown", "off", "on", "on", "on"), f"{c1} {r1} {k1}")
+    # a template reload: a delayed binary sensor takes back the state it had when it was removed (on or off, not unavailable or unknown); a count in progress restarts
+    rl = T.TrustWorld(MODEL_PKG)
+    rl.put("sensor.in", "on")
+    rl.advance(700)
+    was_on = rl.state(d)
+    rl.reload()
+    now_on = rl.state(d)
+    rl2 = T.TrustWorld(MODEL_PKG)
+    rl2.put("sensor.in", "off")
+    rl2.put("sensor.in", "on")
+    rl2.advance(300)
+    rl2.reload()
+    counting = rl2.state(d)
+    rl2.advance(599)
+    c_599 = rl2.state(d)
+    rl2.advance(1)
+    c_600 = rl2.state(d)
+    rl3 = T.TrustWorld(MODEL_PKG)
+    rl3.put("sensor.in", "unavailable")
+    rl3.reload()
+    rl3.put("sensor.in", "on")
+    gone = rl3.state(d)
+    rec("model: a template reload creates every entity again and a delayed binary sensor takes back its last on or off state: on stays on; a count in progress restarts (off, then on "
+        "after the full delay); one that was unavailable has nothing to take back (unknown until the delay ends)",
+        (was_on, now_on, counting, c_599, c_600, gone) == ("on", "on", "off", "off", "on", "unknown"), f"{was_on} {now_on} {counting} {c_599} {c_600} {gone}")
+    # dates, as Home Assistant reads them
+    z = T.ZoneInfo("Europe/London")
+    base = T.datetime(2026, 11, 25, 12, 0, 0, tzinfo=z).timestamp()
+    reads = {"2026-11-25 12:00:00": base, "2026-11-25 12:00": base, "2026-11-25T12:00:00": base, "2026-11-25 12:00:00.5": base + 0.5, "2026-11-25 12:00:00+00:00": base,
+             "2026-11-25 12:00:00+01:00": base - 3600, "2026-11-25 12:00:00Z": base, "2026-11-25": base - 12 * 3600}
+    bad = []
+    for txt, want in reads.items():
+        try:
+            got = T.ha_as_timestamp(txt, z)
+        except ValueError:
+            got = None
+        if got != want:
+            bad.append(f"{txt!r} -> {got}")
+    errs = []
+    for junk in ("abc", "", "5", "2026-13-45 12:00:00", "2026-02-30 12:00:00", None, 5, "12:00:00"):
+        try:
+            T.ha_as_timestamp(junk, z)
+            errs.append(repr(junk))
+        except (ValueError, TypeError):
+            pass
+    fixed = {t_: T.datetime.strptime(t_, T.FMT) for t_ in ("2026-11-25 12:00:00",)}
+    rec("model: as_timestamp reads what Home Assistant's own parser reads (the date alone, no seconds, a T, fractions, an offset, Z), as local time in the zone when there is no offset, and "
+        "refuses anything else (a number, an impossible date); strptime is Python's (the exact format only)",
+        not bad and not errs and fixed["2026-11-25 12:00:00"] == T.datetime(2026, 11, 25, 12, 0, 0), f"{bad} {errs}")
+    sp = T.TrustWorld(MODEL_PKG)
+    env = sp.w.env
+    probe = env.from_string("{{ strptime(t, '%Y-%m-%d %H:%M:%S', none) is none }}")
+    exact = [probe.render(t=t_) for t_ in ("2026-11-25 12:00:00", "2026-11-25 12:00", "2026-11-25", "2026-11-25T12:00:00", "2026-11-25 12:00:00.5", "2026-11-25 12:00:00+01:00",
+                                         " 2026-11-25 12:00:00", "2026-11-25 12:00:00 ", "2026-11-25 12:00:00\n", "abc", "")]
+    rec("model: strptime with the firmware's format (and a default) reads only that exact form: every other spelling gives the default",
+        exact == ["False"] + ["True"] * 10, str(exact))
 
 
-# --- [2] scenarios ----------------------------------------------------------------------------------------------------------
+# --- [2] scenarios --------------------------------------------------------------------------------
 def sec_scenarios(text, rec):
     # --- normal, and the stall flag that flickers (three hours): the usual 60 s and 120 s episodes never trip anything
     tw = world(text)
@@ -675,7 +942,7 @@ def sec_scenarios(text, rec):
     verify(rec, "the NTP text frozen for 6 minutes, with no entity changing: still UNTRUSTED (the minute render sees the age by itself)", tw,
            exp(HA="UNKNOWN", NTP="UNTRUSTED", ALL="UNTRUSTED", LEASES="off", SCHED="off"))
     tw.h_ntp = tw.feed(NTP_TEXT)
-    verify(rec, "the NTP text published again: TRUSTED at once", tw, exp())
+    verify(rec, "the NTP text published again: TRUSTED at once (it never stopped being readable, so the LIVE condition is met)", tw, exp())
     # --- what the dongle says it has instead of a time
     for text_in, label in (("Waiting for NTP", "'Waiting for NTP'"), ("NTP time invalid", "'NTP time invalid'")):
         tw = world(text, ntp=text_in)
@@ -692,33 +959,29 @@ def sec_scenarios(text, rec):
     tw.force()
     verify(rec, "the skew is measured when the text arrived, so it does not grow with the text's age: a clock 100 s ahead reads +100 s (TRUSTED) 30 s after the last publication, with text_age_s 30", tw,
            exp(), extra=[] if (tw.attr(K["HA"], "skew_s"), tw.attr(K["HA"], "text_age_s")) == (100, 30) else [str((tw.attr(K["HA"], "skew_s"), tw.attr(K["HA"], "text_age_s")))])
-    # --- the stall flag and the correction flag over time
+    # --- the stall flag and the correction flag over time (the stall count is 3 minutes 30 s: four consecutive reads trip it, three do not)
     tw = world(text)
     tw.put(STALL, "on")
-    tw.advance(540)
-    verify(rec, "the stall flag on for 9 minutes: not counted (the inverter clock TRUSTED)", tw, exp())
+    tw.advance(150)
+    verify(rec, "the stall flag on for 2 minutes 30 s (more than the usual 60 s and 120 s episodes): not counted (the inverter clock TRUSTED)", tw, exp())
     tw.advance(59)
-    verify(rec, "the stall flag on for 9 minutes 59 s: not counted", tw, exp())
+    verify(rec, "the stall flag on for 3 minutes 29 s (three reads, 180 s, and a margin): not counted", tw, exp())
     tw.advance(1)
-    verify(rec, "the stall flag on for 10 minutes: counted: the inverter clock DEGRADED, the overall state DEGRADED, slot edits off, leases and schedules still on", tw,
+    verify(rec, "the stall flag on for 3 minutes 30 s (four reads): counted: the inverter clock DEGRADED, the overall state DEGRADED, slot edits off, leases and schedules still on", tw,
            exp(INV="DEGRADED", ALL="DEGRADED", SLOT="off", STALLS="on"))
     tw.advance(60)
-    verify(rec, "the stall flag on for 11 minutes: still DEGRADED", tw, exp(INV="DEGRADED", ALL="DEGRADED", SLOT="off", STALLS="on"))
+    verify(rec, "the stall flag on for 4 minutes 30 s: still DEGRADED", tw, exp(INV="DEGRADED", ALL="DEGRADED", SLOT="off", STALLS="on"))
     tw.put(STALL, "off")
     verify(rec, "the stall flag off: TRUSTED again at once", tw, exp())
     tw.put(STALL, "on")
-    tw.advance(540)
+    tw.advance(180)
     tw.put(STALL, "off")
     tw.advance(1)
     tw.put(STALL, "on")
-    tw.advance(540)
-    verify(rec, "9 minutes on, 1 s off, 9 minutes on: the count restarted, never counted", tw, exp())
+    tw.advance(180)
+    verify(rec, "3 minutes on, 1 s off, 3 minutes on: the count restarted, never counted", tw, exp())
     tw.put(STALL, "unavailable")
     verify(rec, "an unreadable stall flag is never a quiet off: the helper is unavailable and the inverter clock UNKNOWN", tw, exp(INV="UNKNOWN", ALL="UNKNOWN", SLOT="off", STALLS="unavailable"))
-    tw.advance(1)
-    tw.put(STALL, "on")
-    tw.advance(540)
-    verify(rec, "an unreadable flag in the middle of a long on restarts the count (9 minutes on after it: not counted)", tw, exp())
     tw = world(text)
     tw.put(CORR, "on")
     tw.advance(240)
@@ -730,12 +993,17 @@ def sec_scenarios(text, rec):
     verify(rec, "a correction in progress for 6 minutes: still UNTRUSTED", tw, exp(INV="UNTRUSTED", ALL="UNTRUSTED", SLOT="off", STUCK="on"))
     tw.put(CORR, "off")
     verify(rec, "the correction finished: TRUSTED at once", tw, exp())
-    # --- the failure counters (latched until the dongle reboots)
-    for failed, maxerr, diff, want in (("1", "77", "10", "DEGRADED"), ("3", "77", "10", "DEGRADED"), ("0", "121", "10", "DEGRADED"), ("0", "500", "10", "DEGRADED"),
+    # --- the failure counters (latched until the dongle reboots), however large
+    for failed, maxerr, diff, want in (("1", "77", "10", "DEGRADED"), ("3", "77", "10", "DEGRADED"), ("5", "77", "10", "DEGRADED"), ("50", "77", "10", "DEGRADED"),
+                                       ("0", "121", "10", "DEGRADED"), ("0", "500", "10", "DEGRADED"), ("0", "1000", "10", "DEGRADED"), ("0", "3600", "10", "DEGRADED"),
                                        ("1", "77", "130", "UNTRUSTED"), ("0", "77", "10", "TRUSTED"), ("0", "120", "10", "TRUSTED")):
         tw = world(text, failed=failed, maxerr=maxerr, diff=diff)
         verify(rec, f"failed corrections {failed}, maximum clock error {maxerr} s, difference {diff} s: the inverter clock is {want}", tw,
                exp(INV=want, ALL=want, SLOT="on" if want == "TRUSTED" else "off"))
+    # --- a whole hour or half a day of difference is UNTRUSTED like any other large difference (the clock-change hour is 3600 s)
+    for diff in ("3600", "-3600", "7200", "43200", "-43200", "999999999"):
+        tw = world(text, diff=diff)
+        verify(rec, f"a clock difference of {diff} s: the inverter clock is UNTRUSTED (never forgiven as a whole hour or half a day), slot edits off", tw, exp(INV="UNTRUSTED", ALL="UNTRUSTED", SLOT="off"))
     # --- each input unreadable, one at a time (unavailable, unknown, and an entity that does not exist)
     one = {
         "the NTP time text": dict(ntp=None, expect=exp(HA="UNKNOWN", NTP="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off"), put=(NTP_TEXT,)),
@@ -766,13 +1034,17 @@ def sec_scenarios(text, rec):
     tw.h_ntp["on"] = tw.h_inv["on"] = False
     tw.advance(60)
     verify(rec, "the dongle unavailable (every input at once): every clock UNKNOWN, the overall state UNKNOWN (never better than DEGRADED), every consumer off", tw,
-           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off", STALLS="unavailable", STUCK="unavailable"))
+           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off", STALLS="unavailable", STUCK="unavailable", RDN="off", RDI="off"))
     for eid, v in ((DIFF, "10"), (FAILED, "0"), (MAXERR, "77"), (SYNCED, "on"), (STALL, "off"), (CORR, "off")):
         tw.put(eid, v)
     tw.h_ntp = tw.feed(NTP_TEXT)
     tw.h_inv = tw.feed(INV_TEXT, offset_s=7)
-    tw.advance(60)
-    verify(rec, "the dongle back: every clock TRUSTED within a minute (nothing latches an outage)", tw, exp())
+    tw.advance(59)
+    verify(rec, "the dongle back, 59 s after its values returned: every clock still UNKNOWN (the texts have not changed since they became readable: what returns first is the copy "
+           "that was re-sent, which proves nothing), every consumer off", tw,
+           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off", STALLS="off", STUCK="off", RDN="on", RDI="on"))
+    tw.advance(1)
+    verify(rec, "the dongle back, 60 s after (its first live publication and read): every clock TRUSTED (nothing latches an outage)", tw, exp())
     tw = world(text)
     for eid in (NTP_TEXT, INV_TEXT, DIFF, FAILED, MAXERR, SYNCED, STALL, CORR):
         tw.put(eid, None)
@@ -789,60 +1061,323 @@ def sec_scenarios(text, rec):
     tw.force()
     verify(rec, "the inverter time text unchanged for 5 minutes 1 s (the clock is no longer being read, the last difference still says 10 s): the inverter clock is UNKNOWN, slot edits off; "
            "the Home Assistant clock and the dongle NTP are unaffected", tw, exp(INV="UNKNOWN", ALL="UNKNOWN", SLOT="off"))
-    # --- a template reload with the stall flag already on, and a restart: the count restarts, so a stall that began earlier is noticed up to 10 minutes late (documented)
-    pre = {SYNCED: "on", DIFF: "10", FAILED: "0", MAXERR: "77", STALL: "on", CORR: "off"}
-    for restore, first in ((False, "UNKNOWN"), (True, "TRUSTED")):
-        tw = T.TrustWorld(text, start=START, restore_off=restore, preload=pre)
-        tw.feed(NTP_TEXT)
-        tw.feed(INV_TEXT, offset_s=7)
-        tw.advance(540)
-        a = tw.state(K["INV"])
-        tw.advance(60)
-        verify(rec, f"a template reload with the stall flag already on ({'a restored off' if restore else 'no restored state'}): the inverter clock reads {first} for the first 10 minutes "
-               "(documented: the count restarts, so it can only delay DEGRADED; an unknown helper is UNKNOWN) and DEGRADED after", tw,
-               exp(INV="DEGRADED", ALL="DEGRADED", SLOT="off", STALLS="on"), extra=[] if a == first else [f"first {a}"])
-    tw = T.TrustWorld(text, start=START)                             # a restart: the dongle's entities are not there yet when the templates are first rendered
-    for eid, v in ((SYNCED, "on"), (DIFF, "10"), (FAILED, "0"), (MAXERR, "77"), (STALL, "on"), (CORR, "off")):
-        tw.put(eid, v)
-    tw.feed(NTP_TEXT)
-    tw.feed(INV_TEXT, offset_s=7)
-    tw.advance(540)
-    a = tw.state(K["INV"])
-    tw.advance(60)
-    verify(rec, "a restart with a stall flag that had been on for longer: the helper reads off for the first 10 minutes (documented: the count starts when Home Assistant first sees the flag "
-           "on) and DEGRADED after", tw, exp(INV="DEGRADED", ALL="DEGRADED", SLOT="off", STALLS="on"), extra=[] if a == "TRUSTED" else [f"first {a}"])
     # --- the clock-change hour, and a time-zone mismatch (the R9 assumption)
     tw = world(text, start="2026-10-25 00:30:00", warm=3600)            # 00:30 BST + 1 h = 00:30 UTC, the first 01:30 (BST)
     ok_first = tw.state(K["HA"])
     tw.advance(3600)                                                     # 01:30 UTC, the second 01:30 (GMT): the text reads 01:30, which is read as the first one
-    in_second = (tw.state(K["HA"]), tw.attr(K["HA"], "skew_s"), tw.state(K["LEASES"]), tw.state(K["SCHED"]))
+    in_second = (tw.state(K["HA"]), tw.attr(K["HA"], "skew_s"), tw.state(K["LEASES"]), tw.state(K["SCHED"]), tw.state(K["NTP"]), tw.state(K["INV"]), tw.state(K["SLOT"]))
     tw.advance(3600)                                                     # 02:30 UTC
     after = tw.state(K["HA"])
-    rec("the autumn clock change: the Home Assistant clock is TRUSTED before the repeated hour, UNTRUSTED (skew +3600 s, leases and schedules off) for the second pass of it "
-        "(the repeated local time is read as its first occurrence: documented, it fails safe) and TRUSTED again after", (ok_first, in_second, after) == ("TRUSTED", ("UNTRUSTED", 3600, "off", "off"), "TRUSTED")
-        and not tw.errors, f"{ok_first} {in_second} {after}")
+    rec("the autumn clock change: the Home Assistant clock is TRUSTED before the repeated hour and UNTRUSTED (skew +3600 s, leases and schedules off) for the second pass of it "
+        "(the repeated local time is read as its first occurrence: documented, it fails safe); the texts are then an hour from Home Assistant's clock, so the dongle NTP and the inverter "
+        "clock are UNKNOWN and slot edits are off; TRUSTED again after",
+        (ok_first, in_second, after) == ("TRUSTED", ("UNTRUSTED", 3600, "off", "off", "UNKNOWN", "UNKNOWN", "off"), "TRUSTED") and not tw.errors, f"{ok_first} {in_second} {after}")
     tw = world(text, start="2026-07-01 12:00:00", ha_zone="UTC", dongle_zone="Europe/London")
-    verify(rec, "the R9 time-zone assumption: Home Assistant in UTC and a dongle in Europe/London in summer: the skew reads whole hours (-3600 s), UNTRUSTED, never TRUSTED", tw,
-           exp(HA="UNTRUSTED", ALL="UNTRUSTED", LEASES="off", SCHED="off"), extra=[] if tw.attr(K["HA"], "skew_s") == -3600 else [str(tw.attr(K["HA"], "skew_s"))])
+    verify(rec, "the R9 time-zone assumption: Home Assistant in UTC and a dongle in Europe/London in summer: the skew reads whole hours (-3600 s), UNTRUSTED, never TRUSTED; the dongle NTP "
+           "and the inverter clock are UNKNOWN (their texts are an hour from Home Assistant's clock) and slot edits are off", tw,
+           exp(HA="UNTRUSTED", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNTRUSTED", LEASES="off", SCHED="off", SLOT="off"),
+           extra=[] if tw.attr(K["HA"], "skew_s") == -3600 else [str(tw.attr(K["HA"], "skew_s"))])
     tw = world(text, start="2026-07-01 12:00:00")
     verify(rec, "the same summer day with Home Assistant and the dongle in the same zone: TRUSTED", tw, exp())
 
 
-# --- [3] boundaries ----------------------------------------------------------------------------------------------------------
+# --- [2b] restarts, reconnects, reloads, spellings ------------------------------------------------
+def sec_restarts(text, rec):
+    ALL_DONGLE = (NTP_TEXT, INV_TEXT, DIFF, FAILED, MAXERR, SYNCED, STALL, CORR)
+
+    def blip(tw, gap=20.0, eids=ALL_DONGLE):
+        """The dongle's API drops and comes back: every dongle entity reads unavailable for `gap` seconds. Returns the values they had (what ESPHome re-sends on subscribe)."""
+        cached = {e: tw.state(e) for e in eids}
+        for h in (getattr(tw, "h_ntp", None), getattr(tw, "h_inv", None)):
+            if h:
+                h["on"] = False
+        for e in eids:
+            tw.put(e, "unavailable")
+        tw.advance(gap)
+        return cached
+
+    def feeds_after(tw, delay):
+        """The dongle's own publications resume `delay` s from now (the first one is live)."""
+        def go():
+            tw.h_ntp = tw.feed(NTP_TEXT)
+            tw.h_inv = tw.feed(INV_TEXT, offset_s=7)
+        tw.w.after(delay, go)
+
+    def restart(start, cached, restore="off", ha_offset=0):
+        """Home Assistant restarts: the package's entities are created first and the dongle's entities arrive afterwards with the values they had."""
+        tw = T.TrustWorld(text, start=start, restore=restore)
+        tw.w.clock_offset = ha_offset
+        for e, v in cached.items():
+            tw.put(e, v)
+        return tw
+
+    def never_trusted(tw, keys, minutes, step=30.0, gate=("SLOT",)):
+        bad = []
+        for _ in range(int(minutes * 60 / step) + 1):
+            for k in keys:
+                if tw.state(K[k]) == "TRUSTED":
+                    bad.append(f"{k} TRUSTED at +{int(_ * step)} s")
+            for g in gate:
+                if tw.state(K[g]) == "on":
+                    bad.append(f"{g} on at +{int(_ * step)} s")
+            tw.advance(step)
+        return bad
+
+    # --- the MAJOR finding: a read path that has been dead for hours, then a reconnect that re-sends the stale cached values
+    tw = world(text)
+    tw.h_inv["on"] = False
+    tw.advance(7200)
+    verify(rec, "a read path dead for 2 hours (the inverter time text frozen): the inverter clock UNKNOWN, slot edits off; the other two clocks TRUSTED", tw, exp(INV="UNKNOWN", ALL="UNKNOWN", SLOT="off"))
+    stale_text = tw.state(INV_TEXT)
+    cached = blip(tw, 20.0)
+    for e, v in cached.items():
+        if e != NTP_TEXT:
+            tw.put(e, v)                                                  # the cached copies, the stale inverter text among them
+    tw.put(NTP_TEXT, cached[NTP_TEXT])
+    verify(rec, "the dongle's API reconnects after 20 s and re-sends its cached values (the inverter time text two hours old, last_changed now): every clock is UNKNOWN, every consumer off "
+           "(before the fix: the inverter clock TRUSTED and slot edits on for about 6 minutes)", tw,
+           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off"), extra=[] if tw.state(INV_TEXT) == stale_text else ["text"])
+    feeds_after(tw, 60.0)
+    tw.advance(60)
+    verify(rec, "the dongle's own publications resume 60 s later (a live NTP publication and a live inverter read): every clock TRUSTED again, the consumers on", tw, exp())
+    tw = world(text)
+    tw.h_inv["on"] = False
+    tw.advance(7200)
+    cached = blip(tw, 20.0)
+    for e, v in cached.items():
+        tw.put(e, v)
+    tw.h_ntp = tw.feed(NTP_TEXT)                                          # the NTP text keeps being published; the inverter read path stays dead
+    bad = never_trusted(tw, ("INV",), 11)
+    rec("the same reconnect with the inverter read path still dead: the inverter clock stays UNKNOWN and slot edits stay off at every 30 s for 11 minutes", not bad, str(bad[:2]))
+    verify(rec, "and the Home Assistant clock and the dongle NTP are TRUSTED again after their first live publication (a dead inverter read path does not cost leases or schedules)", tw,
+           exp(INV="UNKNOWN", ALL="UNKNOWN", SLOT="off"))
+    # --- a Home Assistant restart that delivers the stale text
+    cached = {INV_TEXT: "2026-11-25 12:02:07", DIFF: "10", FAILED: "0", MAXERR: "77", SYNCED: "on", STALL: "off", CORR: "off"}
+    tw = restart("2026-11-25 14:00:00", cached)
+    tw.feed(NTP_TEXT)
+    tw.advance(30)
+    verify(rec, "a Home Assistant restart that finds the inverter time text two hours old (the dead read path, and the cached copy delivered as the dongle connects): every clock UNKNOWN, consumers off", tw,
+           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off"))
+    bad = never_trusted(tw, ("INV",), 12)
+    rec("and the inverter clock never reads TRUSTED, nor slot edits on, in the 12 minutes that follow while the read path stays dead", not bad, str(bad[:2]))
+    # --- a correction stuck for 4 minutes, then a Home Assistant restart: the reads are skipped, so the text is stale and the debounce count starts again
+    tw = world(text)
+    tw.h_inv["on"] = False
+    tw.put(CORR, "on")
+    tw.advance(240)
+    verify(rec, "a correction in progress for 4 minutes with the reads skipped (the firmware does not read the clock during one): not yet counted, the text 4 minutes old", tw, exp())
+    pre = {e: tw.state(e) for e in (INV_TEXT, DIFF, FAILED, MAXERR, SYNCED, STALL, CORR)}
+    tw = restart("2026-11-25 12:06:00", pre)
+    tw.feed(NTP_TEXT)
+    tw.advance(10)
+    a = (tw.state(K["INV"]), tw.state(K["SLOT"]), tw.state(K["STUCK"]))
+    bad = never_trusted(tw, ("INV",), 4.5)
+    tw.advance(30)
+    b = (tw.state(K["INV"]), tw.state(K["SLOT"]), tw.state(K["STUCK"]))
+    rec("the restart (the helper takes back off, the flag is still on, the inverter time text stale): the inverter clock is UNKNOWN at once and never TRUSTED, slot edits off, and "
+        "UNTRUSTED when the restarted count reaches 5 minutes (before the fix: TRUSTED with slot edits on for about 5 more minutes, 9 minutes after the correction began)",
+        a == ("UNKNOWN", "off", "off") and not bad and b == ("UNTRUSTED", "off", "on"), f"{a} {b} {bad[:1]}")
+    # --- a Home Assistant clock behind the dongle's time, and a reconnect that re-sends a cached NTP text (up to one publication old)
+    for off, before, lease in ((-150, "DEGRADED", "on"), (-330, "UNTRUSTED", "off")):
+        for full in (False, True):
+            tw = world(text, ha_offset=off, warm=125)
+            b0 = (tw.state(K["HA"]), tw.attr(K["HA"], "skew_s"), tw.state(K["LEASES"]), tw.state(K["SCHED"]))
+            cached_ntp = tw.local_text(tw.w.t - 59)                       # what the dongle published 59 s ago (its cached state)
+            if full:
+                cached = blip(tw, 1.0)
+                for e, v in cached.items():
+                    if e != NTP_TEXT:
+                        tw.put(e, v)
+            else:
+                tw.h_ntp["on"] = False
+                tw.put(NTP_TEXT, "unavailable")
+                tw.advance(1)
+            tw.put(NTP_TEXT, cached_ntp)
+            r0 = (tw.state(K["HA"]), tw.attr(K["HA"], "skew_s"), tw.state(K["LEASES"]), tw.state(K["SCHED"]))
+            tw.advance(30)
+            r1 = (tw.state(K["HA"]), tw.state(K["LEASES"]), tw.state(K["SCHED"]), tw.state(K["ALL"]))
+            tw.h_ntp = tw.feed(NTP_TEXT)                                  # the dongle publishes again: a live text, 31 s after the text became readable
+            tw.advance(1)
+            r2 = (tw.state(K["HA"]), tw.attr(K["HA"], "skew_s"), tw.state(K["LEASES"]), tw.state(K["SCHED"]))
+            which = "every dongle entity" if full else "the NTP text alone"
+            rec(f"a Home Assistant clock {-off} s behind ({before}, leases {lease}) and a reconnect of {which} that re-sends a 59 s old NTP text (up to one publication old): the Home Assistant clock is "
+                f"UNKNOWN with leases and schedules off (the old rule read skew {off + 59}, a better verdict than the truth) and still UNKNOWN 30 s later; the next live publication "
+                f"gives {before} with skew {off} s again", b0 == (before, off, lease, lease)
+                and r0 == ("UNKNOWN", "unknown", "off", "off") and r1[:3] == ("UNKNOWN", "off", "off") and r2 == (before, off, lease, lease), f"{b0} {r0} {r1} {r2}")
+    # --- a healthy blip: every value comes back as the cached copy and nothing counts until the dongle publishes again
+    tw = world(text)
+    cached = blip(tw, 20.0)
+    for e, v in cached.items():
+        tw.put(e, v)
+    feeds_after(tw, 60.0)
+    verify(rec, "a healthy dongle that drops for 20 s: the cached values return and every clock is UNKNOWN, every consumer off, until the dongle publishes again", tw,
+           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off"))
+    tw.advance(59)
+    verify(rec, "59 s after the cached values returned: still UNKNOWN", tw, dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off"))
+    tw.advance(1)
+    verify(rec, "at the dongle's next publication and read: every clock TRUSTED, the consumers on", tw, exp())
+    # --- one text alone becomes unreadable and readable again (every spelling of unreadable): the first value back is the cached copy, not a publication
+    for key, eid, who, handle in (("RDN", NTP_TEXT, ("HA", "NTP"), "h_ntp"), ("RDI", INV_TEXT, ("INV",), "h_inv")):
+        for gone in ("unavailable", "unknown", ""):
+            tw = world(text)
+            getattr(tw, handle)["on"] = False
+            tw.put(eid, gone)
+            mid = tuple(tw.state(K[k]) for k in who)
+            tw.advance(30)
+            tw.put(eid, tw.local_text(tw.w.t + tw.w.clock_offset) if eid == NTP_TEXT else inv_text(tw, 0))
+            back = tuple(tw.state(K[k]) for k in who)
+            tw.advance(30)
+            later = tuple(tw.state(K[k]) for k in who)
+            setattr(tw, handle, tw.feed(eid) if eid == NTP_TEXT else tw.feed(eid, offset_s=7))
+            fresh = tuple(tw.state(K[k]) for k in who)
+            rec(f"the {'NTP' if eid == NTP_TEXT else 'inverter'} time text alone reads {gone!r} for 30 s and then the cached copy returns: {'/'.join(who)} UNKNOWN while it is unreadable, UNKNOWN when it returns "
+                "and 30 s later (nothing was published), TRUSTED at the next live publication",
+                mid == ("UNKNOWN",) * len(who) and back == ("UNKNOWN",) * len(who) and later == ("UNKNOWN",) * len(who) and fresh == ("TRUSTED",) * len(who)
+                and tw.state(K[key]) == "on", f"{mid} {back} {later} {fresh}")
+    # --- the two LIVE helpers do not exist (a partial load, or a reload that has not created them yet): nothing that needs them can read TRUSTED
+    cut_text = re.sub(r"      - name: ECCO Time Trust (?:NTP|Inverter) Text Readable\n(?:        .*\n)+\n", "", text)
+    tw = world(cut_text)
+    verify(rec, "the helpers of the LIVE condition missing: every clock UNKNOWN (never TRUSTED), every consumer off, and no template fails", tw,
+           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off"), extra=[] if (cut_text != text and K["RDN"] not in tw.w.states) else ["not removed"])
+    # --- an unreadable flag in the middle of a count: the availability template is a super template, so the count is not restarted
+    tw = world(text)
+    tw.put(STALL, "on")
+    tw.advance(100)
+    tw.put(STALL, "unavailable")
+    verify(rec, "the stall flag unreadable in the middle of a count: the helper is unavailable and the inverter clock UNKNOWN", tw, exp(INV="UNKNOWN", ALL="UNKNOWN", SLOT="off", STALLS="unavailable"))
+    tw.advance(1)
+    tw.put(STALL, "on")
+    tw.advance(108)
+    mid = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+    tw.advance(1)
+    end = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+    rec("and back on after 1 s: the count was NOT restarted: still off at 3 minutes 29 s from the first on, on at 3 minutes 30 s (the helper's own availability template is a super template)",
+        mid == ("off", "TRUSTED") and end == ("on", "DEGRADED"), f"{mid} {end}")
+    tw = world(text)
+    tw.put(STALL, "on")
+    tw.advance(100)
+    tw.put(STALL, "unavailable")
+    tw.advance(50)
+    tw.put(STALL, "off")
+    tw.advance(2000)
+    rec("a flag that returns OFF after the gap cancels the count: the helper never turns on", not any(h[1] == K["STALLS"] and h[2] == "on" for h in tw.w.history)
+        and tw.state(K["STALLS"]) == "off" and tw.state(K["INV"]) == "TRUSTED", tw.state(K["STALLS"]))
+    tw = world(text)
+    tw.put(STALL, "on")
+    tw.advance(60)
+    tw.put(STALL, "unavailable")
+    tw.advance(210)
+    during = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+    tw.put(STALL, "on")
+    after = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+    rec("a 60 s episode, then an outage of 3.5 minutes after which the flag is on again: the count ran through the gap, so the helper is on as soon as the flag is readable and the inverter clock "
+        "DEGRADED (documented: it fails safe; the old model restarted the count)", during == ("unavailable", "UNKNOWN") and after == ("on", "DEGRADED"), f"{during} {after}")
+    # --- a template reload: the helpers that read the texts are created again (the LIVE minute), the debounce helpers take back their state
+    tw = world(text)
+    tw.reload()
+    verify(rec, "a template reload on a healthy world: every clock UNKNOWN (no text has changed since the new helpers saw it readable) and every consumer off; the two debounce helpers take back off", tw,
+           dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off", STALLS="off", STUCK="off", RDN="on", RDI="on"))
+    tw.advance(59)
+    verify(rec, "59 s after the reload: still UNKNOWN", tw, dict(HA="UNKNOWN", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNKNOWN", LEASES="off", SCHED="off", SLOT="off"))
+    tw.advance(1)
+    verify(rec, "at the next publication and read: TRUSTED again (a reload costs one minute, once)", tw, exp())
+    tw = world(text)
+    tw.put(STALL, "on")
+    tw.advance(300)
+    verify(rec, "the stall flag on for 5 minutes: the helper is on and the inverter clock DEGRADED", tw, exp(INV="DEGRADED", ALL="DEGRADED", SLOT="off", STALLS="on"))
+    tw.reload()
+    rl_on = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+    tw.advance(60)
+    rl_on2 = (tw.state(K["STALLS"]), tw.state(K["INV"]), tw.state(K["SLOT"]))
+    rec("a template reload with the sustained stall helper on: it takes back on at once (a reload does not clear a sustained stall), the inverter clock UNKNOWN for the LIVE minute and DEGRADED after",
+        rl_on == ("on", "UNKNOWN") and rl_on2 == ("on", "DEGRADED", "off") and not tw.errors, f"{rl_on} {rl_on2}")
+    tw = world(text)
+    tw.put(STALL, "on")
+    tw.advance(100)
+    tw.reload()
+    tw.advance(209)
+    c1 = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+    tw.advance(1)
+    c2 = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+    rec("a template reload with the stall count in progress (100 s): the helper takes back off and the count restarts, on 3 minutes 30 s after the reload (a stall that began earlier is noticed up to "
+        "3.5 minutes late; documented)", c1 == ("off", "TRUSTED") and c2 == ("on", "DEGRADED"), f"{c1} {c2}")
+    # --- the first installation (no state to take back) and a restart with the helper on, with the stall flag already on
+    pre = {SYNCED: "on", DIFF: "10", FAILED: "0", MAXERR: "77", STALL: "on", CORR: "off"}
+    for restore, want_a, label in ((None, ("unknown", "UNKNOWN"), "a first installation (no state to take back): the helper reads unknown for 3 minutes 30 s, which is UNKNOWN for the inverter clock"),
+                                   ("off", ("off", "TRUSTED"), "a restart with the helper last off: the helper reads off for 3 minutes 30 s (documented: the count starts when Home Assistant first sees "
+                                                               "the flag on, so a stall that began earlier is noticed up to 3.5 minutes late)"),
+                                   ("on", ("on", "DEGRADED"), "a restart with the helper last on: it takes back on at once, the sustained stall is not forgotten")):
+        tw = T.TrustWorld(text, start=START, restore=restore, preload=pre)
+        tw.feed(NTP_TEXT)
+        tw.feed(INV_TEXT, offset_s=7)
+        tw.advance(209)
+        a = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+        tw.advance(1)
+        b = (tw.state(K["STALLS"]), tw.state(K["INV"]))
+        rec(f"{label}, the stall flag already on; on at 3 minutes 30 s and the inverter clock DEGRADED", a == want_a and b == ("on", "DEGRADED"), f"{a} {b}")
+    # --- texts in the other spellings Home Assistant's own parser accepts: none of them is a time, whatever second of the day the text arrives at
+    tw = world(text, start="2026-11-25 00:00:00", warm=0, ntp=None, inv=None)
+    tw.advance(30)
+    bad = []
+    for spelled in ("2026-11-25", "2026-11-25 00:00", "2026-11-25T00:00:30", "2026-11-25 00:00:30.5", "2026-11-25 00:00:30+00:00", "2026-11-25 00:00:30Z",
+                    " 2026-11-25 00:00:30", "2026-11-25 00:00:30 ", "2026-11-25 00:00:30\n", "2026-11-25  00:00:30x"):
+        tw.put(NTP_TEXT, spelled)
+        tw.age(NTP_TEXT, 0)
+        got = (tw.state(K["HA"]), tw.state(K["NTP"]), tw.state(K["LEASES"]), tw.state(K["SCHED"]))
+        if got != ("UNKNOWN", "UNTRUSTED", "off", "off") or snapshot_problems(tw):
+            bad.append(f"{spelled!r}: {got}")
+    rec("a date alone (read as midnight, 30 s away), no seconds, a T, fractions, an offset, Z, a leading or trailing space or newline: not a time: the Home Assistant clock UNKNOWN, the dongle NTP "
+        "UNTRUSTED, leases and schedules off (Home Assistant's own parser would read most of these as a time, and read the date alone as TRUSTED at 00:00:30)", not bad, str(bad[:2]))
+    bad = []
+    tw = world(text, start="2026-11-25 00:00:00", warm=0, ntp=None, inv=None)
+    tw.advance(30)
+    for spelled in ("2026-11-25", "2026-11-25 00:00", "2026-11-25T00:00:30", "2026-11-25 00:00:30.5", "2026-11-25 00:00:30+00:00", " 2026-11-25 00:00:30", "2026-11-25 00:00:30\n"):
+        tw.put(INV_TEXT, spelled)
+        tw.age(INV_TEXT, 0)
+        got = (tw.state(K["INV"]), tw.state(K["SLOT"]))
+        if got != ("UNKNOWN", "off") or snapshot_problems(tw):
+            bad.append(f"{spelled!r}: {got}")
+    rec("the same spellings as the inverter time text: not a time, so the inverter clock is UNKNOWN and slot edits are off", not bad, str(bad[:2]))
+    # --- a stuck correction with the stall flag on and the reads stopped (the firmware skips the reads during a correction: the stall flag keeps its last value)
+    tw = world(text)
+    tw.put(STALL, "on")
+    tw.put(CORR, "on")
+    tw.h_inv["on"] = False
+    tw.advance(301)
+    verify(rec, "a correction in progress for 5 minutes with the stall flag on and the reads stopped: the stuck helper counts although the stall flag is on (the inverter clock UNTRUSTED, not merely "
+           "DEGRADED by the stall), slot edits off", tw, exp(INV="UNTRUSTED", ALL="UNTRUSTED", SLOT="off", STALLS="on", STUCK="on"))
+
+
+# --- [3] boundaries -------------------------------------------------------------------------------
 def sec_boundaries(text, rec):
     ha_table = ((0, "TRUSTED"), (119, "TRUSTED"), (120, "TRUSTED"), (121, "DEGRADED"), (299, "DEGRADED"), (300, "DEGRADED"), (301, "UNTRUSTED"),
                 (-119, "TRUSTED"), (-120, "TRUSTED"), (-121, "DEGRADED"), (-299, "DEGRADED"), (-300, "DEGRADED"), (-301, "UNTRUSTED"), (3600, "UNTRUSTED"),
+                (-3600, "UNTRUSTED"), (43200, "UNTRUSTED"), (86400, "UNTRUSTED"), (-86400, "UNTRUSTED"),
                 (120.4, "TRUSTED"), (120.6, "DEGRADED"), (300.4, "DEGRADED"), (300.6, "UNTRUSTED"), (-120.4, "TRUSTED"), (-120.6, "DEGRADED"), (-300.6, "UNTRUSTED"))
     bad = []
+    tw = world(text)
+    tw.h_ntp["on"] = tw.h_inv["on"] = False
     for off, want in ha_table:
-        tw = world(text, ha_offset=off, warm=120)
+        tw.w.clock_offset = off                                  # Home Assistant's clock is `off` s from the dongle's; a text arrives now
+        tw.put(NTP_TEXT, tw.local_text(tw.w.t))
+        tw.age(NTP_TEXT, 0)
+        tw.age(K["RDN"], 86400)                                 # it has been readable for a day, by Home Assistant's clock at this offset
         got = tw.state(K["HA"])
         if got != want or tw.attr(K["HA"], "skew_s") != round(off) or snapshot_problems(tw):
             bad.append(f"{off}: {got}")
-    rec("the Home Assistant clock skew at every limit and both signs (+-119, 120, 121, 299, 300, 301, 3600, and 120.4 / 120.6 / 300.4 / 300.6, which round to whole seconds): TRUSTED up to and "
-        "including 120 s, DEGRADED up to and including 300 s, UNTRUSTED above", not bad, str(bad[:3]))
+    tw.w.clock_offset = 0
+    rec("the Home Assistant clock skew at every limit and both signs (+-119, 120, 121, 299, 300, 301, 3600, 43200, 86400, and 120.4 / 120.6 / 300.4 / 300.6, which round to whole seconds): "
+        "TRUSTED up to and including 120 s, DEGRADED up to and including 300 s, UNTRUSTED above, however large (a day too)", not bad, str(bad[:3]))
+    for off in (3600, -3600, 43200, 86400, -86400):
+        tw = world(text, ha_offset=off)
+        verify(rec, f"a Home Assistant clock {off:+d} s from the dongle (a time zone, a host booting with a stale date): the HA clock UNTRUSTED with that skew, the overall state UNTRUSTED, leases and "
+               "schedules off; the dongle NTP and the inverter clock UNKNOWN (their texts are far from Home Assistant's clock: the VALUE rule), slot edits off", tw,
+               exp(HA="UNTRUSTED", NTP="UNKNOWN", INV="UNKNOWN", ALL="UNTRUSTED", LEASES="off", SCHED="off", SLOT="off"),
+               extra=[] if tw.attr(K["HA"], "skew_s") == off else [str(tw.attr(K["HA"], "skew_s"))])
     inv_table = (("0", "TRUSTED"), ("10", "TRUSTED"), ("59", "TRUSTED"), ("60", "TRUSTED"), ("61", "DEGRADED"), ("119", "DEGRADED"), ("120", "DEGRADED"), ("121", "UNTRUSTED"),
-                 ("-59", "TRUSTED"), ("-60", "TRUSTED"), ("-61", "DEGRADED"), ("-120", "DEGRADED"), ("-121", "UNTRUSTED"), ("300", "UNTRUSTED"), ("60.4", "DEGRADED"))
+                 ("-59", "TRUSTED"), ("-60", "TRUSTED"), ("-61", "DEGRADED"), ("-120", "DEGRADED"), ("-121", "UNTRUSTED"), ("300", "UNTRUSTED"), ("60.4", "DEGRADED"),
+                 ("3600", "UNTRUSTED"), ("-3600", "UNTRUSTED"), ("7200", "UNTRUSTED"), ("43200", "UNTRUSTED"), ("-43200", "UNTRUSTED"), ("43199", "UNTRUSTED"), ("999999999", "UNTRUSTED"),
+                 ("-999999999", "UNTRUSTED"))
     bad = []
     tw = world(text)
     for diff, want in inv_table:
@@ -852,35 +1387,133 @@ def sec_boundaries(text, rec):
         if tw.state(K["SLOT"]) != ("on" if want == "TRUSTED" else "off"):
             bad.append(f"slot at {diff}")
     tw.put(DIFF, "10")
-    rec("the inverter clock difference at every limit and both signs (+-59, 60, 61, 119, 120, 121, 300): TRUSTED up to and including 60 s, DEGRADED up to and including 120 s, UNTRUSTED above; "
-        "slot edits on only when TRUSTED", not bad, str(bad[:3]))
+    rec("the inverter clock difference at every limit and both signs (+-59, 60, 61, 119, 120, 121, 300, and a whole hour 3600, 7200, half a day 43200 and 999999999): TRUSTED up to and including 60 s, "
+        "DEGRADED up to and including 120 s, UNTRUSTED above, however large; slot edits on only when TRUSTED", not bad, str(bad[:3]))
     bad = []
-    for failed, want in (("0", "TRUSTED"), ("1", "DEGRADED"), ("2", "DEGRADED"), ("0.0", "TRUSTED")):
+    for failed, want in (("0", "TRUSTED"), ("1", "DEGRADED"), ("2", "DEGRADED"), ("3", "DEGRADED"), ("4", "DEGRADED"), ("5", "DEGRADED"), ("6", "DEGRADED"), ("10", "DEGRADED"),
+                         ("50", "DEGRADED"), ("1000", "DEGRADED"), ("999999999", "DEGRADED"), ("0.0", "TRUSTED")):
         tw.put(FAILED, failed)
         if tw.state(K["INV"]) != want:
             bad.append(f"failed {failed}: {tw.state(K['INV'])}")
     tw.put(FAILED, "0")
-    for maxerr, want in (("0", "TRUSTED"), ("119", "TRUSTED"), ("120", "TRUSTED"), ("121", "DEGRADED"), ("77", "TRUSTED")):
+    for maxerr, want in (("0", "TRUSTED"), ("119", "TRUSTED"), ("120", "TRUSTED"), ("121", "DEGRADED"), ("77", "TRUSTED"), ("500", "DEGRADED"), ("999", "DEGRADED"), ("1000", "DEGRADED"),
+                         ("1001", "DEGRADED"), ("3600", "DEGRADED"), ("43200", "DEGRADED"), ("999999999", "DEGRADED")):
         tw.put(MAXERR, maxerr)
         if tw.state(K["INV"]) != want:
             bad.append(f"max {maxerr}: {tw.state(K['INV'])}")
-    rec("failed corrections above 0 and a maximum clock error above 120 s (both since boot) degrade the inverter clock, at the limit on both sides", not bad, str(bad[:3]))
-    # the age of the NTP text and of the inverter time text, exactly
+    rec("failed corrections above 0 (1, 2, 5, 10, 50 and more: none is forgiven) and a maximum clock error above 120 s (121, 1000 and more, 3600: none is forgiven), both since boot, degrade the "
+        "inverter clock, at the limit on both sides", not bad, str(bad[:3]))
+    # the age of the NTP text and of the inverter time text, exactly (the arrival rule)
     bad = []
     tw = world(text)
     tw.h_ntp["on"] = tw.h_inv["on"] = False
     for age, want_ntp, want_ha, want_inv in ((0, "TRUSTED", "TRUSTED", "TRUSTED"), (299, "TRUSTED", "TRUSTED", "TRUSTED"), (300, "TRUSTED", "TRUSTED", "TRUSTED"),
+                                            (300.4, "TRUSTED", "TRUSTED", "TRUSTED"), (300.6, "UNTRUSTED", "UNKNOWN", "UNKNOWN"),
                                             (301, "UNTRUSTED", "UNKNOWN", "UNKNOWN"), (3600, "UNTRUSTED", "UNKNOWN", "UNKNOWN")):
         tw.put(NTP_TEXT, tw.local_text(tw.w.t + tw.w.clock_offset - age))      # a text a perfect dongle published `age` seconds ago
         tw.age(NTP_TEXT, age)
+        tw.put(INV_TEXT, inv_text(tw, age))
         tw.age(INV_TEXT, age)
         got = (tw.state(K["NTP"]), tw.state(K["HA"]), tw.state(K["INV"]))
         if got != (want_ntp, want_ha, want_inv) or snapshot_problems(tw):
             bad.append(f"age {age}: {got}")
-    rec("the age of the NTP text and of the inverter time text at the limit (0, 299, 300 TRUSTED; 301 and 3600: the dongle NTP UNTRUSTED, the HA clock UNKNOWN, the inverter clock UNKNOWN)", not bad, str(bad[:3]))
+    rec("the age of the NTP text and of the inverter time text at the limit (0, 299, 300 and 300.4 TRUSTED; 300.6, 301 and 3600: the dongle NTP UNTRUSTED, the HA clock UNKNOWN, the inverter clock UNKNOWN; "
+        "the age is rounded to whole seconds)", not bad, str(bad[:3]))
+    # the VALUE rule: the time a text carries against Home Assistant's clock, with the arrival fresh and the text live
+    bad = []
+    tw = world(text)
+    tw.h_ntp["on"] = tw.h_inv["on"] = False
+    for v in (0, 120, 300, 599, 600, 601, 900, 3600, -299, -300, -599, -600, -601, -3600):
+        tw.put(NTP_TEXT, tw.local_text(tw.w.t + tw.w.clock_offset - v))        # a text that is `v` s behind Home Assistant's clock, arriving now
+        tw.age(NTP_TEXT, 0)
+        got = (tw.state(K["NTP"]), tw.state(K["HA"]))
+        want = ("TRUSTED" if abs(v) <= 600 else "UNKNOWN", o_ha("time", v, 0))
+        if got != want or snapshot_problems(tw):
+            bad.append(f"{v}: {got} != {want}")
+    rec("the VALUE rule for the dongle's NTP text: a text within 600 s of Home Assistant's clock (either side: 599, 600) leaves the dongle NTP TRUSTED, one beyond (601, 900, 3600) makes it UNKNOWN, "
+        "although it arrived now and is live; the Home Assistant clock is judged by the skew alone", not bad, str(bad[:3]))
+    bad = []
+    for v in (0, 300, 599, 600, 601, 900, 3600, 86400, -299, -300, -599, -600, -601, -3600, -86400):
+        tw.put(INV_TEXT, inv_text(tw, v))                                      # the read it records is `v` s old by Home Assistant's clock (the difference is 10 s)
+        tw.age(INV_TEXT, 0)
+        got = (tw.state(K["INV"]), tw.state(K["SLOT"]))
+        want = ("TRUSTED", "on") if abs(v) <= 600 else ("UNKNOWN", "off")
+        if got != want or snapshot_problems(tw):
+            bad.append(f"{v}: {got}")
+    rec("the VALUE rule for the inverter: the read the text records (the text minus the difference) within 600 s of Home Assistant's clock (599, 600, either side) leaves the inverter clock TRUSTED, "
+        "one beyond (601, 900, a day) makes it UNKNOWN and slot edits off, although the text arrived now and is live", not bad, str(bad[:3]))
+    tw = world(text, ha_offset=0.4)
+    tw.h_ntp["on"] = tw.h_inv["on"] = False
+    tw.put(NTP_TEXT, tw.local_text(tw.w.t - 600))
+    tw.age(NTP_TEXT, 0)
+    a_ntp = tw.state(K["NTP"])
+    sp_a_ntp = snapshot_problems(tw)
+    tw = world(text, ha_offset=0.6)
+    tw.h_ntp["on"] = tw.h_inv["on"] = False
+    tw.put(NTP_TEXT, tw.local_text(tw.w.t - 600))
+    tw.age(NTP_TEXT, 0)
+    b_ntp = tw.state(K["NTP"])
+    sp_b_ntp = snapshot_problems(tw)
+    tw = world(text, diff="10.4")
+    tw.h_inv["on"] = False
+    tw.put(INV_TEXT, inv_text(tw, 600, 10.4))
+    tw.age(INV_TEXT, 0)
+    a_inv = tw.state(K["INV"])
+    sp_a_inv = snapshot_problems(tw)
+    tw = world(text, diff="10.6")
+    tw.h_inv["on"] = False
+    tw.put(INV_TEXT, inv_text(tw, 600, 10.6))
+    tw.age(INV_TEXT, 0)
+    b_inv = tw.state(K["INV"])
+    sp_b_inv = snapshot_problems(tw)
+    rec("the value age is rounded to whole seconds: 600.4 s reads 600 (inside the limit) and 600.6 s reads 601 (outside it), for the NTP text and for the inverter read",
+        (a_ntp, b_ntp, a_inv, b_inv) == ("TRUSTED", "UNKNOWN", "TRUSTED", "UNKNOWN") and not (sp_a_ntp or sp_b_ntp or sp_a_inv or sp_b_inv),
+        f"{a_ntp} {b_ntp} {a_inv} {b_inv} {(sp_a_ntp + sp_b_ntp + sp_a_inv + sp_b_inv)[:1]}")
+    tw = world(text, diff="-45")
+    tw.h_inv["on"] = False
+    tw.put(INV_TEXT, inv_text(tw, 595, -45.0))                                 # the text is 640 s behind the clock; minus the difference of -45 s the read is 595 s old
+    tw.age(INV_TEXT, 0)
+    neg = (tw.state(K["INV"]), tw.attr(K["INV"], "difference_s"))
+    tw = world(text, diff="45")
+    tw.h_inv["on"] = False
+    tw.put(INV_TEXT, inv_text(tw, 605, 45.0))                                  # the text is 560 s behind the clock; minus the difference of +45 s the read is 605 s old
+    tw.age(INV_TEXT, 0)
+    pos = tw.state(K["INV"])
+    rec("the read age is the text MINUS the difference, with its sign: a text 640 s behind the clock for a difference of -45 s records a read 595 s old (inside the limit), a text 560 s behind the "
+        "clock for a difference of +45 s records one 605 s old (outside it); adding the difference instead would swap the two", neg == ("TRUSTED", -45) and pos == "UNKNOWN", f"{neg} {pos}")
+    # the LIVE rule: the text changed more than 10 s after its helper last changed
+    bad = []
+    for helper, text_eid, label in ((K["RDN"], NTP_TEXT, "NTP"), (K["RDI"], INV_TEXT, "INV")):
+        for gap, live in ((-60, False), (0, False), (9, False), (10, False), (11, True), (60, True), (3600, True)):
+            tw = world(text)
+            tw.h_ntp["on"] = tw.h_inv["on"] = False
+            tw.age(text_eid, 100)
+            tw.age(helper, 100 + gap)
+            if label == "NTP":
+                want = dict(HA="TRUSTED" if live else "UNKNOWN", NTP="TRUSTED" if live else "UNKNOWN", INV="TRUSTED")
+            else:
+                want = dict(HA="TRUSTED", NTP="TRUSTED", INV="TRUSTED" if live else "UNKNOWN")
+            got = {k: tw.state(K[k]) for k in ("HA", "NTP", "INV")}
+            if got != want or snapshot_problems(tw):
+                bad.append(f"{label} gap {gap}: {got}")
+    rec("the LIVE rule at the limit, for each text: a text that changed 11 s or more after it became readable is live (TRUSTED); 10 s, 9 s, 0 s or before is not (the dongle NTP and the Home Assistant "
+        "clock UNKNOWN for the NTP text, the inverter clock UNKNOWN for the inverter text)", not bad, str(bad[:3]))
+    # the helper must read on: while it reads off, unavailable or unknown with the text readable (a helper that has not yet followed the text in a state change) the text is not live
+    bad = []
+    for key, who in (("RDN", ("HA", "NTP")), ("RDI", ("INV",))):
+        for shown in ("off", "unavailable", "unknown"):
+            tw = world(text)
+            tw.override(K[key], shown)
+            tw.age(K[key], 86400)                                  # a helper that still carries its old last_changed while it does not read on
+            got = {k: tw.state(K[k]) for k in ("HA", "NTP", "INV")}
+            want = {k: ("UNKNOWN" if k in who else "TRUSTED") for k in ("HA", "NTP", "INV")}
+            if got != want or snapshot_problems(tw):
+                bad.append(f"{key} {shown}: {got} {snapshot_problems(tw)[:1]}")
+    rec("the LIVE rule needs the text's helper to read on: with the text readable but the helper off, unavailable or unknown (it has not yet followed the text in a state change; its last_changed "
+        "is old) the text is not live", not bad, str(bad[:3]))
     # the two timers, exactly
     bad = []
-    for flag, helper, limit, on_state, inv_on in ((STALL, K["STALLS"], 600, "DEGRADED", "DEGRADED"), (CORR, K["STUCK"], 300, "UNTRUSTED", "UNTRUSTED")):
+    for flag, helper, limit, inv_on in ((STALL, K["STALLS"], 210, "DEGRADED"), (CORR, K["STUCK"], 300, "UNTRUSTED")):
         tw = world(text)
         tw.put(flag, "on")
         tw.advance(limit - 1)
@@ -889,7 +1522,20 @@ def sec_boundaries(text, rec):
         b = (tw.state(helper), tw.state(K["INV"]))
         if a != ("off", "TRUSTED") or b != ("on", inv_on) or snapshot_problems(tw):
             bad.append(f"{flag}: {a} {b}")
-    rec("the two timers at the second: the stall helper is off at 9:59 and on at 10:00 (DEGRADED), the correction helper off at 4:59 and on at 5:00 (UNTRUSTED)", not bad, str(bad[:2]))
+    rec("the two timers at the second: the stall helper is off at 3:29 and on at 3:30 (DEGRADED), the correction helper off at 4:59 and on at 5:00 (UNTRUSTED)", not bad, str(bad[:2]))
+    # a stall episode of exactly the required length: four consecutive reads (240 s) trip, three (180 s) do not, whatever the timing jitter of the reads and of the OFF
+    bad = []
+    for dur, trips in ((120.0, False), (180.0, False), (185.0, False), (209.0, False), (209.9, False), (210.0, True), (211.0, True), (225.0, True), (235.0, True), (240.0, True), (300.0, True)):
+        tw = world(text)
+        tw.put(STALL, "on")
+        tw.advance(dur)
+        tw.put(STALL, "off")
+        seen_on = any(h[1] == K["STALLS"] and h[2] == "on" for h in tw.w.history)
+        seen_deg = any(h[1] == K["INV"] and h[2] == "DEGRADED" for h in tw.w.history)
+        if (seen_on, seen_deg) != (trips, trips):
+            bad.append(f"{dur}: on {seen_on} degraded {seen_deg}")
+    rec("a stall episode that ends just before the delay never trips the helper (209.9 s, three reads of 180 s), one of four reads (235 s, 240 s) and anything from 210 s does: the delay is "
+        "strictly below the 240 s that four reads last, so a timing race cannot decide", not bad, str(bad[:3]))
 
 
 # --- [4] consumers ------------------------------------------------------------------------------------------------------------
@@ -923,10 +1569,10 @@ def sec_consumers(text, rec):
     rec("releasing the three per-clock sensors returns the real rules (TRUSTED on a healthy world)", derived_problems(tw) == [] and tw.state(K["ALL"]) == "TRUSTED", str(derived_problems(tw)))
 
 
-# --- [5] differential ---------------------------------------------------------------------------------------------------------
+# --- [5] differential -----------------------------------------------------------------------------
 def sec_differential(text, rec, thorough):
     rng = random.Random(25112026)
-    # the HA clock and the dongle NTP over the text, the flag, the age and the skew
+    # the HA clock and the dongle NTP over the text, the flag, the age, the skew and whether the text changed since it became readable
     tw = world(text)
     tw.h_ntp["on"] = tw.h_inv["on"] = False
     bad, n = [], 0
@@ -934,13 +1580,14 @@ def sec_differential(text, rec, thorough):
     syncs = ("on", "off", "unavailable", "unknown", None, "ON", "abc")
     skews = (0, 1, 119, 120, 121, 299, 300, 301, -119, -120, -121, -299, -300, -301, 3600, -3600) if thorough else (0, 120, 121, 300, 301, -121, -301)
     ages = (0, 60, 299, 300, 301, 3600) if thorough else (0, 300, 301)
+    not_live = [(s_, a_) for s_ in ((0, 121, 301) if thorough else (0, 301)) for a_ in ((0, 300, 301) if thorough else (0, 301))]
     for sy in syncs:
         tw.put(SYNCED, sy)
         for kind, samples in kinds.items():
-            pairs = [(s_, a_) for s_ in skews for a_ in ages] if kind == "time" else [(0, 0), (0, 301)]
-            for skew, age in pairs:
+            pairs = [(s_, a_, True) for s_ in skews for a_ in ages] + [(s_, a_, False) for s_, a_ in not_live] if kind == "time" else [(0, 0, True), (0, 301, True), (0, 2, True)]
+            for skew, age, live in pairs:
                 if kind == "time":
-                    # a text whose content is `skew` seconds behind Home Assistant's own clock, stamped `age` seconds ago
+                    # a text whose content is `skew` seconds behind Home Assistant's own clock, stamped `age` seconds ago; live: it changed 3600 s after its helper did (else 5 s)
                     tw.put(NTP_TEXT, tw.local_text(tw.w.t + tw.w.clock_offset - age - skew))
                 else:
                     tw.put(NTP_TEXT, samples[(skew + age) % len(samples)])
@@ -948,27 +1595,31 @@ def sec_differential(text, rec, thorough):
                     tw.force()
                 else:
                     tw.age(NTP_TEXT, age)
-                want_ha = o_ha(kind, skew, None if kind == "missing" else age)
-                want_ntp = o_ntp(sy, kind, None if kind == "missing" else age)
+                    if kind == "time":
+                        tw.age(K["RDN"], age + (3600 if live else 5))
+                want_age = None if kind == "missing" else age
+                want_ha = o_ha(kind, skew, want_age, live)
+                want_ntp = o_ntp(sy, kind, want_age, age + skew, live)
                 got = (tw.state(K["HA"]), tw.state(K["NTP"]))
                 n += 1
                 if got != (want_ha, want_ntp):
-                    bad.append(f"sync {sy} {kind} skew {skew} age {age}: {got} != {(want_ha, want_ntp)}")
+                    bad.append(f"sync {sy} {kind} skew {skew} age {age} live {live}: {got} != {(want_ha, want_ntp)}")
             if len(bad) > 3:
                 break
         if len(bad) > 3:
             break
     rec(f"the Home Assistant clock and the dongle NTP clock against an independent model over {n} combinations of synced flag (7 values), text (a time, not a time, unreadable, missing), "
-        "skew and age", not bad and not snapshot_problems(tw), str(bad[:2]))
+        "skew, age and whether the text changed since it became readable", not bad and not snapshot_problems(tw), str(bad[:2]))
     # the inverter clock: one factor at a time, then a seeded random sample
     tw = world(text)
-    base = dict(diff="10", failed="0", maxerr="77", synced="on", stall="off", stuck="off", itext="time", iage=0)
-    diffs = ("-300", "-121", "-120", "-61", "-60", "-1", "0", "10", "60", "61", "119", "120", "121", "300", "unavailable", "unknown", "", "abc", "nan", "inf", "-inf", "1e999", None)
-    fails = ("0", "1", "2", "-1", "unavailable", "unknown", "", "abc", "nan", "inf", None)
-    maxes = ("0", "77", "119", "120", "121", "500", "-5", "unavailable", "unknown", "", "abc", "inf", None)
+    base = dict(diff="10", failed="0", maxerr="77", synced="on", stall="off", stuck="off", itext=("time", 0), irage=0, live=True)
+    diffs = ("-300", "-121", "-120", "-61", "-60", "-1", "0", "10", "60", "61", "119", "120", "121", "300", "3600", "-43200", "unavailable", "unknown", "", "abc", "nan", "inf", "-inf", "1e999", None)
+    fails = ("0", "1", "2", "5", "50", "-1", "unavailable", "unknown", "", "abc", "nan", "inf", None)
+    maxes = ("0", "77", "119", "120", "121", "500", "1000", "3600", "-5", "unavailable", "unknown", "", "abc", "inf", None)
     flags = ("off", "on", "unavailable", "unknown", "")
     syncs2 = ("on", "off", "unavailable", "unknown", None)
-    itexts = (("time", 0), ("time", 299), ("time", 300), ("time", 301), ("time", 7200), ("unreadable", 0), ("missing", 0))
+    itexts = (("time", 0), ("time", 299), ("time", 300), ("time", 301), ("time", 7200), ("not_time", 0), ("unreadable", 0), ("missing", 0))
+    irages = (0, 300, 599, 600, 601, 3600, 86400, -599, -600, -601, -86400)
 
     def apply(cfg):
         tw.put(DIFF, cfg["diff"])
@@ -977,21 +1628,27 @@ def sec_differential(text, rec, thorough):
         tw.put(SYNCED, cfg["synced"])
         tw.override(K["STALLS"], cfg["stall"])
         tw.override(K["STUCK"], cfg["stuck"])
-        kind, age = cfg["itext"] if isinstance(cfg["itext"], tuple) else (cfg["itext"], cfg["iage"])
+        kind, age = cfg["itext"]
+        d = readable(cfg["diff"])
         if kind == "time":
-            tw.put(INV_TEXT, tw.local_text(tw.w.t + tw.w.clock_offset + age + 1))     # a new text each time (the previous one differs)
+            tw.put(INV_TEXT, inv_text(tw, cfg["irage"], d if d is not None else 0.0))
+            tw.age(INV_TEXT, age)
+            tw.age(K["RDI"], age + (3600 if cfg["live"] else 5))
+        elif kind == "not_time":
+            tw.put(INV_TEXT, "abc")
             tw.age(INV_TEXT, age)
         elif kind == "unreadable":
             tw.put(INV_TEXT, "unavailable")
             tw.force()
         else:
             tw.put(INV_TEXT, None)
-        want = o_inv(cfg["diff"], cfg["failed"], cfg["maxerr"], cfg["stall"], cfg["stuck"], cfg["synced"], kind, None if kind == "missing" else age)
+        want = o_inv(cfg["diff"], cfg["failed"], cfg["maxerr"], cfg["stall"], cfg["stuck"], cfg["synced"], kind, None if kind == "missing" else age, cfg["irage"], cfg["live"])
         got = tw.state(K["INV"])
         return got, want
 
     bad, n = [], 0
-    for field, values in (("diff", diffs), ("failed", fails), ("maxerr", maxes), ("stall", flags), ("stuck", flags), ("synced", syncs2), ("itext", itexts)):
+    for field, values in (("diff", diffs), ("failed", fails), ("maxerr", maxes), ("stall", flags), ("stuck", flags), ("synced", syncs2), ("itext", itexts), ("irage", irages),
+                          ("live", (True, False))):
         for v in values:
             cfg = dict(base)
             cfg[field] = v
@@ -999,25 +1656,27 @@ def sec_differential(text, rec, thorough):
             n += 1
             if got != want or snapshot_problems(tw):
                 bad.append(f"{field}={v!r}: {got} != {want} {snapshot_problems(tw)[:1]}")
-    rec(f"the inverter clock against an independent model, one input at a time over every value (including unreadable and non-finite ones): {n} cases", not bad, str(bad[:2]))
+    rec(f"the inverter clock against an independent model, one input at a time over every value (including unreadable and non-finite ones, a whole hour and half a day, the read age and whether "
+        f"the text changed since it became readable): {n} cases", not bad, str(bad[:2]))
     bad = []
     samples = 700 if thorough else 120
     for _ in range(samples):
         cfg = dict(diff=rng.choice(diffs), failed=rng.choice(fails), maxerr=rng.choice(maxes), stall=rng.choice(flags), stuck=rng.choice(flags), synced=rng.choice(syncs2),
-                   itext=rng.choice(itexts), iage=0)
+                   itext=rng.choice(itexts), irage=rng.choice(irages), live=rng.choice((True, True, False)))
         got, want = apply(cfg)
         if got != want or snapshot_problems(tw):
             bad.append(f"{cfg}: {got} != {want} {snapshot_problems(tw)[:1]}")
             break
-    rec(f"the inverter clock against an independent model over {samples} seeded random combinations of its seven inputs", not bad, str(bad[:1]))
+    rec(f"the inverter clock against an independent model over {samples} seeded random combinations of its nine inputs", not bad, str(bad[:1]))
 
 
-# --- [6] totality -------------------------------------------------------------------------------------------------------------
+# --- [6] totality ---------------------------------------------------------------------------------
 def sec_totality(text, rec, thorough):
     garbage = ("", "unknown", "unavailable", "None", "null", "abc", "nan", "NaN", "inf", "-inf", "1e999", "-1e999", "--5", "5 s", "0x10", "1,5", "ON", "On", "true", "1", "0",
-               "2026-11-25", "2026-11-25T12:00:00+00:00", "99999999999999999999", "'", "\"", "{{ 1 }}", "{% if %}", "\\", "a" * 255)
+               "2026-11-25", "2026-11-25T12:00:00+00:00", "2026-11-25 12:00", "2026-11-25T12:00:00", "2026-11-25 12:00:00.5", "2026-11-25 12:00:00+01:00", " 2026-11-25 12:00:00",
+               "2026-11-25 12:00:00\n", "2026-13-45 99:99:99", "2026-02-30 12:00:00", "0000-00-00 00:00:00", "99999999999999999999", "'", "\"", "{{ 1 }}", "{% if %}", "\\", "a" * 255)
     if not thorough:                                     # a mutant: the values that exercise every branch of the readings, not every spelling
-        garbage = ("", "unknown", "unavailable", "abc", "nan", "inf", "-inf", "1e999", "ON", "1", "'", "{{ 1 }}")
+        garbage = ("", "unknown", "unavailable", "abc", "nan", "inf", "-inf", "1e999", "ON", "1", "'", "{{ 1 }}", "2026-11-25", "2026-11-25 12:00:00.5", "2026-13-45 99:99:99")
     bad, trusted = [], []
     for eid in sorted(READS):
         for g in garbage:
@@ -1030,21 +1689,25 @@ def sec_totality(text, rec, thorough):
                 bad.append(f"{eid}={g[:12]!r}: {tw.errors[0][:90]}")
             if snapshot_problems(tw):
                 bad.append(f"{eid}={g[:12]!r}: {snapshot_problems(tw)[:1]}")
-    rec(f"{len(READS)} inputs x {len(garbage)} garbage values (empty, text, nan, infinities, huge, quotes, template syntax, 255 characters): no template ever fails and the overall state "
-        "and consumers stay what the clock states say", not bad, str(bad[:2]))
+    rec(f"{len(READS)} inputs x {len(garbage)} garbage values (empty, text, nan, infinities, huge, quotes, template syntax, 255 characters, other spellings of a date): no template ever fails and the "
+        "overall state and consumers stay what the clock states say", not bad, str(bad[:2]))
     # a value that is not a sane reading of an input can never leave the clock that reads it TRUSTED where the value is meaningless
     bad = []
-    for eid, values, key in ((SYNCED, ("", "unknown", "unavailable", "ON", "abc", "true", "1"), "NTP"), (DIFF, ("", "unknown", "unavailable", "abc", "nan", "inf", "-inf", "1e999", "5 s"), "INV"),
-                             (FAILED, ("", "unknown", "unavailable", "abc", "nan", "inf", "-1"), "INV"), (MAXERR, ("", "unknown", "unavailable", "abc", "nan", "inf", "-1"), "INV"),
-                             (STALL, ("", "unknown", "unavailable", "ON", "abc"), "INV"), (CORR, ("", "unknown", "unavailable", "ON", "abc"), "INV")):
+    texts_bad = ("", "unknown", "unavailable", "abc", "2026-11-25", "2026-11-25 12:00", "2026-11-25T12:00:00", "2026-11-25 12:00:00.5", "2026-11-25 12:00:00+01:00", " 2026-11-25 12:00:00")
+    for eid, values, keys in ((SYNCED, ("", "unknown", "unavailable", "ON", "abc", "true", "1"), ("NTP",)), (DIFF, ("", "unknown", "unavailable", "abc", "nan", "inf", "-inf", "1e999", "5 s"), ("INV",)),
+                              (FAILED, ("", "unknown", "unavailable", "abc", "nan", "inf", "-1"), ("INV",)), (MAXERR, ("", "unknown", "unavailable", "abc", "nan", "inf", "-1"), ("INV",)),
+                              (STALL, ("", "unknown", "unavailable", "ON", "abc"), ("INV",)), (CORR, ("", "unknown", "unavailable", "ON", "abc"), ("INV",)),
+                              (NTP_TEXT, texts_bad, ("NTP", "HA")), (INV_TEXT, texts_bad, ("INV",))):
         for g in values:
             tw = world(text, warm=120)
             tw.put(eid, g)
+            if eid in (NTP_TEXT, INV_TEXT):
+                (tw.h_ntp if eid == NTP_TEXT else tw.h_inv)["on"] = False
             tw.advance(60)
-            if tw.state(K[key]) == "TRUSTED" or tw.state(K["ALL"]) == "TRUSTED":
-                bad.append(f"{eid}={g!r} -> {tw.state(K[key])}")
-    rec("an input that is not a sane reading (unreadable, not a number, not finite, negative where a counter, a flag that is neither on nor off) never leaves a TRUSTED clock "
-        "or a TRUSTED overall state", not bad, str(bad[:3]))
+            if any(tw.state(K[k]) == "TRUSTED" for k in keys) or tw.state(K["ALL"]) == "TRUSTED":
+                bad.append(f"{eid}={g!r} -> {[tw.state(K[k]) for k in keys]}")
+    rec("an input that is not a sane reading (unreadable, not a number, not finite, negative where a counter, a flag that is neither on nor off, a text that is not exactly YYYY-MM-DD HH:MM:SS) never "
+        "leaves a TRUSTED clock or a TRUSTED overall state", not bad, str(bad[:3]))
 
 
 # --- [7] no writes ------------------------------------------------------------------------------------------------------------
@@ -1057,7 +1720,7 @@ def sec_nowrite(text, rec):
     tw.advance(120)
     written = {eid for _t, eid, _s in tw.w.history}
     inputs = READS
-    rec("the model saw no service call and no notification, and every entity written was one of the package's nine or an input the test set (the package writes nothing it does not own)",
+    rec("the model saw no service call and no notification, and every entity written was one of the package's eleven or an input the test set (the package writes nothing it does not own)",
         tw.w.service_log == [] and tw.w.notifications == {} and tw.w.notification_log == [] and written <= (OWN | inputs), str(sorted(written - OWN - inputs)[:3]))
 
 
@@ -1086,7 +1749,8 @@ def nth_replace(text: str, old: str, new: str, n: int) -> str:
     return text[:idx] + new + text[idx + len(old):]
 
 
-STATE_MAX = "[[rd, rf, rm, rs, rc, ry, ra] | max]"
+STATE_MAX = "[[rd, rf, rm, rs, rc, ry, ra, rv, rl] | max]"
+NTP_MAX = "{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3, r4, r5] | max] }}"
 MUT = [
     # ---- the Home Assistant clock
     ("HA clock: TRUSTED limit 121 s", "(skew | abs) <= 120", ["(skew | abs) <= 121"]),
@@ -1102,7 +1766,13 @@ MUT = [
     ("HA clock: a text older than 299 s no longer serves", "skew is none or age is none or age > 300", ["skew is none or age is none or age > 299"]),
     ("HA clock: an unreadable reference is TRUSTED", "{{ 'UNKNOWN' if (skew is none", ["{{ 'TRUSTED' if (skew is none"]),
     ("HA clock: an unreadable reference is UNTRUSTED (an accusation of Home Assistant)", "{{ 'UNKNOWN' if (skew is none", ["{{ 'UNTRUSTED' if (skew is none"]),
-    ("HA clock: a text that is not a time reads as 0 (the R9 default) and the clock is compared with 1970", "as_timestamp(txt, none)", ["as_timestamp(txt, 0)"]),
+    ("HA clock: a text that is not a time reads as 0 (the R9 default) and the clock is compared with 1970", "{%- set ref = as_timestamp(dt, none) if dt is not none else none -%}",
+     ["{%- set ref = as_timestamp(dt, 0) if dt is not none else 0 -%}"]),
+    ("HA clock: a text is handed to as_timestamp as it is (Home Assistant's own parser also reads a date alone, no seconds, a T, fractions and an offset)",
+     "{%- set ref = as_timestamp(dt, none) if dt is not none else none -%}", ["{%- set ref = as_timestamp(txt, none) if txt not in ['unknown', 'unavailable', ''] else none -%}"]),
+    ("a text is read with another format than the firmware's", "strptime(txt, '%Y-%m-%d %H:%M:%S', none)", ["strptime(txt, '%Y-%m-%d %H:%M', none)"]),
+    ("a text that does not match the format reads as 0, not as none", "strptime(txt, '%Y-%m-%d %H:%M:%S', none)", ["strptime(txt, '%Y-%m-%d %H:%M:%S', 0)"]),
+    ("HA clock: the LIVE condition is not required", "skew is none or age is none or age > 300 or not live)", ["skew is none or age is none or age > 300)"], (0,)),
     ("HA clock: the skew is not rounded to whole seconds", "((as_timestamp(o.last_changed) - ref) | round(0))", ["(as_timestamp(o.last_changed) - ref)"]),
     ("HA clock: the skew is taken against now() (it carries the age of the text)", "((as_timestamp(o.last_changed) - ref) | round(0))", ["((as_timestamp(now()) - ref) | round(0))"]),
     ("HA clock: the shown skew has the wrong sign (the verdict reads |skew|, so only the shown number and the reasons can tell)", "((as_timestamp(o.last_changed) - ref) | round(0))",
@@ -1118,10 +1788,25 @@ MUT = [
     ("dongle NTP: the freshness limit is 301 s", "{%- set r3 = 0 if r2 > 0 else (2 if age is none else (3 if age > 300 else 0)) -%}", ["{%- set r3 = 0 if r2 > 0 else (2 if age is none else (3 if age > 301 else 0)) -%}"]),
     ("dongle NTP: the freshness limit is 299 s", "{%- set r3 = 0 if r2 > 0 else (2 if age is none else (3 if age > 300 else 0)) -%}", ["{%- set r3 = 0 if r2 > 0 else (2 if age is none else (3 if age > 299 else 0)) -%}"]),
     ("dongle NTP: a stale text is UNKNOWN, not UNTRUSTED", "{%- set r3 = 0 if r2 > 0 else (2 if age is none else (3 if age > 300 else 0)) -%}", ["{%- set r3 = 0 if r2 > 0 else (2 if age is none else (2 if age > 300 else 0)) -%}"]),
-    ("dongle NTP: the synced flag is not read", "{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3] | max] }}", ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r2, r3] | max] }}"]),
-    ("dongle NTP: the text is not read", "{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3] | max] }}", ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r3] | max] }}"]),
-    ("dongle NTP: the age is not read", "{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3] | max] }}", ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2] | max] }}"]),
-    ("dongle NTP: the best of its rules, not the worst", "{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3] | max] }}", ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3] | min] }}"]),
+    ("dongle NTP: the synced flag is not read", NTP_MAX, ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r2, r3, r4, r5] | max] }}"]),
+    ("dongle NTP: the text is not read", NTP_MAX, ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r3, r4, r5] | max] }}"]),
+    ("dongle NTP: the age is not read", NTP_MAX, ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r4, r5] | max] }}"]),
+    ("dongle NTP: the value against Home Assistant's clock is not read", NTP_MAX, ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3, r5] | max] }}"]),
+    ("dongle NTP: the LIVE condition is not read", NTP_MAX, ["{{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3, r4] | max] }}"]),
+    ("dongle NTP: the best of its rules, not the worst", NTP_MAX, [NTP_MAX.replace("| max]", "| min]")]),
+    ("dongle NTP: a text 601 s from Home Assistant's clock is still fresh", "(vage | abs) > 600", ["(vage | abs) > 601"]),
+    ("dongle NTP: a text 600 s from Home Assistant's clock is stale", "(vage | abs) > 600", ["(vage | abs) >= 600"]),
+    ("dongle NTP: a text 599 s from Home Assistant's clock is stale", "(vage | abs) > 600", ["(vage | abs) > 599"]),
+    ("dongle NTP: only a text that is behind Home Assistant's clock is stale (read without the sign)", "(vage | abs) > 600", ["vage > 600"]),
+    ("dongle NTP: only a text that is ahead of Home Assistant's clock is stale (read without the sign)", "(vage | abs) > 600", ["vage < -600"]),
+    ("dongle NTP: a text beyond the value bound is UNTRUSTED, not UNKNOWN", "{%- set r4 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (2 if (vage is none or (vage | abs) > 600) else 0) -%}",
+     ["{%- set r4 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (3 if (vage is none or (vage | abs) > 600) else 0) -%}"]),
+    ("dongle NTP: a text beyond the value bound is not stale", "{%- set r4 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (2 if (vage is none or (vage | abs) > 600) else 0) -%}", ["{%- set r4 = 0 -%}"]),
+    ("dongle NTP: a text that has not changed since it became readable is TRUSTED", "{%- set r5 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}", ["{%- set r5 = 0 -%}"]),
+    ("dongle NTP: a text that has not changed since it became readable is UNTRUSTED, not UNKNOWN", "{%- set r5 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}",
+     ["{%- set r5 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 3) -%}"]),
+    ("dongle NTP: the value is the text's own age, not its distance from Home Assistant's clock (the arrival is used twice)", "{%- set vage = ((as_timestamp(now()) - ref) | round(0)) if ref is not none else none -%}",
+     ["{%- set vage = age -%}"]),
     # ---- the inverter clock
     ("inverter clock: UNTRUSTED above 121 s", "(d | abs) > 120", ["(d | abs) > 121"]),
     ("inverter clock: UNTRUSTED from 120 s", "(d | abs) > 120", ["(d | abs) >= 120"]),
@@ -1153,13 +1838,15 @@ MUT = [
     ("inverter clock: a stale inverter time text limit of 301 s", "{%- set ra = 2 if (age is none or txt in ['unknown', 'unavailable', '']) else (2 if age > 300 else 0) -%}", ["{%- set ra = 2 if (age is none or txt in ['unknown', 'unavailable', '']) else (2 if age > 301 else 0) -%}"]),
     ("inverter clock: a stale inverter time text is UNTRUSTED", "{%- set ra = 2 if (age is none or txt in ['unknown', 'unavailable', '']) else (2 if age > 300 else 0) -%}", ["{%- set ra = 2 if (age is none or txt in ['unknown', 'unavailable', '']) else (3 if age > 300 else 0) -%}"]),
     ("inverter clock: the best of its rules, not the worst", STATE_MAX, [STATE_MAX.replace("| max]", "| min]")]),
-    ("inverter clock: the difference is not read", STATE_MAX, ["[[rf, rm, rs, rc, ry, ra] | max]"]),
-    ("inverter clock: the failure counter is not read", STATE_MAX, ["[[rd, rm, rs, rc, ry, ra] | max]"]),
-    ("inverter clock: the maximum error is not read", STATE_MAX, ["[[rd, rf, rs, rc, ry, ra] | max]"]),
-    ("inverter clock: the stall helper is not read", STATE_MAX, ["[[rd, rf, rm, rc, ry, ra] | max]"]),
-    ("inverter clock: the correction helper is not read", STATE_MAX, ["[[rd, rf, rm, rs, ry, ra] | max]"]),
-    ("inverter clock: the synced flag is not read", STATE_MAX, ["[[rd, rf, rm, rs, rc, ra] | max]"]),
-    ("inverter clock: the text age is not read", STATE_MAX, ["[[rd, rf, rm, rs, rc, ry] | max]"]),
+    ("inverter clock: the difference is not read", STATE_MAX, ["[[rf, rm, rs, rc, ry, ra, rv, rl] | max]"]),
+    ("inverter clock: the failure counter is not read", STATE_MAX, ["[[rd, rm, rs, rc, ry, ra, rv, rl] | max]"]),
+    ("inverter clock: the maximum error is not read", STATE_MAX, ["[[rd, rf, rs, rc, ry, ra, rv, rl] | max]"]),
+    ("inverter clock: the stall helper is not read", STATE_MAX, ["[[rd, rf, rm, rc, ry, ra, rv, rl] | max]"]),
+    ("inverter clock: the correction helper is not read", STATE_MAX, ["[[rd, rf, rm, rs, ry, ra, rv, rl] | max]"]),
+    ("inverter clock: the synced flag is not read", STATE_MAX, ["[[rd, rf, rm, rs, rc, ra, rv, rl] | max]"]),
+    ("inverter clock: the text age is not read", STATE_MAX, ["[[rd, rf, rm, rs, rc, ry, rv, rl] | max]"]),
+    ("inverter clock: the value age is not read", STATE_MAX, ["[[rd, rf, rm, rs, rc, ry, ra, rl] | max]"]),
+    ("inverter clock: the LIVE condition is not read", STATE_MAX, ["[[rd, rf, rm, rs, rc, ry, ra, rv] | max]"]),
     ("inverter clock: a difference that is not finite still counts as read", "and (d | abs) < 1000000000", [""]),
     ("inverter clock: a failure counter that is not finite still counts as read", "and f < 1000000000", [""]),
     ("inverter clock: a maximum error that is not finite still counts as read", "and m < 1000000000", [""]),
@@ -1167,10 +1854,13 @@ MUT = [
     ("inverter clock: a failure counter that is not a number counts as read", "(f is number and f >= 0", ["(f >= 0"]),
     ("inverter clock: a maximum error that is not a number counts as read", "(m is number and m >= 0", ["(m >= 0"]),
     # ---- the two debounce helpers
-    ("stall helper: no delay (a 60 s episode trips it)", '        delay_on: "00:10:00"\n', [""]),
-    ("stall helper: a 9 minute delay", 'delay_on: "00:10:00"', ['delay_on: "00:09:00"']),
-    ("stall helper: an 11 minute delay", 'delay_on: "00:10:00"', ['delay_on: "00:11:00"']),
-    ("stall helper: a 2 minute delay", 'delay_on: "00:10:00"', ['delay_on: "00:02:00"']),
+    ("stall helper: no delay (a 60 s episode trips it)", '        delay_on: "00:03:30"\n', [""]),
+    ("stall helper: a 3 minute delay (three reads trip it)", 'delay_on: "00:03:30"', ['delay_on: "00:03:00"']),
+    ("stall helper: a 3 minute 29 s delay", 'delay_on: "00:03:30"', ['delay_on: "00:03:29"']),
+    ("stall helper: a 3 minute 31 s delay", 'delay_on: "00:03:30"', ['delay_on: "00:03:31"']),
+    ("stall helper: a 4 minute delay (a four-read episode of 240 s trips only by a timing race)", 'delay_on: "00:03:30"', ['delay_on: "00:04:00"']),
+    ("stall helper: a 5 minute delay", 'delay_on: "00:03:30"', ['delay_on: "00:05:00"']),
+    ("stall helper: the old 10 minute delay (an episode of exactly 10 minutes trips it only by a timing race)", 'delay_on: "00:03:30"', ['delay_on: "00:10:00"']),
     ("correction helper: no delay", '        delay_on: "00:05:00"\n', [""]),
     ("correction helper: a 4 minute delay", 'delay_on: "00:05:00"', ['delay_on: "00:04:00"']),
     ("correction helper: a 6 minute delay", 'delay_on: "00:05:00"', ['delay_on: "00:06:00"']),
@@ -1232,6 +1922,68 @@ MUT = [
     ("slot edits: always on", "{{ is_state('sensor.ecco_time_trust_inverter_clock', 'TRUSTED') }}", ["{{ true }}"]),
     ("leases: always on", "{{ is_state('sensor.ecco_time_trust_dongle_ntp', 'TRUSTED') and states('sensor.ecco_time_trust_ha_clock') in ['TRUSTED', 'DEGRADED'] }}", ["{{ true }}"]),
     # ---- the reasons attribute (it must say what the state says)
+    ("the LIVE gap is 11 s", "> 10) if (o is not none and mk is not none and mk.state == 'on') else false", ["> 11) if (o is not none and mk is not none and mk.state == 'on') else false"]),
+    ("the LIVE gap is 9 s", "> 10) if (o is not none and mk is not none and mk.state == 'on') else false", ["> 9) if (o is not none and mk is not none and mk.state == 'on') else false"]),
+    ("the LIVE gap counts from 10 s", "> 10) if (o is not none and mk is not none and mk.state == 'on') else false", [">= 10) if (o is not none and mk is not none and mk.state == 'on') else false"]),
+    ("a change at the same instant as the helper is live (gap > 0)", "> 10) if (o is not none and mk is not none and mk.state == 'on') else false", ["> 0) if (o is not none and mk is not none and mk.state == 'on') else false"]),
+    ("the LIVE gap is measured the wrong way round", "(as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10", ["(as_timestamp(mk.last_changed) - as_timestamp(o.last_changed)) > 10"]),
+    ("the LIVE helper need not read on", "and mk.state == 'on') else false", [") else false"]),
+    ("a missing LIVE helper counts as live", "> 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}", ["> 10) if (o is not none and mk is not none and mk.state == 'on') else true -%}"]),
+    ("the NTP text's value age is not rounded", "{%- set vage = ((as_timestamp(now()) - ref) | round(0)) if ref is not none else none -%}",
+     ["{%- set vage = (as_timestamp(now()) - ref) if ref is not none else none -%}"]),
+    ("the NTP text's LIVE helper reads the inverter text", "{%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}", ["{%- set mk = states['binary_sensor.ecco_time_trust_inverter_text_readable'] -%}"]),
+    ("the inverter text's LIVE helper reads the NTP text", "{%- set mk = states['binary_sensor.ecco_time_trust_inverter_text_readable'] -%}", ["{%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}"]),
+    ("the NTP text's helper counts an empty text as readable", "state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable'] }}\""]),
+    ("the NTP text's helper counts an unknown text as readable", "state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unavailable', ''] }}\""]),
+    ("the NTP text's helper counts an unavailable text as readable", "state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', ''] }}\""]),
+    ("the NTP text's helper is always on", "state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable', ''] }}\"", ["state: \"{{ true }}\""]),
+    ("the inverter text's helper counts an empty text as readable", "state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable'] }}\""]),
+    ("the inverter text's helper counts an unknown text as readable", "state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unavailable', ''] }}\""]),
+    ("the inverter text's helper counts an unavailable text as readable", "state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', ''] }}\""]),
+    ("the inverter text's helper is always on", "state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable', ''] }}\"", ["state: \"{{ true }}\""]),
+    ("the NTP text's helper reads the inverter text", "state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable', ''] }}\""]),
+    ("the inverter text's helper reads the NTP text", "state: \"{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable', ''] }}\"",
+     ["state: \"{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable', ''] }}\""]),
+    # ---- the inverter read age (value) and its LIVE rule
+    ("inverter clock: the read age is the text PLUS the difference", "(as_timestamp(now()) - (ia - d)) | round(0)", ["(as_timestamp(now()) - (ia + d)) | round(0)"]),
+    ("inverter clock: the read age ignores the difference", "(as_timestamp(now()) - (ia - d)) | round(0)", ["(as_timestamp(now()) - ia) | round(0)"]),
+    ("inverter clock: the read age is not rounded", "(as_timestamp(now()) - (ia - d)) | round(0)", ["(as_timestamp(now()) - (ia - d))"], (0,)),
+    ("inverter clock: a read 601 s old is still fresh", "(rage | abs) > 600", ["(rage | abs) > 601"]),
+    ("inverter clock: a read 600 s old is stale", "(rage | abs) > 600", ["(rage | abs) >= 600"]),
+    ("inverter clock: a read 599 s old is stale", "(rage | abs) > 600", ["(rage | abs) > 599"]),
+    ("inverter clock: only a read that is old is stale (read without the sign)", "(rage | abs) > 600", ["rage > 600"]),
+    ("inverter clock: only a read from the future is stale (read without the sign)", "(rage | abs) > 600", ["rage < -600"]),
+    ("inverter clock: a text that is not a time reads as fresh", "{%- set rv = 0 if (ra > 0 or d is none or txt in ['unknown', 'unavailable', '']) else (2 if (rage is none or (rage | abs) > 600) else 0) -%}",
+     ["{%- set rv = 0 if (ra > 0 or d is none or txt in ['unknown', 'unavailable', '']) else (2 if (rage is not none and (rage | abs) > 600) else 0) -%}"]),
+    ("inverter clock: a read beyond the value bound is UNTRUSTED, not UNKNOWN", "{%- set rv = 0 if (ra > 0 or d is none or txt in ['unknown', 'unavailable', '']) else (2 if (rage is none or (rage | abs) > 600) else 0) -%}",
+     ["{%- set rv = 0 if (ra > 0 or d is none or txt in ['unknown', 'unavailable', '']) else (3 if (rage is none or (rage | abs) > 600) else 0) -%}"]),
+    ("inverter clock: the value bound is not applied", "{%- set rv = 0 if (ra > 0 or d is none or txt in ['unknown', 'unavailable', '']) else (2 if (rage is none or (rage | abs) > 600) else 0) -%}", ["{%- set rv = 0 -%}"]),
+    ("inverter clock: a text that has not changed since it became readable is TRUSTED", "{%- set rl = 0 if (ra > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}", ["{%- set rl = 0 -%}"]),
+    ("inverter clock: a text that has not changed since it became readable is UNTRUSTED, not UNKNOWN", "{%- set rl = 0 if (ra > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}",
+     ["{%- set rl = 0 if (ra > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 3) -%}"]),
+    ("inverter clock: the read age is taken from the NTP text's helper", "{%- set mk = states['binary_sensor.ecco_time_trust_inverter_text_readable'] -%}",
+     ["{%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}"]),
+    # ---- the reviewer's mutants M1 to M7 and M11 (a whole hour, a large error, five failures, a day of skew, the rounding, the empty text, a stuck correction with the stall flag on)
+    ("M1 inverter: a whole-hour difference (the clock-change hour) is forgiven", "{%- set d = d if (d is number and (d | abs) < 1000000000) else none -%}",
+     ["{%- set d = d if (d is number and (d | abs) < 1000000000) else none -%}{%- set d = (d - 3600 * ((d / 3600) | round(0))) if d is not none else none -%}"]),
+    ("M2 inverter: a difference of 1000 s or more counts as unreadable (UNKNOWN, not UNTRUSTED)", "(d is number and (d | abs) < 1000000000)", ["(d is number and (d | abs) < 1000)"]),
+    ("M3 inverter: a maximum clock error since boot of 1000 s or more is forgiven", "(1 if m > 120 else 0)", ["(1 if (m > 120 and m < 1000) else 0)"]),
+    ("M4 inverter: failed corrections are forgiven from 5 on", "(1 if f > 0 else 0)", ["(1 if (f > 0 and f < 5) else 0)"]),
+    ("M5 HA clock: a skew of a day or more (a host booting with a stale date) reads DEGRADED (consumers on)", "('DEGRADED' if (skew | abs) <= 300 else 'UNTRUSTED')",
+     ["('DEGRADED' if ((skew | abs) <= 300 or (skew | abs) >= 86400) else 'UNTRUSTED')"]),
+    ("M6 HA clock: the text age is not rounded (0.5 s boundary)", "{%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}\n          {%- set live",
+     ["{%- set age = (as_timestamp(now()) - as_timestamp(o.last_changed)) if o is not none else none -%}\n          {%- set live"]),
+    ("M7 dongle NTP: an empty text is 'not a time' (UNTRUSTED) instead of unreadable (UNKNOWN)", "{%- set r2 = 2 if txt in ['unknown', 'unavailable', ''] else", ["{%- set r2 = 2 if txt in ['unknown', 'unavailable'] else"]),
+    ("M11 correction helper: a stuck correction counts only while the stall flag is off (the reads stop during a correction, so the stall flag can stay on)",
+     "state: \"{{ is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'on') }}\"",
+     ["state: \"{{ is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'on') and is_state('binary_sensor.ecco_clock_dongle_rtc_stall_detected', 'off') }}\""]),
     ("HA clock reasons: a skew of 121 s is reported TRUSTED", "('TRUSTED' if (skew | abs) <= 120 else", ["('TRUSTED' if (skew | abs) <= 121 else"]),
     ("inverter reasons: a difference beyond 60 s is reported TRUSTED", "elif rd == 1 -%}", ["elif rd == 9 -%}"]),
     ("inverter reasons: a stuck correction is not reported", "elif rc == 3 -%}", ["elif rc == 9 -%}"]),
@@ -1251,6 +2003,11 @@ MUT = [
     ("the header no longer says that nothing is wired to a gate", "nothing reads it yet", ["something reads it"], None, True),
     ("the header no longer says how a consumer must read it", "HOW A CONSUMER MUST READ IT", ["NOTE"], None, True),
     ("the header drops the limit that the sync flag never clears", "flag never clears after", ["flag clears when NTP is lost, after"], None, True),
+    ("the header drops the VALUE rule", "VALUE (the proof).", ["VALUE (a note)."], None, True),
+    ("the header drops the LIVE rule", "LIVE (an extra).", ["LIVE (a note)."], None, True),
+    ("the header no longer names the stall delay", "delay_on 00:03:30 on a binary helper", ["delay_on 00:10:00 on a binary helper"], None, True),
+    ("the header no longer says that a text is a time only in the firmware's form", "A TEXT IS A TIME only in the exact form the firmware writes it", ["A TEXT IS A TIME in any form"], None, True),
+    ("the header claims a restart or reload can only withdraw trust", "creates no trust", ["can only withdraw trust"], None, True),
     ("a tab is added", "\ntemplate:\n", ["\n\ntemplate:\n\t"]),
     ("a site value is added (an address)", "\ntemplate:\n", ["\n# the dongle is at 203.0.113.20\n\ntemplate:\n"]),
     ("a unique_id is repeated", "unique_id: ecco_time_trusted_for_slot_edits", ["unique_id: ecco_time_trusted_for_leases"]),
@@ -1291,6 +2048,7 @@ def mutants():
 
 
 killed = survived = 0
+prefer: dict = {}                       # family of mutants (the label before its colon) -> the section that caught the last one: tried first
 survivors: list = []
 total = 0
 for label, mutated, _new, err in mutants():
@@ -1301,9 +2059,12 @@ for label, mutated, _new, err in mutants():
     if mutated == PKG_TEXT:
         check(f"mutant changes the text: {label}", False, "identical")
         continue
-    found = battery(mutated, mode="kill")
+    family = label.split(":", 1)[0] if ":" in label else " ".join(label.split()[:2])
+    info: dict = {}
+    found = battery(mutated, mode="kill", prefer=prefer.get(family), info=info)
     if found:
         killed += 1
+        prefer[family] = info.get("section")
         print(f"  PASS  mutant caught: {label} ({found[0][:90]})")
     else:
         survived += 1

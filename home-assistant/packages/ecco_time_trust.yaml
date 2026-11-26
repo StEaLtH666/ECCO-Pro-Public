@@ -3,12 +3,12 @@
 # NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Time trust").
 #
 # WHY. ECCO acts on time in three places that run on three different clocks: Home Assistant starts schedules and plans on ITS clock; the
-# dongle ends every lease and checks every start against ITS NTP time; the inverter switches its TOU slots on ITS OWN clock, which the
+# dongle ends every lease and checks every start against ITS NTP time; the inverter switches its TOU slots on its own clock, which the
 # dongle corrects against NTP about twice an hour and which stalls for 60 s about 85 times a day. If trustworthy time cannot be
 # established, anything that depends on it must fail safely. This package turns what the dongle already publishes into that input. It
 # BUILDS THE INPUT ONLY: nothing reads it yet (wiring it into the start gates is a separate step, with its own approval).
 #
-# WHAT IT PROVIDES (nine template entities; no helper, no automation, no script, no service call, no action, no trigger):
+# WHAT IT PROVIDES (eleven template entities; no helper, no automation, no script, no service call, no action, no trigger):
 #   sensor.ecco_time_trust_ha_clock         TRUSTED / DEGRADED / UNTRUSTED / UNKNOWN   Home Assistant's clock against the dongle's NTP time
 #   sensor.ecco_time_trust_dongle_ntp       TRUSTED / UNTRUSTED / UNKNOWN              the dongle's NTP time: synced, and still advancing
 #   sensor.ecco_time_trust_inverter_clock   TRUSTED / DEGRADED / UNTRUSTED / UNKNOWN   the inverter's clock against NTP, with the RTC correction health
@@ -17,57 +17,84 @@
 #   binary_sensor.ecco_time_trusted_for_leases         on only when the dongle NTP is TRUSTED and the HA clock is TRUSTED or DEGRADED
 #   binary_sensor.ecco_time_trusted_for_ha_schedules   on only when the HA clock is TRUSTED or DEGRADED and the dongle NTP is TRUSTED
 #   binary_sensor.ecco_time_trusted_for_slot_edits     on only when the inverter clock is TRUSTED
-#   binary_sensor.ecco_time_trust_rtc_stall_sustained  the stall flag, on only after 10 minutes of continuous ON (delay_on; internal input)
+#   binary_sensor.ecco_time_trust_rtc_stall_sustained  the stall flag, on only after 3 minutes 30 seconds of continuous ON (delay_on; internal input)
 #   binary_sensor.ecco_time_trust_rtc_correction_stuck the correction-in-progress flag, on only after 5 minutes of continuous ON (internal input)
-# Every per-clock sensor carries a `reasons` attribute (a list; each reason starts with the verdict it supports). The two binary helpers are
-# part of the rule (they are the debounce); nothing else should read them.
+#   binary_sensor.ecco_time_trust_ntp_text_readable    on while the dongle's NTP time text is readable (internal input of the LIVE condition)
+#   binary_sensor.ecco_time_trust_inverter_text_readable  on while the dongle's inverter time text is readable (internal input of the LIVE condition)
+# Every per-clock sensor carries a `reasons` attribute (a list; each reason starts with the verdict it supports). The four binary helpers are
+# part of the rule (the debounce and the LIVE condition); nothing else should read them.
 #
 # THE RULES AND THEIR CONSTANTS (each constant has its reason; a clock is the WORST of its rules, ranked TRUSTED < DEGRADED < UNKNOWN <
 # UNTRUSTED, so a known-bad reading beats an unreadable one and an unreadable one beats a merely degraded one):
+#
+#   FRESHNESS IS JUDGED BY THE VALUES. Home Assistant resets a state's last_changed on a restart and on every reconnect of the dongle's API
+#     (ESPHome re-sends its cached states on subscribe, so a copy of ANY age arrives "now"): a text that merely arrived recently proves nothing.
+#     So the proof is the VALUE of the text, and two further conditions can only WITHDRAW trust, never grant it:
+#     VALUE (the proof). The time a text carries must lie within 600 s of Home Assistant's clock: 300 s of freshness (five missed
+#       publications or reads) plus the 300 s by which Home Assistant's own clock may be off before it reads UNTRUSTED. For the dongle's NTP
+#       text that is |now() - text| <= 600 s. For the inverter it is the age of the READ: the inverter time text minus the clock difference
+#       is the NTP time at which the read was made, so |now() - (inverter text - difference)| <= 600 s; a wrong date or a wrong time zone
+#       fails it too. Failing it is UNKNOWN: a stale copy and a Home Assistant clock that is far off cannot be told apart (in the second case
+#       the HA clock sensor reads UNTRUSTED, and every consumer is off).
+#     LIVE (an extra). The text must have CHANGED since it last became readable: its last_changed more than 10 s after the last_changed of
+#       its helper (binary_sensor.ecco_time_trust_ntp_text_readable, ..._inverter_text_readable), which is on while the text is readable (not
+#       unavailable, not unknown, not empty) and so changes every time the text becomes readable again. A Home Assistant restart, a reconnect of
+#       the dongle's API and a dongle boot all end that way, and the first value after them is the copy ESPHome re-sends, not a publication: the
+#       text is UNKNOWN until its next publication (about a minute when the dongle is alive, never when its read path is dead). A template
+#       reload creates the helpers again, which costs the same minute once.
+#     ARRIVAL (an extra, the earlier rule). The text must have changed within the last 300 s (last_changed): it notices a frozen text 5 to 6
+#       minutes after its last change, which the value bound alone does only after 10 minutes. It is never the sole proof.
 #   HA clock. skew = Home Assistant's clock at the moment the dongle's NTP time text ARRIVED (the text's last_changed) minus the text, in
 #     whole seconds, signed (sensor.ecco_clock_dongle_ntp_time). That is now() minus the text minus the text's age: R9's start-time capture
 #     compares now() directly, so its number carries the age of the text (up to about 60 s when the text is published every minute, and
 #     growing while a publication is late), which would blame Home Assistant's clock for a late text. Here the age is taken out; it is
-#     reported as `text_age_s` and its limit is the freshness rule below.
+#     reported as `text_age_s`. The VALUE rule does not apply to this sensor (the value of the text IS the skew); the LIVE and ARRIVAL rules
+#     do, and they are what keeps a re-sent copy of the text, which is older than it looks, from ever serving as the reference.
 #     |skew| <= 120 s TRUSTED, <= 300 s DEGRADED, more UNTRUSTED. 120 s is the bound R9's start-time capture already accepts, and about the
 #     2 minutes that requirement REQ-D1 of the dynamic energy control requirements (a draft kept on another branch: any use of time of day
 #     tolerates an inverter clock error of at least 2 minutes) allows. 300 s is the firmware's own "large error" boundary (kLargeErrorS in
 #     include/ecco_rtc_policy.h): beyond five minutes a clock is wrong, not drifting. When the text cannot be used as a reference
-#     (unreadable, not a time, or not changed for more than 300 s) the clock is UNKNOWN: it cannot be compared, and that is not an
-#     accusation of Home Assistant.
+#     (unreadable, not a time, not changed for more than 300 s, or not seen to change since it became readable) the clock is UNKNOWN: it
+#     cannot be compared, and that is not an accusation of Home Assistant.
+#     A TEXT IS A TIME only in the exact form the firmware writes it, YYYY-MM-DD HH:MM:SS (strptime with that format). Home Assistant's own date
+#     parser also accepts a date alone, no seconds, a T, fractions and an offset: none of those is a time here, so none can read TRUSTED.
 #     TIME-ZONE ASSUMPTION (the one R9 already makes): the text is the dongle's LOCAL time (the zone named in the firmware's time block) and
 #     carries NO offset; as_timestamp() reads such a text as local time in Home Assistant's own zone, so the two zones must be the same. If
-#     they differ the skew reads as whole hours and is UNTRUSTED, never TRUSTED. The repeated hour of the autumn clock change reads one hour
-#     wrong (the repeated local time is read as its first occurrence): UNTRUSTED for that hour, which fails safe; REQ-D1 refuses a
-#     clock-change night anyway.
+#     they differ the skew reads as whole hours and is UNTRUSTED, never TRUSTED (the dongle NTP and the inverter clock read UNKNOWN: the VALUE
+#     rule fails). The repeated hour of the autumn clock change reads one hour wrong (the repeated local time is read as its first occurrence):
+#     UNTRUSTED for that hour, which fails safe; REQ-D1 refuses a clock-change night anyway.
 #   Dongle NTP. TRUSTED needs ALL of: the dongle's "NTP Synced" flag on; the NTP time text readable and a time (not "Waiting for NTP" or
-#     "NTP time invalid"); and the text changed within the last 300 s (it is published every 60 s, so 300 s is five missed publications).
-#     Flag off, or a text that is not a time, or a text frozen for more than 300 s is UNTRUSTED; any of them unreadable is UNKNOWN. The
-#     freshness is the PROXY for the sync age the dongle does not publish (a real sync age needs one firmware field: item N1 of the
-#     architecture reconciliation, a draft kept on another branch).
-#   Inverter clock. difference = the dongle's "Clock Difference" (inverter minus NTP, seconds).
+#     "NTP time invalid"); the text changed within the last 300 s (ARRIVAL: it is published every 60 s, so 300 s is five missed
+#     publications); and the VALUE and LIVE conditions above. Flag off, or a text that is not a time, or a text frozen for more than 300 s is
+#     UNTRUSTED; any of them unreadable, a text that fails VALUE or LIVE, is UNKNOWN. The freshness is the PROXY for the sync age the dongle
+#     does not publish (a real sync age needs one firmware field: item N1 of the architecture reconciliation, a draft kept on another branch).
+#   Inverter clock. difference = the dongle's "Clock Difference" (inverter minus NTP, seconds of the day, wrapped to +-12 h).
 #     |difference| <= 60 s TRUSTED, <= 120 s DEGRADED, more UNTRUSTED. 60 s is the RTC monitor's trip level (10 saved days: 16 reads above
 #     60 s of 10,136, none above 120 s, maximum 71 s). 120 s is the tolerance REQ-D1 gives any use of time of day (an inverter clock error
-#     of at least 2 minutes).
+#     of at least 2 minutes). A whole hour (3600 s) or half a day (43200 s) is UNTRUSTED like any other large difference.
 #     failed corrections since boot > 0 -> DEGRADED, and maximum clock error since boot > 120 s -> DEGRADED: both are the monitor's trip
-#     conditions and both LATCH until the dongle reboots.
-#     the stall flag counts only after 10 minutes of CONTINUOUS ON (delay_on 10 min on a binary helper), then DEGRADED. The flag is on for 60 s
-#     (a few 120 s) about 85 times a day, about 6 percent of the time, and in 10 saved days never longer than 120 s: the usual episodes must
-#     never trip it. (The monitor trips at 4 consecutive reads; ten minutes leaves a wide margin.)
+#     conditions and both LATCH until the dongle reboots, however large the counter.
+#     the stall flag counts only after 3 minutes 30 seconds of CONTINUOUS ON (delay_on 00:03:30 on a binary helper), then DEGRADED. The flag
+#     is evaluated once per 60 s read and is on for 60 s (a few 120 s) about 85 times a day, about 6 percent of the time, and in 10 saved
+#     days never longer than 120 s: the usual episodes must never trip it. FOUR consecutive reads of the flag ON (an episode of 240 s) trip
+#     it, three (180 s) do not: 210 s lies between them, so the jitter of the read timing cannot decide the outcome, and it is 1.75 times
+#     the longest episode ever seen. (The RTC monitor trips at 4 consecutive reads too, and N1 of the architecture reconciliation names 4 reads.)
 #     a correction in progress for 5 minutes of CONTINUOUS ON (delay_on 5 min on a binary helper) -> UNTRUSTED: the firmware releases the
-#     correction lock at 90 s and Home Assistant alerts at 180 s, so five minutes means both have failed.
-#     the dongle's NTP must be synced (the difference is measured against it), else UNKNOWN; and the inverter time text must have changed
-#     within 300 s (the dongle reads the clock about once a minute and the text changes on every read), else UNKNOWN: a dead read path leaves
-#     the last difference in place, and that must not read TRUSTED for ever.
+#     correction lock at 90 s and Home Assistant alerts at 180 s, so five minutes means both have failed. The firmware skips the regular
+#     clock read while a correction runs, so during one the stall flag keeps its last value and the inverter time text stops changing.
+#     the dongle's NTP must be synced (the difference is measured against it), else UNKNOWN; and the inverter time text must be a time that
+#     has changed within 300 s (ARRIVAL), and pass the VALUE and LIVE conditions above, else UNKNOWN: a dead read path leaves the last
+#     difference in place, and that must not read TRUSTED for ever, nor for the minutes after a restart or a reconnect.
 #
 # FAIL SAFE. Any input that is missing, unavailable, unknown, not a number (or not finite), or not a state the rule names can NEVER produce
 # TRUSTED: a clock is then UNKNOWN (or worse), the overall state is at best UNKNOWN, and the three yes/no consumers read OFF. The consumers
-# are written as allow-lists (state in [...]); they never read "not UNTRUSTED". A restart, a template reload or a dongle outage that makes
-# an input unreadable can therefore only withdraw trust.
+# are allow-lists (state in [...]); they never read "not UNTRUSTED". A restart, a template reload, a reconnect or a dongle outage creates no trust: it
+# makes inputs unreadable (UNKNOWN), and every value that comes back, a cached copy included, must pass the VALUE and LIVE conditions again before a
+# clock can read TRUSTED. The one thing it can do is restart the two debounce counts, which delays a trip by at most its delay (see LIMITS).
 #
 # HARD RULES (each is a static check in home-assistant/tests/test_ecco_time_trust.py).
 #   - READ-ONLY. The file defines template entities and nothing else: no automation, no script, no helper, no trigger, no action, no service
-#     call, no notification, no write to any entity, dongle, inverter, TOU slot or ECCO control. It adds no helper entity.
+#     call, no notification, no write to any entity, dongle, inverter, TOU slot or ECCO control. It adds no helper entity (no input_* entity).
 #   - It reads only eight entities the dongle publishes (the firmware's own, default device slug) plus its own.
 #   - Every template is total: a garbage, missing or huge input yields UNKNOWN or a worse verdict, never a template error.
 #
@@ -82,33 +109,45 @@
 #     separately).
 #   - The HA-clock skew is measured when the text arrived: the transit time from the dongle (normally well under a second) adds to it, and so does
 #     the dongle's own rounding of its time to the second.
+#   - The VALUE bound is a bound on Home Assistant's clock too: a Home Assistant clock that is more than about 9 to 10 minutes off (UNTRUSTED long before)
+#     makes the dongle NTP and the inverter clock UNKNOWN, and a clock near that edge can make them flap with the publication phase.
+#   - The LIVE condition costs the dongle NTP, the HA clock and the inverter clock up to about a minute (the next publication or read) after every
+#     restart, reconnect, dongle boot or template reload; a stalled inverter clock or a skipped read can make that two. It is judged for each text by
+#     its own helper, so a text that alone becomes unreadable and readable again is caught too.
 #   - The templates are evaluated when an input changes and at the start of every minute (they use now()), so a frozen text is noticed
-#     5 to 6 minutes after its last change, and a flag that has been on for 10 minutes at the start of a minute.
-#   - The 10 and 5 minute timers count from when Home Assistant first sees the flag on: a restart or a template reload restarts the count,
-#     so a stall that began earlier is noticed up to 10 minutes late (after a restart the dongle's entities are not there yet when the
-#     templates are first rendered, so the helpers read off until the delay ends; after a template reload with the flag already on they
-#     read unknown, which is UNKNOWN for the inverter clock and fails safe: recalled, not verified, and pinned in the suite's model).
+#     5 to 6 minutes after its last change.
+#   - The two debounce counts: a binary template sensor with a delay keeps its state while it counts, and its availability template is a super
+#     template, so an unreadable flag does NOT restart a count in progress (the count runs through the gap, and a flag that returns ON after
+#     the delay finds the helper on: an episode of 60 s followed by an outage of 3.5 minutes or more that returns ON therefore trips it, which fails
+#     safe). A restart or a template reload creates the helpers again and each takes back the state it had (on or off), so a helper that was on stays
+#     on and a count in progress restarts: a stall that began earlier is noticed up to 3.5 minutes late and a stuck correction up to 5 minutes late (the
+#     stale inverter time text and the LIVE condition keep the inverter clock UNKNOWN meanwhile). A helper with no state to take back (a first
+#     installation) reads unknown, which is UNKNOWN for the inverter clock and fails safe, until its delay ends.
 #   - The latched counters (failed corrections, maximum clock error) stay DEGRADED until the dongle reboots, however long ago it happened.
 #   - The difference is one measurement per read (about once a minute); between two reads the inverter clock can move by several seconds
 #     (the firmware's own note: a PV-dependent rate of up to about 7 s a minute), which the 60 s and 120 s bounds absorb.
-#   - Recalled, NOT verified on a real Home Assistant (the offline model of them is in the test suite): that states['<entity id>'] returns the
-#     state object (or none) and its last_changed moves only when the state string changes; that a template using now() is re-rendered at the start of each minute; that a binary
-#     template sensor with delay_on restarts its count when the template result changes and keeps its state while it counts; that an
-#     availability template that is false makes the entity unavailable (and drops its attributes); that a list rendered by a template
-#     arrives as a list attribute; and how as_timestamp() reads a text with no offset (the R9 assumption above).
+#   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the offline model of them is in the test suite): that states['<entity id>']
+#     returns the state object (or none) and its last_changed moves only when the state string changes and is new on a restart and on a reconnect; that
+#     a template using now() is re-rendered at the start of each minute; that a binary template sensor with delay_on restarts its count when a changed
+#     template result is delivered and keeps its state while it counts; that an availability template is a super template (while it is false the state
+#     template is not rendered, and an unchanged result is not delivered again when it turns true); that a binary template sensor with a delay restores its
+#     last on or off state when it is created, on a reload as on a restart; that an unavailable entity drops its attributes; that a list rendered by a
+#     template arrives as a list attribute; that strptime(text, format, default) is Python's; and how as_timestamp() reads a naive datetime (as local time
+#     in Home Assistant's own zone: the R9 assumption above).
 #
 # INSTALL. One file copy to /config/packages/ecco_time_trust.yaml, a configuration check, then RELOAD the template entities (Developer tools,
-# YAML, Template entities, or the template.reload service): no restart, no other package needed, no helper to create. It adds nine entities
+# YAML, Template entities, or the template.reload service): no restart, no other package needed, no helper to create. It adds eleven entities
 # and changes no existing one. Remove: delete the file and reload the template entities. Nothing here is meant to be exposed to a voice assistant.
 
 template:
   - binary_sensor:
-      # Debounce for the RTC stall flag. The flag is on for 60 s (a few 120 s) about 85 times a day; it counts only after 10 minutes of continuous
-      # ON. An unreadable flag makes this entity unavailable (never a quiet "off"); a template result that changes restarts the count.
+      # Debounce for the RTC stall flag. The flag is on for 60 s (a few 120 s) about 85 times a day; it counts only after 3 minutes 30 seconds of
+      # continuous ON (four consecutive reads; three do not). An unreadable flag makes this entity unavailable (never a quiet "off") and does not
+      # restart a count in progress; a template result that changes restarts the count.
       - name: ECCO Time Trust RTC Stall Sustained
         unique_id: ecco_time_trust_rtc_stall_sustained
         icon: mdi:clock-alert-outline
-        delay_on: "00:10:00"
+        delay_on: "00:03:30"
         availability: "{{ states('binary_sensor.ecco_clock_dongle_rtc_stall_detected') in ['on', 'off'] }}"
         state: "{{ is_state('binary_sensor.ecco_clock_dongle_rtc_stall_detected', 'on') }}"
 
@@ -119,6 +158,18 @@ template:
         delay_on: "00:05:00"
         availability: "{{ states('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress') in ['on', 'off'] }}"
         state: "{{ is_state('binary_sensor.ecco_clock_dongle_rtc_correction_in_progress', 'on') }}"
+
+      # The two inputs of the LIVE condition: each is on while its text is readable, so its last_changed is the moment the text last became readable
+      # (a restart, a reconnect, a dongle boot or a template reload). A text counts as seen live only when it changed more than 10 s after that.
+      - name: ECCO Time Trust NTP Text Readable
+        unique_id: ecco_time_trust_ntp_text_readable
+        icon: mdi:text-recognition
+        state: "{{ states('sensor.ecco_clock_dongle_ntp_time') not in ['unknown', 'unavailable', ''] }}"
+
+      - name: ECCO Time Trust Inverter Text Readable
+        unique_id: ecco_time_trust_inverter_text_readable
+        icon: mdi:text-recognition
+        state: "{{ states('sensor.ecco_clock_dongle_inverter_time') not in ['unknown', 'unavailable', ''] }}"
 
       # The consumers. Allow-lists on purpose: an unavailable, unknown or missing per-clock sensor is not in the list, so the answer is off.
       - name: ECCO Time Trusted For Leases
@@ -146,22 +197,29 @@ template:
       - name: ECCO Time Trust HA Clock
         unique_id: ecco_time_trust_ha_clock
         icon: mdi:home-clock-outline
-        # UNKNOWN when the dongle's NTP text cannot serve as the reference; else |skew| <= 120 TRUSTED, <= 300 DEGRADED, else UNTRUSTED.
+        # UNKNOWN when the dongle's NTP text cannot serve as the reference (unreadable, not a time, frozen, or not seen to change since it became
+        # readable); else |skew| <= 120 TRUSTED, <= 300 DEGRADED, else UNTRUSTED.
         state: >-
           {%- set txt = states('sensor.ecco_clock_dongle_ntp_time') -%}
           {%- set o = states['sensor.ecco_clock_dongle_ntp_time'] -%}
-          {%- set ref = as_timestamp(txt, none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+          {%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}
+          {%- set dt = strptime(txt, '%Y-%m-%d %H:%M:%S', none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+          {%- set ref = as_timestamp(dt, none) if dt is not none else none -%}
           {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
+          {%- set live = ((as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}
           {%- set skew = ((as_timestamp(o.last_changed) - ref) | round(0)) if (ref is not none and o is not none) else none -%}
-          {{ 'UNKNOWN' if (skew is none or age is none or age > 300) else ('TRUSTED' if (skew | abs) <= 120 else ('DEGRADED' if (skew | abs) <= 300 else 'UNTRUSTED')) }}
+          {{ 'UNKNOWN' if (skew is none or age is none or age > 300 or not live) else ('TRUSTED' if (skew | abs) <= 120 else ('DEGRADED' if (skew | abs) <= 300 else 'UNTRUSTED')) }}
         attributes:
           skew_s: >-
             {%- set txt = states('sensor.ecco_clock_dongle_ntp_time') -%}
             {%- set o = states['sensor.ecco_clock_dongle_ntp_time'] -%}
-            {%- set ref = as_timestamp(txt, none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+            {%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}
+            {%- set dt = strptime(txt, '%Y-%m-%d %H:%M:%S', none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+            {%- set ref = as_timestamp(dt, none) if dt is not none else none -%}
             {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
+            {%- set live = ((as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}
             {%- set skew = ((as_timestamp(o.last_changed) - ref) | round(0)) if (ref is not none and o is not none) else none -%}
-            {{ (skew | int) if (skew is not none and age is not none and age <= 300) else 'unknown' }}
+            {{ (skew | int) if (skew is not none and age is not none and age <= 300 and live) else 'unknown' }}
           text_age_s: >-
             {%- set o = states['sensor.ecco_clock_dongle_ntp_time'] -%}
             {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
@@ -169,8 +227,11 @@ template:
           reasons: >-
             {%- set txt = states('sensor.ecco_clock_dongle_ntp_time') -%}
             {%- set o = states['sensor.ecco_clock_dongle_ntp_time'] -%}
-            {%- set ref = as_timestamp(txt, none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+            {%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}
+            {%- set dt = strptime(txt, '%Y-%m-%d %H:%M:%S', none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+            {%- set ref = as_timestamp(dt, none) if dt is not none else none -%}
             {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
+            {%- set live = ((as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}
             {%- set skew = ((as_timestamp(o.last_changed) - ref) | round(0)) if (ref is not none and o is not none) else none -%}
             {%- if txt in ['unknown', 'unavailable', ''] -%}
             {{ ['UNKNOWN: the dongle NTP time text cannot be read (' ~ txt ~ '), so the Home Assistant clock cannot be compared'] }}
@@ -180,6 +241,8 @@ template:
             {{ ['UNKNOWN: the age of the dongle NTP time text cannot be read, so the Home Assistant clock cannot be compared'] }}
             {%- elif age > 300 -%}
             {{ ['UNKNOWN: the dongle NTP time text has not changed for ' ~ (age | int) ~ ' s (limit 300 s), so the Home Assistant clock cannot be compared'] }}
+            {%- elif not live -%}
+            {{ ['UNKNOWN: the dongle NTP time text has not changed since it became readable (the copy re-sent on a reconnect is not a reference), so the Home Assistant clock cannot be compared until its next publication'] }}
             {%- else -%}
             {{ [('TRUSTED' if (skew | abs) <= 120 else ('DEGRADED' if (skew | abs) <= 300 else 'UNTRUSTED')) ~ ': skew ' ~ ('+' if skew >= 0 else '') ~ (skew | int) ~ ' s, Home Assistant clock minus the dongle NTP time text (limits 120 s and 300 s)'] }}
             {%- endif -%}
@@ -187,17 +250,24 @@ template:
       - name: ECCO Time Trust Dongle NTP
         unique_id: ecco_time_trust_dongle_ntp
         icon: mdi:clock-check-outline
-        # Worst of three rules: the synced flag (on / off / unreadable), the NTP text (a time / not a time / unreadable) and the text's age (<= 300 s).
+        # Worst of five rules: the synced flag (on / off / unreadable), the NTP text (a time / not a time / unreadable), the text's arrival age (<= 300 s),
+        # its value against Home Assistant's clock (|now() - text| <= 600 s) and that it changed since it became readable.
         state: >-
           {%- set sy = states('binary_sensor.ecco_clock_dongle_ntp_synced') -%}
+          {%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}
           {%- set txt = states('sensor.ecco_clock_dongle_ntp_time') -%}
           {%- set o = states['sensor.ecco_clock_dongle_ntp_time'] -%}
-          {%- set ref = as_timestamp(txt, none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+          {%- set dt = strptime(txt, '%Y-%m-%d %H:%M:%S', none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+          {%- set ref = as_timestamp(dt, none) if dt is not none else none -%}
           {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
+          {%- set vage = ((as_timestamp(now()) - ref) | round(0)) if ref is not none else none -%}
+          {%- set live = ((as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}
           {%- set r1 = 0 if sy == 'on' else (3 if sy == 'off' else 2) -%}
           {%- set r2 = 2 if txt in ['unknown', 'unavailable', ''] else (3 if ref is none else 0) -%}
           {%- set r3 = 0 if r2 > 0 else (2 if age is none else (3 if age > 300 else 0)) -%}
-          {{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3] | max] }}
+          {%- set r4 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (2 if (vage is none or (vage | abs) > 600) else 0) -%}
+          {%- set r5 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}
+          {{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[r1, r2, r3, r4, r5] | max] }}
         attributes:
           text_age_s: >-
             {%- set o = states['sensor.ecco_clock_dongle_ntp_time'] -%}
@@ -205,13 +275,19 @@ template:
             {{ (age | int) if age is not none else 'unknown' }}
           reasons: >-
             {%- set sy = states('binary_sensor.ecco_clock_dongle_ntp_synced') -%}
+            {%- set mk = states['binary_sensor.ecco_time_trust_ntp_text_readable'] -%}
             {%- set txt = states('sensor.ecco_clock_dongle_ntp_time') -%}
             {%- set o = states['sensor.ecco_clock_dongle_ntp_time'] -%}
-            {%- set ref = as_timestamp(txt, none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+            {%- set dt = strptime(txt, '%Y-%m-%d %H:%M:%S', none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+            {%- set ref = as_timestamp(dt, none) if dt is not none else none -%}
             {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
+            {%- set vage = ((as_timestamp(now()) - ref) | round(0)) if ref is not none else none -%}
+            {%- set live = ((as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}
             {%- set r1 = 0 if sy == 'on' else (3 if sy == 'off' else 2) -%}
             {%- set r2 = 2 if txt in ['unknown', 'unavailable', ''] else (3 if ref is none else 0) -%}
             {%- set r3 = 0 if r2 > 0 else (2 if age is none else (3 if age > 300 else 0)) -%}
+            {%- set r4 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (2 if (vage is none or (vage | abs) > 600) else 0) -%}
+            {%- set r5 = 0 if (r2 > 0 or r3 > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}
             {%- set ns = namespace(r=[]) -%}
             {%- if r1 == 3 -%}{%- set ns.r = ns.r + ['UNTRUSTED: the dongle reports that NTP is not synced'] -%}
             {%- elif r1 == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the dongle NTP synced flag cannot be read (' ~ sy ~ ')'] -%}{%- endif -%}
@@ -219,13 +295,16 @@ template:
             {%- elif r2 == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the dongle NTP time text cannot be read (' ~ txt ~ ')'] -%}{%- endif -%}
             {%- if r3 == 3 -%}{%- set ns.r = ns.r + ['UNTRUSTED: the dongle NTP time text has not changed for ' ~ (age | int) ~ ' s (limit 300 s): the time is not advancing'] -%}
             {%- elif r3 == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the age of the dongle NTP time text cannot be read'] -%}{%- endif -%}
-            {{ ns.r if (ns.r | length) > 0 else ['TRUSTED: synced, and the NTP time text is advancing (changed within 300 s)'] }}
+            {%- if r4 == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the dongle NTP time text is ' ~ ((vage | abs | int) if vage is not none else 'an unreadable number of') ~ ' s from the Home Assistant clock (limit 600 s): a stale copy, or a Home Assistant clock that is far off'] -%}{%- endif -%}
+            {%- if r5 == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the dongle NTP time text has not changed since it became readable (the copy re-sent on a reconnect is not a reference): waiting for its next publication'] -%}{%- endif -%}
+            {{ ns.r if (ns.r | length) > 0 else ['TRUSTED: synced, and the NTP time text is advancing (changed within 300 s, within 600 s of the Home Assistant clock, seen to change since it became readable)'] }}
 
       - name: ECCO Time Trust Inverter Clock
         unique_id: ecco_time_trust_inverter_clock
         icon: mdi:clock-time-eight-outline
-        # Worst of seven rules (see the header): difference, failed corrections, maximum clock error, sustained stall, stuck correction, the dongle's NTP
-        # synced flag, and the age of the inverter time text. A number must be finite (below 1e9) to count as read.
+        # Worst of nine rules (see the header): difference, failed corrections, maximum clock error, sustained stall, stuck correction, the dongle's NTP
+        # synced flag, the arrival age of the inverter time text, the age of the read it records (value) and that it changed since it became readable.
+        # A number must be finite (below 1e9) to count as read.
         state: >-
           {%- set d = states('sensor.ecco_clock_dongle_clock_difference') | float(none) -%}
           {%- set d = d if (d is number and (d | abs) < 1000000000) else none -%}
@@ -234,11 +313,16 @@ template:
           {%- set m = states('sensor.ecco_clock_dongle_maximum_clock_error_since_boot') | float(none) -%}
           {%- set m = m if (m is number and m >= 0 and m < 1000000000) else none -%}
           {%- set sy = states('binary_sensor.ecco_clock_dongle_ntp_synced') -%}
+          {%- set mk = states['binary_sensor.ecco_time_trust_inverter_text_readable'] -%}
           {%- set st = states('binary_sensor.ecco_time_trust_rtc_stall_sustained') -%}
           {%- set cs = states('binary_sensor.ecco_time_trust_rtc_correction_stuck') -%}
           {%- set txt = states('sensor.ecco_clock_dongle_inverter_time') -%}
           {%- set o = states['sensor.ecco_clock_dongle_inverter_time'] -%}
+          {%- set dt = strptime(txt, '%Y-%m-%d %H:%M:%S', none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+          {%- set ia = as_timestamp(dt, none) if dt is not none else none -%}
           {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
+          {%- set rage = ((as_timestamp(now()) - (ia - d)) | round(0)) if (ia is not none and d is not none) else none -%}
+          {%- set live = ((as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}
           {%- set rd = 2 if d is none else (3 if (d | abs) > 120 else (1 if (d | abs) > 60 else 0)) -%}
           {%- set rf = 2 if f is none else (1 if f > 0 else 0) -%}
           {%- set rm = 2 if m is none else (1 if m > 120 else 0) -%}
@@ -246,7 +330,9 @@ template:
           {%- set rc = 0 if cs == 'off' else (3 if cs == 'on' else 2) -%}
           {%- set ry = 0 if sy == 'on' else 2 -%}
           {%- set ra = 2 if (age is none or txt in ['unknown', 'unavailable', '']) else (2 if age > 300 else 0) -%}
-          {{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[rd, rf, rm, rs, rc, ry, ra] | max] }}
+          {%- set rv = 0 if (ra > 0 or d is none or txt in ['unknown', 'unavailable', '']) else (2 if (rage is none or (rage | abs) > 600) else 0) -%}
+          {%- set rl = 0 if (ra > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}
+          {{ ['TRUSTED', 'DEGRADED', 'UNKNOWN', 'UNTRUSTED'][[rd, rf, rm, rs, rc, ry, ra, rv, rl] | max] }}
         attributes:
           difference_s: >-
             {%- set d = states('sensor.ecco_clock_dongle_clock_difference') | float(none) -%}
@@ -260,11 +346,16 @@ template:
             {%- set m = states('sensor.ecco_clock_dongle_maximum_clock_error_since_boot') | float(none) -%}
             {%- set m = m if (m is number and m >= 0 and m < 1000000000) else none -%}
             {%- set sy = states('binary_sensor.ecco_clock_dongle_ntp_synced') -%}
+            {%- set mk = states['binary_sensor.ecco_time_trust_inverter_text_readable'] -%}
             {%- set st = states('binary_sensor.ecco_time_trust_rtc_stall_sustained') -%}
             {%- set cs = states('binary_sensor.ecco_time_trust_rtc_correction_stuck') -%}
             {%- set txt = states('sensor.ecco_clock_dongle_inverter_time') -%}
             {%- set o = states['sensor.ecco_clock_dongle_inverter_time'] -%}
+            {%- set dt = strptime(txt, '%Y-%m-%d %H:%M:%S', none) if txt not in ['unknown', 'unavailable', ''] else none -%}
+            {%- set ia = as_timestamp(dt, none) if dt is not none else none -%}
             {%- set age = ((as_timestamp(now()) - as_timestamp(o.last_changed)) | round(0)) if o is not none else none -%}
+            {%- set rage = ((as_timestamp(now()) - (ia - d)) | round(0)) if (ia is not none and d is not none) else none -%}
+            {%- set live = ((as_timestamp(o.last_changed) - as_timestamp(mk.last_changed)) > 10) if (o is not none and mk is not none and mk.state == 'on') else false -%}
             {%- set rd = 2 if d is none else (3 if (d | abs) > 120 else (1 if (d | abs) > 60 else 0)) -%}
             {%- set rf = 2 if f is none else (1 if f > 0 else 0) -%}
             {%- set rm = 2 if m is none else (1 if m > 120 else 0) -%}
@@ -272,6 +363,8 @@ template:
             {%- set rc = 0 if cs == 'off' else (3 if cs == 'on' else 2) -%}
             {%- set ry = 0 if sy == 'on' else 2 -%}
             {%- set ra = 2 if (age is none or txt in ['unknown', 'unavailable', '']) else (2 if age > 300 else 0) -%}
+            {%- set rv = 0 if (ra > 0 or d is none or txt in ['unknown', 'unavailable', '']) else (2 if (rage is none or (rage | abs) > 600) else 0) -%}
+            {%- set rl = 0 if (ra > 0 or txt in ['unknown', 'unavailable', '']) else (0 if live else 2) -%}
             {%- set ns = namespace(r=[]) -%}
             {%- if rd == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the clock difference cannot be read'] -%}
             {%- elif rd == 3 -%}{%- set ns.r = ns.r + ['UNTRUSTED: the clock difference ' ~ (d | round(0) | int) ~ ' s is above 120 s'] -%}
@@ -281,11 +374,13 @@ template:
             {%- if rm == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the maximum clock error since boot cannot be read'] -%}
             {%- elif rm == 1 -%}{%- set ns.r = ns.r + ['DEGRADED: the clock error reached ' ~ (m | int) ~ ' s since the dongle booted (limit 120 s)'] -%}{%- endif -%}
             {%- if rs == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the RTC stall flag cannot be read (the sustained-stall helper reads ' ~ st ~ ')'] -%}
-            {%- elif rs == 1 -%}{%- set ns.r = ns.r + ['DEGRADED: the RTC stall flag has been on for 10 minutes or more'] -%}{%- endif -%}
+            {%- elif rs == 1 -%}{%- set ns.r = ns.r + ['DEGRADED: the RTC stall flag has been on for 3 minutes 30 seconds or more (four consecutive reads)'] -%}{%- endif -%}
             {%- if rc == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the RTC correction flag cannot be read (the stuck-correction helper reads ' ~ cs ~ ')'] -%}
             {%- elif rc == 3 -%}{%- set ns.r = ns.r + ['UNTRUSTED: an RTC correction has been in progress for 5 minutes or more'] -%}{%- endif -%}
             {%- if ry == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the dongle NTP is not synced or its flag cannot be read (' ~ sy ~ '), so the difference is not being measured'] -%}{%- endif -%}
             {%- if ra == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the inverter time text cannot be read or has not changed for more than 300 s: the inverter clock is not being read'] -%}{%- endif -%}
+            {%- if rv == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the inverter time text is not a time, or the read it records (the text minus the clock difference) is ' ~ ((rage | abs | int) if rage is not none else 'an unreadable number of') ~ ' s from the Home Assistant clock (limit 600 s): a stale copy, or a Home Assistant clock that is far off'] -%}{%- endif -%}
+            {%- if rl == 2 -%}{%- set ns.r = ns.r + ['UNKNOWN: the inverter time text has not changed since it became readable (the copy re-sent on a reconnect is not a reading): waiting for the next read'] -%}{%- endif -%}
             {{ ns.r if (ns.r | length) > 0 else ['TRUSTED: every rule is within its limit'] }}
 
       - name: ECCO Time Trust
