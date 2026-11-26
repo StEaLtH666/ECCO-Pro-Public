@@ -90,25 +90,35 @@ placeholder with a stated reason), UNMEASURED (no data either way: the default i
 | `standby_w` | 50.0 | W | MEASURED_REPLAY | the fixed part of the discharge-side loss in the same fit |
 | `ac_input_cap_w` | 8980.0 | W | MEASURED_REPLAY | the inverter's own AC input held constant at 8.982 to 8.987 kW on every saved night with the slot at 8000 W; what sets it is NOT ESTABLISHED |
 | `knee_soc_pct` | 98.0 | % | MEASURED_REPLAY | the plateau is flat to SOC 98 to 99 %, then the cliff (top rate only) |
-| `cliff_width_pct` | 0.85 | % | MEASURED_REPLAY | SOC span over which the power falls to the tail: 2.5 to 4.8 min at about 8.4 kW is about 0.3 kWh (0.85 %); the 30 to 50 min trickle at 0.6 kW then covers the last 1.15 % |
-| `tail_dc_w` | 600.0 | W | MEASURED_REPLAY | the trickle after the cliff: 0.55 to 0.65 kW for 30 to 50+ min (top rate) |
+| `cliff_width_pct` | 0.85 | % | MEASURED_REPLAY | SOC span over which the power falls to the tail: 2.5 to 4.8 min at about 8.4 kW is about 0.3 kWh (0.85 %); the trickle at 0.6 kW then covers the last 1.15 % |
+| `tail_dc_w` | 600.0 | W | MEASURED_REPLAY | the trickle after the cliff (top rate): 0.55 to 0.65 kW. It ran 30 to 50 min on 2 of the 4 saved nights (18 and 19 Nov); on 20 Nov (0.64 then 0.33 kW) and 21 Nov (0.45 kW) the session ended while it was still running, so its full length is known from two nights only and the plant's 40 min is the slow end |
+| `cliff_shape` | linear | enum | ASSUMED | the shape of the power fall at the knee: 'linear' (a straight fall in SOC over cliff_width_pct, the default) or 'step' (the power drops to the tail at the knee); only the SPAN of the fall (2.5 to 4.8 min at the top rate) is measured, not its shape |
+| `top_rate_threshold` | 0.9 | fraction | ASSUMED | the share of ac_input_cap_w at or above which the TOP-rate knee and tail apply (knee_soc_pct, tail_dc_w) and below which the gentle-rate ones do: a parameter switch, discontinuous at that rate (with different sets the same battery reads 100 % at 5595 s on a 6000 W lease and at about 16950 s on an 8000 W one) |
+| `slot_target_stops_charge` | True | flag | UNMEASURED | rung R1 (CONTROL_AUTHORITY.md 4.4 and section 9): does the inverter stop a grid charge when the SOC reaches the slot's own target below 100 %? True = it stops (expected Deye behaviour, no measurement in the evidence read), False = it keeps charging at the slot power until the battery is full; it shapes every target-below-100 night, the today baseline and the import after a lease |
 | `taper_below_top_measured` | False | flag | UNMEASURED | FLAG: no night was saved below the top rate, so the two gentle-rate values below are choices, not data |
 | `knee_soc_gentle_pct` | 98.0 | % | UNMEASURED | default = the top-rate figure carried over; the cell-voltage cliff may arrive later at a gentle rate |
 | `tail_gentle_dc_w` | 600.0 | W | UNMEASURED | default = the top-rate trickle carried over, capped by the commanded power |
 | `charge_response` | scaled | enum | UNMEASURED | what a slot power below 8000 W does to a charge: 'scaled' (H1: AC input = setpoint x unit_scale), 'unbound' (H2/H3: the setpoint does not bind, the AC input stays at its cap) |
 | `charge_min_ac_w` | None | W | UNMEASURED | a floor under the AC input in 'scaled' mode (a charger that cannot throttle below this); None = no floor; a scenario sets one to give a WEAK response |
 | `unit_scale` | 1.1225 | AC per setpoint W | UNMEASURED | measured at ONE point only (8000 W gave 8.98 kW AC); alternatives the study lists: 1.0 (AC grid watts), 1.06 (DC battery watts), 1.1225 (the one point), 10x (a wrong unit) |
-| `fp_dc_per_request` | 0.94 | DC per request W | MEASURED_REPLAY | Free Power: the battery took about 0.94 of the register-230 request (one event, 11 Oct) |
+| `fp_dc_per_request` | 0.97 | DC W per request W | MEASURED_REPLAY | Free Power at 8000 W requested (register 230 = 155 A): the battery took 7.67 to 7.87 kW DC at 52.7 to 53.8 V, 0.96 to 0.98 of the request in WATTS (0.97 used; one event, 11 Oct). The 0.94 of the evidence is the CURRENT ratio (146 A of 155 A), not a power ratio |
 | `ac_output_cap_w` | 7890.0 | W | VERIFIED_LIVE | the inverter delivered 7.89 kW AC at an 8000 W slot-power ceiling |
 | `discharge_unit_scale` | 1.0 | AC per setpoint W | VERIFIED_LIVE | a slot power is an AC-output ceiling, held from 500 to 7000 W |
 | `shutdown_soc_pct` | 10.0 | % | ASSUMED | the inverter's own last-resort low-SOC cutoff (registers 217 to 219 are read-only and site-specific); a placeholder |
 | `ignore_ceiling_w` | None | W | VERIFIED_LIVE | fault injection: the 22 Sept 2026 anomaly, the battery discharged about 8.6 kW against a 1000 W ceiling (cause UNKNOWN); None = off |
 | `tau_charge_s` | 5.0 | s | MEASURED_REPLAY | the battery reached 98 % of its plateau within 17 s of a verified Free Power start |
-| `tau_discharge_s` | 15.0 | s | MEASURED_REPLAY | telemetry needs about 45 s to settle after a slot-power change (the firmware's settle) |
+| `tau_discharge_s` | 15.0 | s | ASSUMED | inferred from the firmware's 45 s settle (telemetry needs about 45 s to settle after a slot-power change, about three time constants); never measured as a lag |
 | `pv_eff` | 0.97 | AC per DC | ASSUMED | PV DC to inverter AC; the firmware's feed-forward ignores it and the loop corrects |
 | `island_ac_cap_w` | 8000.0 | W | ASSUMED | the most AC the inverter can supply to the house off grid |
 | `slot_caps_offgrid_discharge` | False | flag | UNMEASURED | UNKNOWN until proof rung R3: does a lowered slot power also cap the battery's supply to the house off grid? default no; a scenario sets yes |
 <!-- params:end -->
+
+Three things are choices made WITHOUT data and are parameters for that reason: whether the slot's own target SOC stops a charge below 100 %
+(`slot_target_stops_charge`, rung R1, UNMEASURED), the shape of the power fall at the knee (`cliff_shape`, ASSUMED: only its span is measured)
+and the rate at which the top-rate knee and trickle give way to the gentle-rate ones (`top_rate_threshold`, ASSUMED: a discontinuous switch,
+so on the same battery a 6000 W lease and an 8000 W one can read 100 % hours apart). The self-check runs every charge scenario once with the
+slot target NOT stopping the charge: all of them hold, and the only difference is that the night ends above its target (the battery goes on to
+100 %) and that the post-session import of finding F01 lasts longer.
 
 The charge response below the top rate is the central unknown. `plant.UNIT_ALTERNATIVES` lists the alternatives of the control-authority
 study (AC grid watts, DC battery watts, the one measured point, H2 / H3 "the slot power does not bind", a unit wrong by 10x either way);
@@ -117,9 +127,13 @@ knee and tail are the top-rate figures carried over.
 
 **Calibration (replay).** `test_sim.py` replays the plant at the top rate against the aggregates of the four saved nights and of the
 staged discharge commissioning: 27 to 98 percent in about 175 minutes; DC plateau 8.3 to 8.6 kW at a constant 8.98 kW AC input; 2.5 to
-10 minutes from above 7 kW to below 2 kW; a 0.6 kW trickle for 30 to 50 minutes; grid import = charge + house; the discharge DC-over-AC
-residual of the recorded leases; 7.89 kW AC at an 8000 W ceiling. The numbers are copied into the test as constants with their source
-(the raw files are offline evidence and never enter this repository).
+4.8 minutes from above 7 kW to below 2 kW (the plant sits at 3.0); a 0.6 kW trickle for 30 to 50 minutes (the saved nights show the whole
+trickle on **2 of the 4** nights, 18 and 19 Nov: on 20 and 21 Nov the session ended while it was still running, so the plant's 40 minutes is
+the slow end of what two nights show); grid import = charge + house; the discharge DC-over-AC residual of the recorded leases; 7.89 kW AC
+at an 8000 W ceiling; a Free Power request of 8000 W gives 7.67 to 7.87 kW DC (the evidence's 0.94 is the current ratio, 146 A of 155 A; in
+watts it is 0.96 to 0.98, so the plant uses 0.97). The discharge lag `tau_discharge_s` is ASSUMED (inferred from the firmware's 45 s settle),
+not measured. The numbers are copied into the test as constants with their source (the raw files are offline evidence and never enter this
+repository).
 
 ## What is pinned
 
@@ -209,7 +223,7 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 |---|---|---|---|
 | `g01_nominal` | gentle | Nominal night: 25 to 90 percent, light house load; the lowest practical rate, re-planned from the measured SOC. | REQ-A1, REQ-A2, REQ-A5, REQ-A8, REQ-A12, REQ-B4, REQ-B7, REQ-B8, REQ-B10, REQ-B11, REQ-C9 |
 | `g02_heavy_overnight_load` | gentle | A heavy overnight house load (4.5 kW for 90 minutes) with no import ceiling: the grid carries it, progress is unaffected, so the rate is held. | REQ-A3, REQ-A10, REQ-B5 |
-| `g03_heavy_load_import_ceiling` | gentle | The same load with an 11 kW import ceiling: import would pass it, so the setpoint is lowered at once and the target reported at risk. | REQ-A4, REQ-A7, REQ-A9, REQ-B5, REQ-C10, REQ-D2 |
+| `g03_heavy_load_import_ceiling` | gentle | The same load with an 11 kW import ceiling: import would pass it, so the setpoint is lowered at once; the ceiling leaves too little for the target, which is reported unreachable for the import headroom from 6000 s (16 reports) and at risk later (11). | REQ-A4, REQ-A7, REQ-A9, REQ-B5, REQ-C10, REQ-D2 |
 | `g03b_restore_into_breach` | gentle | FINDING F01 (the review's variant of g03): the house load ramps up to 6 kW and stays; the lease holds the 11 kW import ceiling for hours, ends at its deadline and the restore writes the owner's 8000 W into a 14.98 kW import for the last 14 minutes of the window. The restore is ECCO's write, so the breach is ECCO's; the design does not yet say what an end should write into a known breach. | REQ-A4, REQ-C10, REQ-D2 |
 | `g04_load_removal` | gentle | A heavy load for 30 minutes then sudden removal, with an import ceiling: the forced reduction is undone only after the dwell and hysteresis. | REQ-A6, REQ-A10 |
 | `g05_kettle_spikes` | gentle | Bursts of 3 kW for 7 minutes every 25 minutes (off the plan grid, so the planner sees each at one plan tick) under a binding 11 kW import ceiling: the planner lowers the rate once and then plans on the half-hour peak, so the later bursts cause no further change and the dongle's guard never has to act; a planner that forgot the peak would change the rate after every burst. | REQ-A6 |
@@ -217,7 +231,8 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `g07_low_start_soc_tight` | gentle | Low starting SOC and a short window: 8 to 100 percent in four hours cannot make a 60 minute buffer; 'unreachable' is said at the first plan tick. | REQ-A9, REQ-A10, REQ-B8 |
 | `g08_efficiency_drop` | gentle | Charging efficiency falls from 0.945 to 0.70 after 30 minutes: the SOC lags the pessimistic projection, the progress tracker flags it, so the plan sees the real shortfall at once and raises by a large step at the first change the 30 minute dwell allows (about 70 minutes in); without the tracker the raises come late and small and the night misses its deadline. | REQ-A3, REQ-A4, REQ-A10 |
 | `g09_efficiency_gain` | gentle | Efficiency better than assumed (0.97) and a smaller battery (30 kWh): ahead of the plan, the rate is lowered. | REQ-A5, REQ-A10 |
-| `g10_taper_cliff_98` | gentle | Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) says 'at risk' where the real knee (98) lets the night reach, so the plan is conservative and never optimistic. | REQ-A7, REQ-A12, REQ-B6 |
+| `g10_taper_cliff_98` | gentle | Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) makes it say 'unreachable' (deadline) 26 times from the first plan tick at 300 s, and 'at risk' once, where the real knee (98) lets the night reach: conservative about the knee, NOT about the tail (finding F06, g36). | REQ-A7, REQ-A12, REQ-B6 |
+| `g36_slow_tail_outside_the_world` | gentle | FINDING F06 (the review's night, sweep seed 4395984): a plant with its knee at 94.5 percent and a 357 W trickle, a 100 percent target and a heavy house: at the first plan tick the kernel says 'Starting at 8000 W: the lowest rate that still reaches 100%' (the world's trickle is 1.0 kW), the plant needs 17 minutes more than the world says, the deadline is missed and the miss is reported early by the target guard's hand-back; the planner's tail fraction is the planner owner's to review. | REQ-A9, REQ-A12 |
 | `g11_unit_ac_watts` | gentle | Unit alternative: the setpoint is AC grid watts (scale 1.0). The plan measures the gain; it never assumes it. | REQ-A7, REQ-B18 |
 | `g12_unit_dc_watts` | gentle | Unit alternative: the setpoint is DC battery watts (scale 1/0.945). | REQ-A7, REQ-B18 |
 | `g13_unit_wrong_x10` | gentle | Unit wrong by 10x (every setpoint above 800 W hits the AC cap): the first lowered setpoint changes nothing, the gain is implausible, the lease ends and the original rate stands. | REQ-B18, REQ-D3 |
@@ -335,6 +350,7 @@ it is a place where the design as written does the wrong thing and an owner deci
 | Id | Scenarios | What | Open decision |
 |---|---|---|---|
 | F01 | `g03b_restore_into_breach`, `g30_import_ceiling_drop` (and about 2 percent of the sweep's Gentle nights with a ceiling) | the END of a session restores the owner's pre-session value into a house load that puts it over the owner's import ceiling; the breach lasts until the owner's own table stops charging | an END restores min(original, headroom), or the owner accepts that the ceiling ends with the session |
+| F06 | a pinned number in the self-check (255 against 272 minutes), `g36_slow_tail_outside_the_world` | the planner's tail fraction (0.125) is more optimistic than the measured trickle (7 percent) for a plant with an early knee and a slow trickle; the planner's knee (90) over-corrects for the others | the planner owner: tailFraction and kneeSocPct (not edited here) |
 
 ## What this does not prove
 
@@ -346,14 +362,33 @@ it is a place where the design as written does the wrong thing and an owner deci
   design, not firmware); the one-owner arbiter, the raise-only Stop SOC, the import guard and the plan hand-over are the proposed N6 behaviour.
   Nothing here shows the firmware does, or will do, any of this. The bench's tick is 15 s and its telemetry arrives once a tick (the real
   cadence is 10 s); the write latency is one tick.
-* **The invariants are bounded claims.** The sweep draws plants inside the declared envelope of the pessimistic world (capacity up to 9
-  percent above what the kernel is told, efficiency not below 0.90, knee at or above 90 percent, exogenous events in the first 40 percent
-  of the window); outside it a scenario shows what is reported and when, and the guarantee is "reported", not "reached". The SOC reading,
-  with its one-point resolution, is the unit of "reached" and of the reserve floor; a sensor scale error outside the planner's band is not
-  modelled for exports.
+* **The invariants are bounded claims.** The sweep draws plants inside the declared envelope of the pessimistic world
+  (`scenarios.envelope_problems`: capacity within the band the world adds, efficiency not below 0.90, knee at or above 90 percent, the
+  top-rate AND the gentle-rate knee and trickle drawn, and when the target lies above the knee a trickle not slower than the world's;
+  exogenous events in the first 40 percent of the window), and the generator ASSERTS that every draw is inside it. Outside it a scenario
+  shows what is reported and when, and the guarantee is what the projection can see, not "reached". The SOC reading, with its one-point
+  resolution, is the unit of "reached" and of the reserve floor; a sensor scale error outside the planner's band is not modelled for exports.
+* **The planner's world is NOT pessimistic about the tail: finding F06, for the planner owner (the planner is not edited here).** The
+  world's trickle after the knee is `tailFraction` 0.125 of the rate (1.0 kW DC at the top rate); the measured trickle is 0.55 to 0.65 kW on
+  8.5 kW, 7 percent. For a plant with its knee at 94.5 percent and a 357 W trickle (the review's night) the world says 255 minutes from 80 to
+  100 percent at the top rate and the plant needs 272; the kernel then says "Starting at 8000 W: the lowest rate that still reaches 100%".
+  The claim "the plan is conservative and never optimistic" that an earlier version of `g10` and this file made is therefore WRONG as a
+  general statement; it holds for the knee (the world assumes 90 percent, the measured knee is 98) and not for the tail. The two errors point
+  opposite ways: for a 95 or 100 percent target the world's knee makes 'at risk' the normal word (about 55 and 97 percent of the nights that
+  reach with a margin carry a report), while below the knee the false alarms are 0 to 9 percent (the sweep bound is 10 percent, measured about
+  5). The sweep with the measured knee and trickle (outside the envelope) misses no night without a report, because that pessimism and the
+  hand-back absorb it; the finding is a margin, pinned in the self-check by the 255 against 272 minutes, and it flips the day the planner's tail
+  is fixed.
+* **The feasibility guarantee has two halves, judged apart.** REACHES_DEADLINE: on a night today's fixed rate would reach 30 minutes before the
+  deadline (and the import ceiling does not bind, the owner did not lower the Power Ceiling, the plant is inside the envelope) the session
+  must reach it; a report never excuses a miss. REPORT_JUSTIFIED: every "unreachable" report is asked of the reference kernel again on the same
+  inputs, so a controller that cries wolf at every start (the review's BI12b) fails, and the sweep counts false alarms against the bound above.
 * **Mutants test the kernel's tests, not the kernel's correctness.** The mutants are single-line in-memory edits of `kernel.py`; killing all
-  of them shows the suite notices those edits, not that no other defect exists. Measured when this was written: the unit tables kill all of
-  them, the scenarios alone kill about a quarter (the rest are boundary edits, one epsilon or one count, that a whole night does not
-  resolve): a scenario is an end-to-end witness, the tables are the sharp instrument.
+  of them shows the suite notices those edits, not that no other defect exists. Measured when this was written: the unit tables and the
+  scenarios together kill all 97 kernel mutants; the scenarios alone kill 48 of them (the rest are boundary edits, one epsilon or one count,
+  that a whole night does not resolve), and the mutants of each class the review named (a dwell that a forced reduction waits for, a guard
+  that never trips, a stale frame that drives a change, a lowered ceiling that is ignored, a missing measured-power guard, a double write, a
+  tracker that is never used, smoothing that is missing, a restart at the full rate into a breach) die in a NAMED scenario or in the sweep on
+  their own (`SCENARIO_KILLERS`, `SWEEP_KILLERS` in the self-check): a scenario is an end-to-end witness, the tables are the sharp instrument.
 * **Three open items stay with the owner.** The installation's grid import limit (a value only the owner can supply; the plan runs "none
   applied" and says so), the Q8 decision for the interlock, and the unattended-export approval; this folder decides none of them.

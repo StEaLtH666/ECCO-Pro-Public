@@ -7,7 +7,9 @@ THE SIMULATOR IS NOT THE INVERTER. Every parameter below carries a grade in PARA
 telemetry, aggregates only), VERIFIED_LIVE (observed in a recorded live test), ASSUMED (a placeholder with a stated reason) or
 UNMEASURED (no data either way: the default is a documented choice and the flag says so). Where the real behaviour is UNMEASURED
 (the charge response below the top rate, the taper at gentle rates, the off-grid effect of a lowered slot power, the unit of the
-setpoint) the behaviour is a PARAMETER, so a scenario can run every alternative the control-authority study lists.
+setpoint, whether the slot's own target SOC stops a charge below 100 %) and where a choice was made without data (the shape of the cliff, the
+rate at which the top-rate knee and tail give way to the gentle-rate ones) the behaviour is a PARAMETER, so a scenario can run every
+alternative the control-authority study lists.
 
 What is NOT in this file, and where it is: command delay and loss, telemetry staleness and gaps, a dongle restart or a dead dongle, a Home
 Assistant outage, the untrusted-clock state and the one-owner arbiter are properties of the channels and of the two controllers' hosts, so
@@ -46,8 +48,15 @@ PARAMETERS = (
      "the inverter's own AC input held constant at 8.982 to 8.987 kW on every saved night with the slot at 8000 W; what sets it is NOT ESTABLISHED"),
     ("knee_soc_pct", 98.0, "%", "MEASURED_REPLAY", "the plateau is flat to SOC 98 to 99 %, then the cliff (top rate only)"),
     ("cliff_width_pct", 0.85, "%", "MEASURED_REPLAY",
-     "SOC span over which the power falls to the tail: 2.5 to 4.8 min at about 8.4 kW is about 0.3 kWh (0.85 %); the 30 to 50 min trickle at 0.6 kW then covers the last 1.15 %"),
-    ("tail_dc_w", 600.0, "W", "MEASURED_REPLAY", "the trickle after the cliff: 0.55 to 0.65 kW for 30 to 50+ min (top rate)"),
+     "SOC span over which the power falls to the tail: 2.5 to 4.8 min at about 8.4 kW is about 0.3 kWh (0.85 %); the trickle at 0.6 kW then covers the last 1.15 %"),
+    ("tail_dc_w", 600.0, "W", "MEASURED_REPLAY",
+     "the trickle after the cliff (top rate): 0.55 to 0.65 kW. It ran 30 to 50 min on 2 of the 4 saved nights (18 and 19 Nov); on 20 Nov (0.64 then 0.33 kW) and 21 Nov (0.45 kW) the session ended while it was still running, so its full length is known from two nights only and the plant's 40 min is the slow end"),
+    ("cliff_shape", "linear", "enum", "ASSUMED",
+     "the shape of the power fall at the knee: 'linear' (a straight fall in SOC over cliff_width_pct, the default) or 'step' (the power drops to the tail at the knee); only the SPAN of the fall (2.5 to 4.8 min at the top rate) is measured, not its shape"),
+    ("top_rate_threshold", 0.9, "fraction", "ASSUMED",
+     "the share of ac_input_cap_w at or above which the TOP-rate knee and tail apply (knee_soc_pct, tail_dc_w) and below which the gentle-rate ones do: a parameter switch, discontinuous at that rate (with different sets the same battery reads 100 % at 5595 s on a 6000 W lease and at about 16950 s on an 8000 W one)"),
+    ("slot_target_stops_charge", True, "flag", "UNMEASURED",
+     "rung R1 (CONTROL_AUTHORITY.md 4.4 and section 9): does the inverter stop a grid charge when the SOC reaches the slot's own target below 100 %? True = it stops (expected Deye behaviour, no measurement in the evidence read), False = it keeps charging at the slot power until the battery is full; it shapes every target-below-100 night, the today baseline and the import after a lease"),
     # the charge characteristic BELOW the top rate: UNMEASURED
     ("taper_below_top_measured", False, "flag", "UNMEASURED",
      "FLAG: no night was saved below the top rate, so the two gentle-rate values below are choices, not data"),
@@ -59,7 +68,8 @@ PARAMETERS = (
      "a floor under the AC input in 'scaled' mode (a charger that cannot throttle below this); None = no floor; a scenario sets one to give a WEAK response"),
     ("unit_scale", 1.1225, "AC per setpoint W", "UNMEASURED",
      "measured at ONE point only (8000 W gave 8.98 kW AC); alternatives the study lists: 1.0 (AC grid watts), 1.06 (DC battery watts), 1.1225 (the one point), 10x (a wrong unit)"),
-    ("fp_dc_per_request", 0.94, "DC per request W", "MEASURED_REPLAY", "Free Power: the battery took about 0.94 of the register-230 request (one event, 11 Oct)"),
+    ("fp_dc_per_request", 0.97, "DC W per request W", "MEASURED_REPLAY",
+     "Free Power at 8000 W requested (register 230 = 155 A): the battery took 7.67 to 7.87 kW DC at 52.7 to 53.8 V, 0.96 to 0.98 of the request in WATTS (0.97 used; one event, 11 Oct). The 0.94 of the evidence is the CURRENT ratio (146 A of 155 A), not a power ratio"),
     # the discharge characteristic
     ("ac_output_cap_w", 7890.0, "W", "VERIFIED_LIVE", "the inverter delivered 7.89 kW AC at an 8000 W slot-power ceiling"),
     ("discharge_unit_scale", 1.0, "AC per setpoint W", "VERIFIED_LIVE", "a slot power is an AC-output ceiling, held from 500 to 7000 W"),
@@ -67,7 +77,7 @@ PARAMETERS = (
     ("ignore_ceiling_w", None, "W", "VERIFIED_LIVE", "fault injection: the 22 Sept 2026 anomaly, the battery discharged about 8.6 kW against a 1000 W ceiling (cause UNKNOWN); None = off"),
     # dynamics
     ("tau_charge_s", 5.0, "s", "MEASURED_REPLAY", "the battery reached 98 % of its plateau within 17 s of a verified Free Power start"),
-    ("tau_discharge_s", 15.0, "s", "MEASURED_REPLAY", "telemetry needs about 45 s to settle after a slot-power change (the firmware's settle)"),
+    ("tau_discharge_s", 15.0, "s", "ASSUMED", "inferred from the firmware's 45 s settle (telemetry needs about 45 s to settle after a slot-power change, about three time constants); never measured as a lag"),
     # grid and house
     ("pv_eff", 0.97, "AC per DC", "ASSUMED", "PV DC to inverter AC; the firmware's feed-forward ignores it and the loop corrects"),
     ("island_ac_cap_w", 8000.0, "W", "ASSUMED", "the most AC the inverter can supply to the house off grid"),
@@ -88,13 +98,16 @@ class PlantParams:
     knee_soc_pct: float = 98.0
     cliff_width_pct: float = 0.85
     tail_dc_w: float = 600.0
+    cliff_shape: str = "linear"
+    top_rate_threshold: float = 0.9
+    slot_target_stops_charge: bool = True
     taper_below_top_measured: bool = False
     knee_soc_gentle_pct: float = 98.0
     tail_gentle_dc_w: float = 600.0
     charge_response: str = "scaled"
     charge_min_ac_w: Optional[float] = None
     unit_scale: float = 1.1225
-    fp_dc_per_request: float = 0.94
+    fp_dc_per_request: float = 0.97
     ac_output_cap_w: float = 7890.0
     discharge_unit_scale: float = 1.0
     shutdown_soc_pct: float = 10.0
@@ -233,7 +246,7 @@ class Plant:
         if soc < knee:
             return dc_demand
         frac = (soc - knee) / p.cliff_width_pct
-        if frac >= 1.0:
+        if frac >= 1.0 or p.cliff_shape == "step":
             return tail
         return dc_demand + (tail - dc_demand) * frac
 
@@ -255,7 +268,7 @@ class Plant:
         elif env.window_active and r.slot_power_w > 0:
             # inside the owner's charge window the inverter charges to the slot's own target (acting on its own SOC reading) and then holds it:
             # the battery is idle and the grid carries the house
-            mode = "slot_charge" if soc + p.soc_bias_pct < env.slot_target_pct - 1e-9 else "hold"
+            mode = "slot_charge" if (soc + p.soc_bias_pct < env.slot_target_pct - 1e-9 or not p.slot_target_stops_charge) else "hold"
         top = False
         dc_in = 0.0
         dc_out = 0.0
@@ -265,10 +278,10 @@ class Plant:
                 ac_in_t = p.ac_input_cap_w
             else:
                 ac_in_t = min(p.ac_input_cap_w, max(r.slot_power_w * p.unit_scale, p.charge_min_ac_w or 0.0))
-            top = ac_in_t >= 0.9 * p.ac_input_cap_w
+            top = ac_in_t >= p.top_rate_threshold * p.ac_input_cap_w
         elif mode == "free_power":
             ac_in_t = min(p.ac_input_cap_w, r.fp_rate_w * p.fp_dc_per_request / p.charge_eff)
-            top = ac_in_t >= 0.9 * p.ac_input_cap_w
+            top = ac_in_t >= p.top_rate_threshold * p.ac_input_cap_w
         self.ac_in = self._lag(self.ac_in, ac_in_t, p.tau_charge_s, dt)
         if mode in ("slot_charge", "free_power"):
             dc_in = self._taper_dc(self.ac_in * p.charge_eff, soc, top)

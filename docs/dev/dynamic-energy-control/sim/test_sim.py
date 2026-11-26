@@ -895,8 +895,14 @@ check("every PARAMETERS row is a PlantParams field with the same default, and no
       all(getattr(dflt, n) == v for n, v, _u, _g, _s in P.PARAMETERS) and {n for n, *_ in P.PARAMETERS} == set(dflt.__dataclass_fields__))
 check("every parameter has a grade from the fixed list and a source", all(g in ("MEASURED_REPLAY", "VERIFIED_LIVE", "ASSUMED", "UNMEASURED") and len(s) > 10 for _n, _v, _u, g, s in P.PARAMETERS))
 unmeasured = [n for n, _v, _u, g, _s in P.PARAMETERS if g == "UNMEASURED"]
-check("the charge behaviour below the top rate is a flagged, UNMEASURED parameter set (flag, knee, tail, response, unit, off-grid cap)",
-      {"taper_below_top_measured", "knee_soc_gentle_pct", "tail_gentle_dc_w", "charge_response", "unit_scale", "slot_caps_offgrid_discharge"} <= set(unmeasured) and dflt.taper_below_top_measured is False)
+check("the charge behaviour below the top rate is a flagged, UNMEASURED parameter set (flag, knee, tail, response, unit, off-grid cap, whether the slot target stops a charge: R1)",
+      {"taper_below_top_measured", "knee_soc_gentle_pct", "tail_gentle_dc_w", "charge_response", "unit_scale", "slot_caps_offgrid_discharge", "slot_target_stops_charge"} <= set(unmeasured)
+      and dflt.taper_below_top_measured is False and dflt.slot_target_stops_charge is True)
+assumed = [n for n, _v, _u, g, _s in P.PARAMETERS if g == "ASSUMED"]
+check("the choices made without data are flagged ASSUMED parameters: the top-rate switch, the cliff's shape, the discharge lag, the PV efficiency",
+      {"top_rate_threshold", "cliff_shape", "tau_discharge_s", "pv_eff"} <= set(assumed) and dflt.top_rate_threshold == 0.9 and dflt.cliff_shape == "linear" and dflt.tau_discharge_s == 15.0)
+check("no UNMEASURED or ASSUMED behaviour is hard-coded in the plant: every PlantParams field is a PARAMETERS row (checked above) and the plant reads the three added ones",
+      all(("p." + n) in (HERE / "plant.py").read_text(encoding="utf-8") for n in ("top_rate_threshold", "cliff_shape", "slot_target_stops_charge")))
 check("the unit alternatives of the study are all parameter sets that run (AC watts, DC watts, the measured point, unbound, x10, /10)",
       set(P.UNIT_ALTERNATIVES) == {"ac_grid_watts", "dc_battery_watts", "h1_measured_point", "h2_h3_unbound", "wrong_x10", "wrong_div10"})
 readme = (HERE / "SIM_README.md").read_text(encoding="utf-8")
@@ -928,11 +934,46 @@ check("replay of the 18 Nov night: 27 to 98 percent in 170 to 180 minutes at the
 check("replay: the plateau's DC power is 8.3 to 8.6 kW and the inverter AC input is 8.98 kW (the saved nights: 8.36 to 8.58 kW and 8.982 to 8.987 kW)",
       all(8300 <= x[2] <= 8620 for x in plateau[8:-8]) and all(abs(x[3] - 8980.0) < 8.0 for x in plateau[8:-8]),
       f"{min(x[2] for x in plateau[8:-8]):.0f} to {max(x[2] for x in plateau[8:-8]):.0f}")
-check("replay: from the last sample above 7 kW to the first below 2 kW takes 2.5 to 10 minutes (the saved nights: 2.5 to 4.8 minutes by power, 5 to 10 by SOC reading)",
-      2.5 * 60 <= t_below2 - plateau[-1][0] <= 10 * 60, f"{(t_below2 - plateau[-1][0]) / 60:.1f} min")
-check("replay: the trickle after the cliff is 0.55 to 0.65 kW for 30 to 50 minutes (the saved nights: 30 to 50 minutes)",
+check("replay: from the last sample above 7 kW to the first below 2 kW takes 2.5 to 4.8 minutes (the saved nights, by power: 2.5 to 4.8 minutes)",
+      2.5 * 60 <= t_below2 - plateau[-1][0] <= 4.8 * 60, f"{(t_below2 - plateau[-1][0]) / 60:.1f} min")
+check("replay: the trickle after the cliff is 0.55 to 0.65 kW for 30 to 50 minutes (2 of the 4 saved nights, 18 and 19 Nov: the other two sessions ended while it ran; the plant's 40 minutes is the slow end)",
       bool(trickle) and 30 * 60 <= len(trickle) * P.DT_S <= 50 * 60 and all(500 <= v <= 700 for v in trickle[6:-2]),
       "no trickle" if not trickle else f"{len(trickle) * P.DT_S / 60:.0f} min, {min(trickle):.0f} to {max(trickle):.0f} W")
+pl = P.Plant(P.PlantParams(), 50.0, regs=P.Regs(fp_rate_w=8000.0))
+for _ in range(12):
+    m = pl.step(P.DT_S, P.Env(house_w=800.0, pv_w=0.0, grid_up=True, window_active=False, slot_target_pct=100.0))
+check("replay: a Free Power request of 8000 W gives 7.67 to 7.87 kW DC (the saved event: 7.67 to 7.87 kW at 52.7 to 53.8 V, 0.96 to 0.98 of the request in watts; the 0.94 in the evidence is the current ratio)",
+      7670 <= -m.batt_w <= 7870, f"{-m.batt_w:.0f} W")
+for shape in ("linear", "step"):
+    pk = replace(P.PlantParams(), cliff_shape=shape)
+    r_run, r_res = S.run_spec(replace(S.SPEC_BY_NAME["g10_taper_cliff_98"], sc=replace(S.SPEC_BY_NAME["g10_taper_cliff_98"].sc, plant=pk)), K)
+    check(f"the cliff's shape is a parameter and the 100 percent night holds with it ('{shape}')", r_res.ok, "; ".join(r_res.failures)[:200])
+# F06: the planner's world and the plant's trickle (a finding for the planner owner, pinned by the numbers the review measured)
+w_ = K.pessimistic_world(35.0)
+world_80_100 = K.pess_finish(w_, 100.0, 0.0, 80.0, None, 8980.0, 10000.0, False, False)
+slow = replace(P.PlantParams(), capacity_kwh=33.17325024182597, charge_eff=0.9345697671822305, knee_soc_pct=94.51070324069286, tail_dc_w=357.22058661599397)
+pl = P.Plant(slow, 80.0, regs=P.Regs(slot_power_w=8000.0))
+tt = 0
+while pl.reading() < 100 and tt < 60000:
+    pl.step(P.DT_S, P.Env(house_w=800.0, pv_w=0.0, grid_up=True, window_active=True, slot_target_pct=100.0))
+    tt += P.DT_S
+check(f"FINDING F06 (pinned, for the planner owner): the planner's tail fraction {K.TAIL_FRACTION} is not pessimistic about the measured trickle; a plant with a knee at 94.5 percent and a 357 W trickle needs "
+      f"{tt / 60:.0f} min from 80 to 100 percent at the top rate against the world's {world_80_100:.0f} min (the day this flips, the planner's tail was fixed and this pin is removed)",
+      tt / 60 > world_80_100, f"{tt / 60:.0f} against {world_80_100:.0f}")
+check("the declared envelope can say no: the plant of that finding is outside it, the default plant with a 90 percent target is inside",
+      bool(S.envelope_problems(replace(S.SPEC_BY_NAME["g01_nominal"].sc, plant=slow, target_soc_pct=100.0))) and not S.envelope_problems(S.SPEC_BY_NAME["g01_nominal"].sc))
+# F10: the Gentle set once with the slot target NOT stopping the charge (rung R1 unknown): every scenario that charges must still hold
+r1_diff = []
+for spx in S.SPECS:
+    if spx.sc.kind == "export":
+        continue
+    spec_r1 = replace(spx, sc=replace(spx.sc, plant=replace(spx.sc.plant, slot_target_stops_charge=False)))
+    r1_run, r1_res = S.run_spec(spec_r1, K)
+    check(f"R1 alternative (the slot target does not stop the charge), scenario {spx.sc.name}: it still holds", r1_res.ok, "; ".join(r1_res.failures)[:200])
+    if abs(r1_run.rows[-1].soc - RUNS[spx.sc.name][0].rows[-1].soc) > 1.0:
+        r1_diff.append(spx.sc.name)
+print(f"  info  with R1 = false the only difference is the end of the night: {len(r1_diff)} of the charge scenarios end above their target (the battery goes on to 100 percent, "
+      f"and the post-session import, finding F01, lasts longer)")
 check("replay: the house load rides on top of the charge (grid import = charge + house, 9.6 to 10.4 kW on the saved nights)",
       all(9300 <= x[4] <= 10300 for x in plateau[8:-8]), f"{min(x[4] for x in plateau[8:-8]):.0f} to {max(x[4] for x in plateau[8:-8]):.0f}")
 for ceil_w, lo, hi in ((2000.0, 200.0, 380.0), (3000.0, 250.0, 400.0)):
@@ -958,9 +999,19 @@ sweep_stats = {}
 bad = S.sweep(K, SWEEP_N, stats=sweep_stats)
 check(f"{3 * SWEEP_N} seeded random plants and inputs (gentle, charge fixed, export): every applicable invariant holds ({time.time() - t1:.0f} s)", not bad,
       "; ".join("%s %s" % (n, f[0][:80]) for n, f in bad[:3]))
+ALARM = sweep_stats["alarm"]["below_knee"]
+check(f"false alarms are counted: {ALARM[1]} of the {ALARM[0]} nights that reach a target at or below the pessimistic knee with {S.FALSE_ALARM_MARGIN_S / 60:.0f} min to spare carried a report "
+      f"({100.0 * ALARM[1] / ALARM[0]:.1f} percent; the stated bound is {100.0 * S.FALSE_ALARM_MAX_RATE:.0f} percent)", ALARM[0] >= 100 and ALARM[1] <= S.FALSE_ALARM_MAX_RATE * ALARM[0])
+AB = sweep_stats["alarm"]["above_knee"]
+print(f"  info  above the pessimistic knee (a 95 or 100 percent target) {AB[1]} of {AB[0]} nights that reach with a margin carry a report ({100.0 * AB[1] / AB[0]:.0f} percent): "
+      f"the planner's knee at 90 percent and its tail make 'at risk' the normal word there (finding F06, README)")
 F01_HITS = sweep_stats.get("findings", {}).get(("IMPORT_CEILING", "F01-restore (tolerated in the sweep)"), 0)
 check(f"finding F01 is alive in the sweep: {F01_HITS} of the {3 * SWEEP_N} runs end with a restore into a breach (counted, not failed; pinned at 1 or more, so the day the design is fixed this "
       f"check goes red and the tolerance in scenarios.random_spec must be removed)", F01_HITS >= 1)
+t1 = time.time()
+bad_m = S.sweep(K, 350, base_seed=20261126, kinds=("gentle", "charge_fixed"), envelope="measured")
+check(f"a sweep of {2 * 350} nights with the MEASURED knee and trickle (outside the world's envelope, F06): nothing but the tolerated classes fails ({time.time() - t1:.0f} s)", not bad_m,
+      "; ".join("%s %s" % (n, f[0][:80]) for n, f in bad_m[:3]))
 t1 = time.time()
 bad2 = S.sweep(K, 400, base_seed=777001)
 check(f"a second seeded sweep from another base seed (777001, the review's), {3 * 400} runs: every applicable invariant holds ({time.time() - t1:.0f} s)", not bad2,
@@ -1143,6 +1194,8 @@ SCENARIO_KILLERS = {
     "N16": "g05_kettle_spikes",                       # the planning house load is the latest sample only
     "N20": "f02_fixed_import_breach",                 # Charge Fixed restarts at the full rate into a breach
 }
+# mutants the SWEEP must catch on its own (no named scenario): the controller that cries wolf and misses the deadline (F07), the guard that is off (F01)
+SWEEP_KILLERS = {"BI12b": ("gentle", 250), "BI12a": ("gentle", 150), "BI03": ("charge_fixed", 150)}
 BSRC = (HERE / "bench.py").read_text(encoding="utf-8")
 BENCH_MUTANTS = [
     ("BI26 the dongle ignores RAISE_STOP (the Stop SOC is never raised)", '            if lease.kind == "export" and cmd[1] is not None and cmd[1] > (lease.st.stop_soc_pct or 0.0):\n', "            if False:\n"),
@@ -1172,6 +1225,10 @@ for name, old, new in MUTANTS:
     if mid in SCENARIO_KILLERS:
         sf = scenario_failure(mutant, SCENARIO_KILLERS[mid])
         check(f"mutant {mid} dies in scenario {SCENARIO_KILLERS[mid]} on its own ({sf})", sf is not None)
+    if mid in SWEEP_KILLERS:
+        sw_kind, sw_n = SWEEP_KILLERS[mid]
+        sw_bad = S.sweep(mutant, sw_n, kinds=(sw_kind,))
+        check(f"mutant {mid} dies in the seeded sweep on its own ({len(sw_bad)} of {sw_n} {sw_kind} runs fail: {sw_bad[0][1][0][:70] if sw_bad else None})", bool(sw_bad))
 check(f"every mutant is killed ({len(MUTANTS) - len(survivors)} of {len(MUTANTS)}; {killed_by_units} by the units, the rest by the scenarios)", not survivors, str(survivors))
 check("the scenario killers name mutants that exist and scenarios that exist", set(SCENARIO_KILLERS) <= labels and all(v in S.SPEC_BY_NAME for v in SCENARIO_KILLERS.values()),
       str(sorted(set(SCENARIO_KILLERS) - labels)))

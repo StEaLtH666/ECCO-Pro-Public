@@ -286,11 +286,11 @@ class Bench:
             self.run.lost += 1
             self.run.log(t, "command %d (%s) lost in transit" % (i, cmd[0]))
             return
-        self.queue.append((t + self.sc.cmd_delay_s, i, cmd))
+        self.queue.append((t + self.sc.cmd_delay_s, i, cmd, t))
 
     def rec(self, t, who, policy, d, inp=None, ctx=None):
         """Record a published decision. `inp` gives the age of the frame it was decided on; `ctx` (a report only) is what is needed to ask the
-        reference kernel the same question again: (what, inputs, objective, limits, state)."""
+        reference kernel the same question again: (what, inputs, objective, limits, state, kind)."""
         self.run.recs.append(Rec(t, who, policy, d.reason, d.detail, d.wanted_w, d.write_w, d.end, d.unreachable, d.explanation,
                                  None if inp is None else inp.frame.age_s, ctx if d.unreachable else None))
         # a REPORT is any published decision that says the objective cannot be met, from Home Assistant or from the dongle's own guard
@@ -385,7 +385,7 @@ class Bench:
             lease.pending = (t, "dump_ceiling_w", p["first_w"], "start", None)
         self.all_leases.append(self.lease)
 
-    def handle_command(self, t, cmd):
+    def handle_command(self, t, cmd, sent=None):
         K = self.K
         name = cmd[0]
         lease = self.lease
@@ -408,7 +408,7 @@ class Bench:
             forced = lease.st.v_w is not None and cmd[1] < lease.st.v_w and lease.st.v_w > self.power_ceiling_w + 1e-9
             write, why = K.ramp_charge(lease.st, t, cmd[1], self.power_ceiling_w, forced=forced)
             if write is None:
-                self.run.refusals.append((t, "gentle", "ADJUST refused by the lease budget: " + str(why)))
+                self.run.refusals.append((t, "gentle", "ADJUST refused by the lease budget: " + str(why), sent))
                 self.run.log(t, "ADJUST %s refused by the dongle's budget (%s)" % (cmd[1], why))
                 return
             kind = "forced" if forced else "change"
@@ -466,8 +466,8 @@ class Bench:
                 return
         due = sorted([q for q in self.queue if q[0] <= t + 1e-9], key=lambda q: (q[0], q[1]))
         self.queue = [q for q in self.queue if q[0] > t + 1e-9]
-        for (_t, _i, cmd) in due:
-            self.handle_command(t, cmd)
+        for (_t, _i, cmd, sent) in due:
+            self.handle_command(t, cmd, sent)
         while self.second:
             self.handle_start(t, self.second.pop(0))
         lease = self.lease
@@ -610,7 +610,7 @@ class Bench:
         ADJUST or END anything; it keeps judging the rate in force and REPORTS a target that is going to be missed (kernel.plan_watch).
         Report only: this method never sends a command."""
         d = self.K.plan_watch(inp, obj, lim, self.ha_state)
-        ctx = ("watch", None, inp, obj, lim, self.ha_state)
+        ctx = ("watch", inp, obj, lim, self.ha_state, None)
         if d.unreachable:
             self.rec(t, "ha", name, d, inp, ctx)
         elif d.reason == "stop":
@@ -627,9 +627,9 @@ class Bench:
                 return
             d = plan(inp, obj, lim, self.ha_state)
             if report_only:
-                self.ha_report(t, name, d, inp, ("plan", plan, inp, obj, lim, self.ha_state))
+                self.ha_report(t, name, d, inp, ("plan", inp, obj, lim, self.ha_state, None))
                 return
-            self.rec(t, "ha", name, d, inp, ("plan", plan, inp, obj, lim, self.ha_state))
+            self.rec(t, "ha", name, d, inp, ("plan", inp, obj, lim, self.ha_state, None))
             if d.reason == "stop":
                 self.ha_over = True      # the target is reached or the window is over: nothing more to plan tonight
                 return
@@ -644,9 +644,9 @@ class Bench:
         st = K.carry_memory(lease.st, self.ha_state)
         d = plan(inp, obj, lim, st)
         if report_only:
-            self.ha_report(t, name, d, inp, ("plan", plan, inp, obj, lim, st))
+            self.ha_report(t, name, d, inp, ("plan", inp, obj, lim, st, None))
             return
-        self.rec(t, "ha", name, d, inp, ("plan", plan, inp, obj, lim, st))
+        self.rec(t, "ha", name, d, inp, ("plan", inp, obj, lim, st, None))
         if d.end:
             self.send(t, ("END", d.detail))
         elif name == "gentle" and d.write_w is not None and d.detail != "import_ceiling" and t >= self.ha_inflight_until and lease.pending is None:

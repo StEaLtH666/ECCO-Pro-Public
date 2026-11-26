@@ -12,6 +12,11 @@ Invariants (every run; each is True, False or None = does not apply to this kind
   POWER_CEILING          every setpoint written is inside [500 W, ceiling] and, for a lease, never above the pre-session value
   BUDGETS                dwell, change count, write count (charge) and settle, write count (export) are never exceeded
   REACHES_OR_REPORTS     the target is reached by the deadline, or 'unreachable' was reported at least 15 min before it
+  REACHES_DEADLINE       (Gentle) REACHING is judged on its own, a report does not excuse it: on a night that today's fixed rate would reach 30 minutes
+                         before the deadline (and that the import ceiling does not bind), the session reaches the target by the deadline too
+  REPORT_JUSTIFIED       every 'unreachable' report is asked of the REFERENCE kernel again on the same inputs; a report it does not stand behind is a
+                         false alarm (the cry-wolf that used to pass REACHES_OR_REPORTS). The SWEEP also counts the false alarms on nights that
+                         reach with a 30 minute margin (FALSE_ALARM_MAX_RATE)
   NEVER_WORSE_THAN_TODAY a night that today's fixed rate would have won (target reached 25 minutes before the window end) is not lost (Gentle)
   NO_UNTRUSTED_ACTUATION no start, change or loop write while the clock it depends on is untrusted
   NO_REWRITE             no setpoint write that repeats the value already in force (a double write wastes the flash-wear budget)
@@ -37,12 +42,15 @@ from bench import Scenario
 
 TICK = P.DT_S
 INVARIANTS = ("RESERVE_FLOOR", "IMPORT_CEILING", "POWER_CEILING", "BUDGETS", "REACHES_OR_REPORTS", "NEVER_WORSE_THAN_TODAY", "NO_UNTRUSTED_ACTUATION",
-              "NO_REWRITE", "NO_STALE_DRIVE", "COMMAND_FOLLOWED", "ONE_WRITER", "EXPLAINED", "RESTORED_OR_ALERTED", "PHYSICAL")
+              "REACHES_DEADLINE", "REPORT_JUSTIFIED", "NO_REWRITE", "NO_STALE_DRIVE", "COMMAND_FOLLOWED", "ONE_WRITER", "EXPLAINED", "RESTORED_OR_ALERTED", "PHYSICAL")
 # bench and plant sanity checks: no edit of the CONTROLLER (the kernel) can make them fail, because the dongle model's arbiter and the plant's
 # clamps enforce them; they are kept so that an edit of the bench or the plant cannot break them silently (the bench mutants of test_sim.py)
 SANITY = ("ONE_WRITER", "PHYSICAL")
 SETPOINT_REGS = ("slot_power_w", "fp_rate_w", "dump_ceiling_w")
 REPORT_LEAD_S = 900.0     # an unreachable target must be reported at least this long before the deadline
+FEASIBLE_MARGIN_S = 1800.0      # REACHES_DEADLINE: a night today's rate reaches this long before the deadline is one the session must reach
+FALSE_ALARM_MARGIN_S = 1800.0   # the sweep's false alarms: a report on a night that reaches the target this long before the deadline ...
+FALSE_ALARM_MAX_RATE = 0.10     # ... may not exceed this share of such nights below the planner's pessimistic knee (the measured rate is 0 to 9 percent)
 TARGET_TOL = 0.5          # the reading is whole percent: a true SOC within half a point of the target reads as the target
 
 
@@ -104,6 +112,49 @@ def codes_of(run):
     for r in run.recs:
         c[r.reason + "/" + r.detail] += 1
     return c
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# the declared envelope of the pessimistic world (F06 of the N4 review)
+# ---------------------------------------------------------------------------------------------------------------------------
+def plant_states(sc):
+    """The plant parameters the night passes through: the starting ones and each state a `plant` event creates."""
+    cur, out = sc.plant, [sc.plant]
+    for (_t, name, a) in sorted(sc.events, key=lambda e: e[0]):
+        if name == "plant":
+            cur = replace(cur, **a)
+            out.append(cur)
+    return out
+
+
+def world_tail_min_w(p, gentle):
+    """The DC trickle power the pessimistic world assumes at the top AC rate (tailFraction of the rate at efficiency 0.90), or at the highest
+    rate at which the gentle-rate parameters still apply (below top_rate_threshold of the AC cap). A plant whose trickle is lower is SLOWER
+    than the world there."""
+    rate = p.ac_input_cap_w * (p.top_rate_threshold if gentle else 1.0)
+    return KR.TAIL_FRACTION * KR.EFF_PESSIMISTIC * rate
+
+
+def envelope_problems(sc):
+    """Where the plant of a charge night leaves the envelope the pessimistic world covers: the capacity above what the kernel is told plus
+    its band and the SOC scale error, the charge efficiency below 0.90, a knee below 90 percent, and (when the target lies above the knee,
+    where the trickle sets the time) a trickle slower than the world's. Inside it the guarantee is 'reached by the deadline or reported
+    early'; outside it the guarantee is only what the projection can see. The sweep's generator asserts every draw is inside."""
+    out = []
+    cap_max = sc.trusted_capacity_kwh * (1.0 + KR.CAPACITY_BAND_PCT / 100.0) / (1.0 - KR.SOC_SCALE_ERR_PCT / 100.0)
+    for p in plant_states(sc):
+        if p.capacity_kwh > cap_max + 1e-9:
+            out.append("capacity %.1f kWh is above the %.1f kWh the world allows" % (p.capacity_kwh, cap_max))
+        if p.charge_eff < KR.EFF_PESSIMISTIC - 1e-9:
+            out.append("charge efficiency %.2f is below the world's %.2f" % (p.charge_eff, KR.EFF_PESSIMISTIC))
+        if min(p.knee_soc_pct, p.knee_soc_gentle_pct) < KR.KNEE_PESSIMISTIC_PCT - 1e-9:
+            out.append("a knee below the world's %.0f percent" % KR.KNEE_PESSIMISTIC_PCT)
+        if sc.target_soc_pct > min(p.knee_soc_pct, p.knee_soc_gentle_pct):
+            if p.tail_dc_w < world_tail_min_w(p, False) - 1e-9:
+                out.append("the top-rate trickle %.0f W is slower than the world's %.0f W" % (p.tail_dc_w, world_tail_min_w(p, False)))
+            if p.tail_gentle_dc_w < world_tail_min_w(p, True) - 1e-9:
+                out.append("the gentle-rate trickle %.0f W is slower than the world's %.0f W" % (p.tail_gentle_dc_w, world_tail_min_w(p, True)))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -324,9 +375,12 @@ def inv_budgets(run):
         else:
             if len([w for w in mine if w.kind in ("start", "change", "loop", "forced")]) > 1:
                 problems.append("lease %d: a fixed-rate session wrote more than once" % l["id"])
+    # a request the dongle refuses for its budget is the policy's failure, unless a write of the lease landed while the request was on its way
+    # (a forced reduction between the decision and the arrival: the dongle is right to refuse the older, ordinary request)
     budget_refusals = [r for r in run.refusals if "budget" in r[2] or "dwell" in r[2]]
-    if budget_refusals:
-        problems.append("the dongle refused %d requests for the budget" % len(budget_refusals))
+    raced = [r for r in budget_refusals if len(r) > 3 and r[3] is not None and any(w.ok and w.kind in ("forced", "change") and r[3] <= w.t <= r[0] for w in run.writes)]
+    if len(budget_refusals) > len(raced):
+        problems.append("the dongle refused %d requests for the budget" % (len(budget_refusals) - len(raced)))
     return not problems, "; ".join(problems[:3]) if problems else "all budgets kept"
 
 
@@ -344,6 +398,56 @@ def inv_reaches_or_reports(run):
     if t is not None and t <= dl - REPORT_LEAD_S:
         return True, "target missed (SOC %.1f) but reported %s at t=%d s, %d min before the deadline" % (r.soc, run.first_unreachable_detail, t, (dl - t) / 60)
     return False, "SOC %.1f at the deadline (target %.0f) and no timely report (first report %s)" % (r.soc, sc.target_soc_pct, t)
+
+
+def inv_reaches_deadline(run):
+    """REACHING judged on its own (F07 of the N4 review): a report never excuses a missed deadline on a night that was winnable. Winnable: the
+    same night with no ECCO (today's rate in force all night) reaches the target FEASIBLE_MARGIN_S before the deadline and does not breach the
+    owner's import ceiling (a ceiling that binds makes today's rate the wrong yardstick). Then the session must reach it by the deadline."""
+    sc = run.sc
+    if sc.kind != "gentle":
+        return None, "n/a (not a Gentle night)"
+    base = getattr(run, "baseline", None)
+    if base is None:
+        return None, "no baseline run"
+    out_of = envelope_problems(sc)
+    if out_of:
+        return None, "n/a: the plant is outside the pessimistic world's envelope (%s); there the guarantee is 'reported', not 'reached'" % out_of[0]
+    if any(name == "power_ceiling" and a["w"] < sc.original_w for (_t, name, a) in sc.events):
+        return None, "n/a: the owner lowered the Power Ceiling below today's rate, so today's rate is not the yardstick"
+    dl = deadline_s(sc)
+    today = next((x.t for x in base.rows if x.read >= sc.target_soc_pct - 1e-9), None)
+    if today is None or today > dl - FEASIBLE_MARGIN_S:
+        return True, "today's rate does not reach the target %d min before the deadline: nothing to hold the session to" % (FEASIBLE_MARGIN_S / 60)
+    if any(x.imp_ceiling is not None and x.grid > x.imp_ceiling for x in base.rows):
+        return True, "the owner's import ceiling binds on this night (today's rate would breach it): today's rate is not the yardstick"
+    ours = next((x.t for x in run.rows if x.read >= sc.target_soc_pct - 1e-9), None)
+    ok = ours is not None and ours <= dl
+    return ok, ("today's rate reaches it at %d s and the session at %s s, by the deadline (%d s)" % (today, ours, dl)) if ok else \
+        "today's rate reaches the target at %d s, %d min before the deadline, and the session %s (a report does not excuse it)" % (today, (dl - today) / 60, "never did" if ours is None else "only at %d s" % ours)
+
+
+def inv_report_justified(run):
+    """Every 'unreachable' report is asked of the REFERENCE kernel (the real one, never a mutated copy) on the very inputs it was decided on
+    (the replay context the bench recorded): the reference must say 'unreachable' too. A report it does not stand behind is a false alarm."""
+    if run.sc.kind == "export":
+        return None, "n/a (not a charge)"
+    bad, n = [], 0
+    for r in run.recs:
+        if not r.unreachable or r.ctx is None:
+            continue
+        n += 1
+        what, inp, obj, lim, st, kind = r.ctx
+        if what == "plan":
+            d = KR.plan_gentle(inp, obj, lim, st) if r.policy == "gentle" else KR.plan_charge_fixed(inp, obj, lim, st, owner_rate_w=run.sc.owner_rate_w)
+        elif what == "watch":
+            d = KR.plan_watch(inp, obj, lim, st)
+        else:
+            d = KR.charge_guards(inp, obj, lim, st, kind)
+        if not d.unreachable:
+            bad.append((r.t, r.who, r.detail, "%s/%s" % (d.reason, d.detail)))
+    return not bad, ("%d report(s), each confirmed by the reference kernel on the same inputs" % n) if not bad else \
+        "%d of %d report(s) are false alarms (t, who, said, reference says): %s" % (len(bad), n, bad[:3])
 
 
 def inv_never_worse(run):
@@ -480,6 +584,7 @@ def inv_physical(run):
 
 CHECKS = {"RESERVE_FLOOR": inv_reserve_floor, "IMPORT_CEILING": inv_import_ceiling, "POWER_CEILING": inv_power_ceiling, "BUDGETS": inv_budgets,
           "REACHES_OR_REPORTS": inv_reaches_or_reports, "NEVER_WORSE_THAN_TODAY": inv_never_worse, "NO_UNTRUSTED_ACTUATION": inv_no_untrusted,
+          "REACHES_DEADLINE": inv_reaches_deadline, "REPORT_JUSTIFIED": inv_report_justified,
           "NO_REWRITE": inv_no_rewrite, "NO_STALE_DRIVE": inv_no_stale_drive, "COMMAND_FOLLOWED": inv_command_followed, "ONE_WRITER": inv_one_writer,
           "EXPLAINED": inv_explained, "RESTORED_OR_ALERTED": inv_restored_or_alerted, "PHYSICAL": inv_physical}
 
@@ -560,6 +665,8 @@ def evaluate(spec, run):
             classes = {k for k, _t in (import_analysis(run) or {"violations": []})["violations"]} if name == "IMPORT_CEILING" else set()
             if name == "IMPORT_CEILING" and classes and classes <= set(spec.tolerate):
                 hit.append((name, "F01-restore (tolerated in the sweep)"))
+            elif name in spec.tolerate:
+                hit.append((name, "F06-tail (tolerated outside the envelope)"))
             else:
                 failures.append("%s: %s" % (name, detail))
     unknown = set(pins) - set(inv)
@@ -868,7 +975,7 @@ add(gentle("g02_heavy_overnight_load", "A heavy overnight house load (4.5 kW for
            house=Hs((0, 800), (5400, 4500), (10800, 800))),
     X_reached(), X_saw("ha", "increase", "behind_plan", present=False),
     covers=("REQ-A3", "REQ-A10", "REQ-B5"))
-add(gentle("g03_heavy_load_import_ceiling", "The same load with an 11 kW import ceiling: import would pass it, so the setpoint is lowered at once and the target reported at risk.",
+add(gentle("g03_heavy_load_import_ceiling", "The same load with an 11 kW import ceiling: import would pass it, so the setpoint is lowered at once; the ceiling leaves too little for the target, which is reported unreachable for the import headroom from 6000 s (16 reports) and at risk later (11).",
            house=Hs((0, 800), (3600, 5000), (9000, 800)), import_ceiling_w=11000.0),
     X_saw("dongle", "reduce", "import_ceiling"), X_reported_by(14400 - REPORT_LEAD_S),
     covers=("REQ-A4", "REQ-A7", "REQ-A9", "REQ-B5", "REQ-C10", "REQ-D2"))
@@ -900,10 +1007,26 @@ add(gentle("g09_efficiency_gain", "Efficiency better than assumed (0.97) and a s
            plant=P.PlantParams(charge_eff=0.97, capacity_kwh=30.0)),
     X_reached(), X_saw("ha", "reduce", "ahead_of_plan"),
     covers=("REQ-A5", "REQ-A10"))
-add(gentle("g10_taper_cliff_98", "Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) says 'at risk' where the real knee (98) lets the night reach, so the plan is conservative and never optimistic.",
+add(gentle("g10_taper_cliff_98", "Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) makes it say 'unreachable' (deadline) 26 times from the first plan tick at 300 s, and 'at risk' once, where the real knee (98) lets the night reach: conservative about the knee, NOT about the tail (finding F06, g36).",
            soc0_pct=40.0, target_soc_pct=100.0, slot_target_pct=100.0),
     X_reached(), X_min_decisions(10),
     covers=("REQ-A7", "REQ-A12", "REQ-B6"))
+def X_missed_deadline():
+    def f(run):
+        best = max(x.read for x in run.rows if x.t <= deadline_s(run.sc))
+        return best < run.sc.target_soc_pct - 1e-9, "highest SOC reading by the deadline %.0f (target %.0f)" % (best, run.sc.target_soc_pct)
+    return ("the target is NOT reached by the deadline", f)
+
+
+add(gentle("g36_slow_tail_outside_the_world", "FINDING F06 (the review's night, sweep seed 4395984): a plant with its knee at 94.5 percent and a 357 W trickle, a 100 percent target and a heavy house: at the first plan tick the kernel says 'Starting at 8000 W: the lowest rate that still reaches 100%' (the world's trickle is 1.0 kW), the plant needs 17 minutes more than the world says, the deadline is missed and the miss is reported early by the target guard's hand-back; the planner's tail fraction is the planner owner's to review.",
+           plant=P.PlantParams(capacity_kwh=33.17325024182597, charge_eff=0.9345697671822305, knee_soc_pct=94.51070324069286, tail_dc_w=357.22058661599397),
+           soc0_pct=75.4047636289063, target_soc_pct=100.0, buffer_s=1800.0, import_ceiling_w=16000.0, plan_s=600.0, react_s=705.0, cmd_delay_s=15.0, noise_w=25.0,
+           tel_gaps=((7835.247150570427, 7880.247150570427),), seed=4395984,
+           house=P.Series([(0.0, 463.93611588050976), (749.643956686736, 4635.884870972243), (2401.8067751313047, 3599.3574397665284), (4065.555577581634, 998.7312887321561)],
+                          spikes=[(1067.806848905636, 193.3833617708355, 2643.9870930329807), (949.3831335077355, 227.29499642204422, 2785.7504659922233),
+                                  (1549.324791128979, 234.1131229972906, 2655.1003655625136), (4947.063111003732, 243.80111889339088, 2050.9480275125884)])),
+    X_saw("ha", "increase", "start"), X_missed_deadline(), X_report_between(1200, 14400 - 900), X_leases_count(1),
+    covers=("REQ-A9", "REQ-A12"))
 add(gentle("g11_unit_ac_watts", "Unit alternative: the setpoint is AC grid watts (scale 1.0). The plan measures the gain; it never assumes it.",
            plant=P.PlantParams(unit_scale=1.0)),
     X_reached(), X_gain_measured_near(1.0),
@@ -1176,12 +1299,16 @@ def _random_house(rng, horizon_s, calm_after_s, spiky):
     return P.Series(sorted(pts), spikes=spikes)
 
 
-def random_spec(seed, kind):
-    """One random spec of `kind` (gentle, charge_fixed or export). The plant stays inside the declared envelope of the pessimistic world
-    (capacity up to 9 % above what the kernel is told is already inside its band, efficiency not below 0.90, the knee at or above 90 %),
-    so the guarantee 'reached, or reported early' is claimed only where it can hold."""
+def random_spec(seed, kind, envelope="world"):
+    """One random spec of `kind` (gentle, charge_fixed or export). With envelope='world' (the default) the plant stays inside the declared
+    envelope of the pessimistic world (envelope_problems: capacity within its band, efficiency not below 0.90, the knee at or above 90 %,
+    a trickle not slower than the world's, the gentle-rate knee and trickle drawn too) and the generator ASSERTS it, so the guarantee
+    'reached, or reported early' is claimed only where it can hold. With envelope='measured' the knee and trickle are the measured ones
+    (knee 92 to 99 percent, trickle 350 to 800 W, 7 percent of the plateau), which the planner's world is NOT pessimistic about: the
+    sweep of that kind counts the nights it misses without a report as finding F06 instead of failing on them."""
     import random
     rng = random.Random(seed)
+    rng2 = random.Random(seed * 31 + 7)       # the gentle-rate knee and trickle: a second stream, so the other draws of a seed do not move
     cmd_delay = rng.choice((0.0, 0.0, 15.0, 45.0, 90.0))
     noise = rng.choice((0.0, 0.0, 25.0))
     gaps = tuple((t0, t0 + rng.choice((15.0, 45.0, 75.0))) for t0 in sorted(rng.uniform(900.0, 9000.0) for _ in range(rng.choice((0, 0, 1, 2)))))
@@ -1189,8 +1316,16 @@ def random_spec(seed, kind):
         trusted = 35.0
         target = rng.choice((60.0, 70.0, 80.0, 90.0, 95.0, 100.0))
         # a sensor error is sampled only when the target is below 100: a BMS reads 100 when it is full, whatever its scale error elsewhere
+        top_tail_min = KR.TAIL_FRACTION * KR.EFF_PESSIMISTIC * P.PlantParams().ac_input_cap_w
+        gentle_tail_min = KR.TAIL_FRACTION * KR.EFF_PESSIMISTIC * P.PlantParams().top_rate_threshold * P.PlantParams().ac_input_cap_w
+        if envelope == "world":
+            tail_top = rng.uniform(top_tail_min, top_tail_min + 400.0)
+            knee_g, tail_g = rng2.uniform(KR.KNEE_PESSIMISTIC_PCT, 99.0), rng2.uniform(gentle_tail_min, gentle_tail_min + 400.0)
+        else:
+            tail_top = rng.uniform(350.0, 800.0)
+            knee_g, tail_g = rng2.uniform(92.0, 99.0), rng2.uniform(350.0, 800.0)
         plant = P.PlantParams(capacity_kwh=rng.uniform(22.0, 37.5), charge_eff=rng.uniform(0.90, 0.97), knee_soc_pct=rng.uniform(92.0, 99.0),
-                              tail_dc_w=rng.uniform(350.0, 800.0), unit_scale=rng.choice((1.0, 1.0 / 0.945, 1.1225)),
+                              tail_dc_w=tail_top, knee_soc_gentle_pct=knee_g, tail_gentle_dc_w=tail_g, unit_scale=rng.choice((1.0, 1.0 / 0.945, 1.1225)),
                               soc_bias_pct=rng.uniform(-1.0, 1.0) if target < 100.0 else 0.0)
         win_h = rng.choice((4.0, 5.0, 6.0))
         window = (0.0, win_h * 3600.0)
@@ -1205,9 +1340,15 @@ def random_spec(seed, kind):
                       react_s=plan_s + cmd_delay + 90.0,
                       cmd_delay_s=cmd_delay, noise_w=noise, tel_gaps=gaps, seed=seed, table_charges=kind == "gentle",
                       owner_rate_w=8000.0 if kind == "charge_fixed" else None)
-        skip = ()
+        if envelope == "world":
+            bad_draw = envelope_problems(sc)
+            assert not bad_draw, "the generator drew a plant outside the declared envelope (seed %d): %s" % (seed, bad_draw)
+            tol = ("restore",)
+        else:
+            # outside the world's envelope the projection cannot see a miss: the unreported misses are counted as finding F06, not failed
+            tol = ("restore", "REACHES_OR_REPORTS")
         # a restore into a known breach is finding F01 of the design (pinned in the scenarios, README): the sweep counts it, it does not fail on it
-        return Spec(sc=sc, skip=skip, tolerate=("restore",))
+        return Spec(sc=sc, skip=(), tolerate=tol)
     cap = rng.uniform(25.0, 40.0)
     soc0 = rng.uniform(40.0, 90.0)
     reserve = rng.uniform(10.0, 35.0)
@@ -1234,21 +1375,34 @@ def random_spec(seed, kind):
     return Spec(sc=sc)
 
 
-def sweep(K, n_per_kind, base_seed=20261126, kinds=("gentle", "charge_fixed", "export"), stats=None):
+def sweep(K, n_per_kind, base_seed=20261126, kinds=("gentle", "charge_fixed", "export"), stats=None, envelope="world"):
     """Run n_per_kind random specs of each kind against the kernel module K. Returns the list of (spec name, [failure texts]) that failed.
     `stats`, when given, is a dict that is filled with what the sweep exercised: runs, findings hit (a restore into a breach is counted, not failed)."""
     bad = []
+    st = stats if stats is not None else {}
     for kind in kinds:
         for i in range(n_per_kind):
-            spec = random_spec(base_seed + i * 7919 + {"gentle": 0, "charge_fixed": 1, "export": 2}[kind] * 1000003, kind)
+            spec = random_spec(base_seed + i * 7919 + {"gentle": 0, "charge_fixed": 1, "export": 2}[kind] * 1000003, kind, envelope)
             run, res = run_spec(spec, K)
-            if stats is not None:
-                stats["runs"] = stats.get("runs", 0) + 1
-                for fnd in res.findings:
-                    stats.setdefault("findings", {})
-                    stats["findings"][fnd] = stats["findings"].get(fnd, 0) + 1
+            st["runs"] = st.get("runs", 0) + 1
+            for fnd in res.findings:
+                st.setdefault("findings", {})
+                st["findings"][fnd] = st["findings"].get(fnd, 0) + 1
+            if kind != "export":
+                dl = deadline_s(spec.sc)
+                t_reach = next((x.t for x in run.rows if x.read >= spec.sc.target_soc_pct - 1e-9), None)
+                if t_reach is not None and t_reach <= dl - FALSE_ALARM_MARGIN_S:
+                    a = st.setdefault("alarm", {}).setdefault("below_knee" if spec.sc.target_soc_pct <= KR.KNEE_PESSIMISTIC_PCT else "above_knee", [0, 0])
+                    a[0] += 1
+                    a[1] += 1 if run.first_unreachable_t is not None else 0
             if not res.ok:
                 bad.append((spec.sc.name, res.failures))
+    # false alarms: a report on a night that reaches the target with a margin, counted below the planner's pessimistic knee, where the world
+    # is not meant to cry wolf (above it, the planner's own knee and tail make 'at risk' the normal word for a 95 or 100 percent target)
+    a = st.get("alarm", {}).get("below_knee")
+    if a is not None and a[0] >= 100 and a[1] > FALSE_ALARM_MAX_RATE * a[0]:
+        bad.append(("sweep_false_alarms", ["%d of %d nights that reach a target at or below the pessimistic knee with %d min to spare carried a report (%.0f percent, the stated bound is %.0f percent)" % (
+            a[1], a[0], FALSE_ALARM_MARGIN_S / 60, 100.0 * a[1] / a[0], 100.0 * FALSE_ALARM_MAX_RATE)]))
     return bad
 
 
