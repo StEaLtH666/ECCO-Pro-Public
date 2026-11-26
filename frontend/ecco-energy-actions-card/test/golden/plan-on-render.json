@@ -1,0 +1,38 @@
+{
+  "idle-with-advice": {
+    "sha256": "891b86e7f69ba8038f79884b23ac3d98172c8d1b6d767bb830399ba7cc36f4d4",
+    "length": 15113
+  },
+  "idle-without-advice": {
+    "sha256": "78f42943bd4aaeef25d4ae37717955b7c943446c3b781a3614543e8d0bdd40d1",
+    "length": 15454
+  },
+  "advice-paused": {
+    "sha256": "928b2c562d82743abf7aef0353855235436ebaa076eac56df7d675160832c673",
+    "length": 15409
+  },
+  "advice-proposes-other-target": {
+    "sha256": "3148b8026895f7dc4e6d3f81ee5377ccd46290f1972be97267e93834f468f4f0",
+    "length": 15212
+  },
+  "no-reserve-entity": {
+    "sha256": "f68832ac59a792711963316c169314d87d705c5b91084cc11dc116fb83cbc9d0",
+    "length": 15254
+  },
+  "no-plan-block": {
+    "sha256": "62ce9543dd1fe2e396badd581e9f23e7576593e72e908012983f7921ebe3d32a",
+    "length": 10213
+  },
+  "unreadable-table": {
+    "sha256": "be8d6cc8920a1dd64561e18332fe96933b14d694e83444deb1383da2f44cbaee",
+    "length": 10074
+  },
+  "armed-and-active": {
+    "sha256": "792f2ba25dee52ad9de3fc63e54dcfed4e9e4e531ff8836bd58d3ddbc3961209",
+    "length": 14890
+  },
+  "unrelated-helper-names": {
+    "sha256": "891b86e7f69ba8038f79884b23ac3d98172c8d1b6d767bb830399ba7cc36f4d4",
+    "length": 15113
+  }
+}

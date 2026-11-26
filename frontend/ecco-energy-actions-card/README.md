@@ -183,6 +183,82 @@ layout: tabbed        # optional - side-by-side (default) | tabbed
     modes so a stale "tap again" can never apply to the other one. The
     firmware's own mutual-exclusion preconditions apply unchanged.
 
+### Plan views and guarded overrides (default off)
+
+`show_plan: true` adds a **Plan** section at the bottom of the card: a **Tomorrow's Plan** strip (expected import, export,
+solar, charge finish, reserve, confidence, each with a Proposed / Armed / Executing / Applied and verified / Mismatch / Unknown
+chip, plus a **Why?** detail and the planned settings), a **six-slot TOU timeline** (intended versus what the inverter reports,
+mismatches and plans that do not fit six slots in plain words) and an honest SHADOW / advice-only line. Absent, `false` or any
+value other than `true`: the card renders exactly as before (pinned by `test/planView.test.ts` against a golden captured
+from the pre-plan source).
+
+```yaml
+show_plan: true
+plan:                                   # all optional; anything missing is shown as unknown, never guessed
+  entity_prefix: ecco_clock_dongle      # the six TOU slot entities (same prefix as the TOU Settings card)
+  reserve: input_number.ecco_minimum_reserve_soc
+  control_lock: input_boolean.example   # only an explicit "off" counts as unlocked; absent = export is not placed (fail-safe)
+  advice:                               # defaults: the Intelligence contract's generic sensor.ecco_intel_* ids
+    status: sensor.ecco_intel_status
+```
+
+The views **display**: with no plan helper entity configured there is no button, no handler, no service call and no entity write (a
+test asserts `hass.callService` is never called). Quick overrides appear as a read-only "none active" line. Figures come from the Intelligence advice entities
+(import is Intelligence's planned overnight grid charge); a paused, stale or not-OK advice withholds every figure with its
+reason. A setting reads "Applied and verified" only when a read-back equals it. The logic is the pure `frontend/ecco-plan-core`
+package, bundled in (no runtime dependency): `src/plan/adapter.ts` (entities to plan inputs), `present.ts` (wording and
+chips), `view.ts` (Lit templates).
+
+**Quick overrides (stage 3, offline, nothing installed).** With the plan helper package installed
+(`home-assistant/packages/ecco_plan_helpers.yaml`, see `frontend/ecco-plan-core/README.md`) the same section also offers Hold battery, Skip
+tonight and Prepare for power cut: the owner's default, the lengths inside the owner's limits and "until 07:00", the running override with
+its expiry and a Cancel, why a start is not offered, and the scripts' own last answer (a refusal says why, with a stable code). Each button
+calls `script.turn_on` on `script.ecco_plan_override_start` or `script.ecco_plan_override_cancel` and on nothing else: `src/plan/planActions.ts`
+is the closed list and the card drops any other call. Home Assistant decides again, with the same rules, and may refuse a start. An
+override holds back ECCO's own scheduled and guarded export starts; it does not stop the battery charging or discharging and it does not
+stop the dongle's own Start button. Prepare for power cut also sets the reserve ECCO's plan uses (the larger of your own reserve and the
+power-cut reserve, each rounded up). It does not change the inverter's own reserve or any inverter setting, does not stop the house using
+the battery, and never charges. Prepare for power cut with the battery below that reserve says so ("... Nothing is charging. Use Charge
+Battery if you want it filled.") and offers nothing automatic. Without the plan helpers nothing is added (the golden renders are unchanged).
+What is not enforced and what is not proven is listed in `frontend/ecco-plan-core/README.md`, "Known limitations (stated, not fixed in this change)".
+
+**Stated limitation.** Partial protection only: the dongle's own Start button (the Dump to Grid or Free Power start entity) can still be pressed from Home Assistant or by an assistant. These overrides and the reserve protect ECCO's own starts and this card, not an administrator, an assistant or a press of the dongle's own button, and their helpers are plain helpers that an administrator or assistant can write. Binding the Start button needs a firmware gate (a flash, approved separately).
+
+**Reserves, installed status and the compact layout (card fixes after the first install).** Prepare for power cut shows two figures side by side:
+`Reserve now` (your backup reserve helper, read the way the installed scripts read it: any number from 0 to 100, so 5 % is a valid reserve; the
+plan settings model's own 10 % floor is not applied to it) and `Power cut target` (the owner's limit, 10 to 100). An override can only raise a
+reserve, so Prepare for power cut is offered only while the target is strictly above your reserve ROUNDED UP, because the installed effective-reserve
+sensor rounds your reserve up (79.5 is published as 80, so a target of 80 over it raises nothing; the installed script would still accept it and the
+card does not offer it; an equal target is not offered either). Hold battery and Skip tonight never depend on the reserve. A reserve that cannot be
+read, or is not from 0 to 100, hides the control and says why. Two reserves can differ while an override is held, so the card never lets them share
+a label: while any override record is active or held, or whenever the installed effective-reserve sensor reads a figure other than yours, your
+figure is labelled `Your reserve` and `Plan reserve now` (the reserve ECCO's plan uses, read from `sensor.ecco_plan_effective_reserve`; "unknown"
+with the reason when it cannot be read) stands beside it; otherwise `Reserve now` stands alone. The Tomorrow's Plan summary always says
+`Your reserve`. Whether the overrides are installed is read from the entities that exist in Home Assistant (the two plan scripts, the confirmation
+switch, the two plan sensors and, when configured, the guarded Dump to Grid start script). The status line says "Overrides ready." only when every
+one of them is found and the stored plan revision can be read; it asks you to turn on the confirmation switch; it says "Overrides only partly
+ready. Not found: ..." (in the warning colour) when a plan sensor or the guarded Dump start script is missing; it says the plan revision cannot
+be read (the installed start script then refuses every start) when it cannot; it names the one guarded script that is missing when only one is
+("Only part of the override package is installed: ... was not found"); and it says the overrides are not installed only when BOTH guarded scripts
+are absent. With the plan helpers present the Plan section is compact: Tomorrow's Plan, Why?, the planned settings, the override limits and the
+six-slot timeline sit behind closed details, each with a one-line summary, while the start choices, Cancel, the reserve figures and the stated
+limitation stay visible; because Start and Cancel work there, the "Status only" line of the read-only record view is replaced, in the override
+limits fold, by a note about the list of records alone (shown only when a record exists). Without the plan helpers the read-only section keeps
+its former markup, and with `show_plan` off the card renders exactly as before.
+
+**Guarded manual Dump to Grid start.** Set `dump_to_grid.guarded_start: script.ecco_dump_to_grid_start_guarded`
+(`home-assistant/packages/ecco_dump_to_grid_guarded_start.yaml`) and the Start button calls ONLY that script, which refuses while an override
+holds export or the staged Stop SOC is below the effective reserve, and otherwise presses the same start button itself. A `guarded_start`
+that is not a script id does nothing (it never falls back to the direct press). Without it the button is pressed directly, as before, and no
+override binds the manual start from this card. **Residual:** the dongle's own Start button entity can still be pressed from Home Assistant
+by other means (another card, the entity page, an assistant); binding that needs a firmware gate, a flash and a separate approval.
+
+```yaml
+dump_to_grid:
+  # ...the entities above...
+  guarded_start: script.ecco_dump_to_grid_start_guarded   # optional
+```
+
 ## The safety model
 
 Two-step, deliberately never collapsible into one click:
@@ -394,8 +470,8 @@ entity-id-free config schema (`src/config.ts`), bundled by esbuild into one
 dependency-free `dist/ecco-energy-actions-card.js` - the standard HACS
 "plugin" shape, no build step required on the end user's side.
 
-Pure, DOM-free logic lives in four small modules, all unit tested without a
-DOM (see `test/`):
+Pure, DOM-free logic lives in small modules (plus the plan views and controls under `src/plan/`: `planActions.ts` the closed list of calls,
+`controlsModel.ts` what is offered, `controls.ts` the buttons, `clock.ts` the browser's zone), all unit tested without a DOM (see `test/`):
 
 - `src/freePowerState.ts` - the seven-state hardware classifier.
 - `src/recoveryPresentation.ts` - the Recovery Attention action refinement.

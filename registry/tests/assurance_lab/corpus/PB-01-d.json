@@ -1,0 +1,187 @@
+{
+  "actions": [
+    {
+      "args": {
+        "batt_w": 1050,
+        "grid_w": -1000
+      },
+      "at_s": 60,
+      "do": "telemetry"
+    },
+    {
+      "args": {
+        "minutes": 1,
+        "power_w": 1400,
+        "stop_soc": 56
+      },
+      "at_s": 60,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "seconds": 400
+      },
+      "at_s": 60,
+      "do": "run_for"
+    },
+    {
+      "args": {
+        "mode": "false_positive",
+        "state": 1,
+        "tag": "dump.valid",
+        "times": 1
+      },
+      "at_s": 460,
+      "do": "nvs_policy"
+    },
+    {
+      "args": {
+        "arm": true,
+        "minutes": 6,
+        "power_w": 1400,
+        "stop_soc": 56
+      },
+      "at_s": 460,
+      "do": "dump_start"
+    },
+    {
+      "args": {
+        "down_s": 2,
+        "keep_prefs": true,
+        "nvs_fault": null
+      },
+      "at_s": 460,
+      "do": "reboot"
+    },
+    {
+      "args": {
+        "seconds": 120
+      },
+      "at_s": 464,
+      "do": "run_for"
+    }
+  ],
+  "classification": "FINDING-NEW",
+  "confidence": "low",
+  "expect": [
+    {
+      "args": {
+        "names": [
+          "INV-NO-SILENT-OVERRIDE"
+        ]
+      },
+      "observe": "invariants",
+      "op": "!=",
+      "value": []
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status_history",
+      "op": "contains",
+      "value": "RESTORED OK - original inverter settings verified"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "status",
+      "op": "==",
+      "value": "Inactive"
+    },
+    {
+      "args": {
+        "dom": "dump"
+      },
+      "observe": "nvs_marker",
+      "op": "==",
+      "value": "CLEAR"
+    },
+    {
+      "args": {
+        "addrs": [
+          244
+        ]
+      },
+      "observe": "bank",
+      "op": "==",
+      "value": {
+        "244": 0
+      }
+    },
+    {
+      "args": {
+        "form": "summary"
+      },
+      "observe": "invariants",
+      "op": "==",
+      "value": [
+        {
+          "boot": 1,
+          "inv": "INV-NO-SILENT-OVERRIDE",
+          "tags": []
+        }
+      ]
+    }
+  ],
+  "failure_outcome": "the Phase-B guard sets the RAM lease from the commit result alone (no read-back); a commit that reports success without storing the marker lets the lease run on RAM only, and after a reboot its override is silent (Dump: 244 = 0 and the ceiling live, unsupervised)",
+  "finding_priority": "P3",
+  "grade": "VERIFIED",
+  "id": "PB-01-d",
+  "invariant": "INV-NO-SILENT-OVERRIDE",
+  "notes": "F-PB01-4, DUPLICATE of F-FW06-3 (FW-06 owns it; this is its used-device stale-CLEAR form, as FW-06-c and the suite's [9]), signature false-positive-commit. V0.1 (brief B5): the document starts with a completed Dump lease (the corpus PB-01-b prelude: telemetry, a 1-minute Dump START, run_for 400 s; its verified restore commits the marker CLEAR, FW:20389-20397, status 'RESTORED OK - original inverter settings verified' FW:20419), so dump.valid was stored before the injected false_positive: _lab_fw's NVS USED-KEY RULE refuses a commit fault on a key never stored earlier in the run, so the V0 never-used variant (marker ABSENT, end state equal to F-FW04-1) is no longer injected. Expected marker CLEAR: the false_positive Phase-B commit (FW:18547-18548) stores nothing and returns true (lab primitive), production commit_record only reports the save / sync result (ecco_durable_snapshot.h:93-98) and a commit that stores nothing leaves the stored record untouched (_dump_sim.py:284-286), and markers are never deleted by firmware (S4); the boot reads the stored CLEAR (FW:801-804: dump_snapshot_valid false), no operator flag, so status 'Inactive' (FW:929) while 244 = 0 written by the START stays live. FINDING-NEW: S4 states generically that a commit result can be a false positive (retry-record context); the Phase-B marker case and its consequence are not documented, and PLATFORM-ABSENT (READ_ERROR, then ABSENT) matches neither the trigger nor the used-device boot read. Severity: safety, bounded as F-FW04-1 (Dump: 244 = 0 and the ceiling live, unsupervised, status 'Inactive'); Free Power twin: cost. Reachability: UNKNOWN (trigger MODEL-dependent): S4 states that a commit result can be a false positive, but in ESPHome 2026.8.2 commit_record's save() always queues and sync() returns false when nvs_set_blob errors, so True means the write returned ESP_OK in that call; a physical route needs a silent flash program failure and, for this stale CLEAR, the old entry's erase failing silently too; then a reboot during the lease. MODEL: nvs_policy false_positive (nothing stored, True). Synthetic values only.",
+  "ownership": "one dongle; Free Power and Dump to Grid leases, register 244 and the manual TOU owner domains as the firmware defines them; the synthetic SITE is the owner's ORIGINAL; an owner change outside any lease is the new ORIGINAL, a change while a domain holds the register is foreign (excluded until ECCO rewrites it)",
+  "scenario_priority": "P1",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 356,
+  "smallest_safe_repair_scope": "only if such a trigger is confirmed: in the three Phase-B guards (FP, Dump, reg244) read the marker back with the existing direct NVS read primitive read_direct_t (not load_record, which can be served from the pending-save queue) before the RAM mirror is set and before any override write; require RESTORE_REQUIRED, else take the existing commit-failure path (START FAILED, nothing written). No write path added. The F-FW04-1 boot cross-check covers only the never-used variant. Description only",
+  "source_anchors": [
+    {
+      "line_at_record": 671,
+      "path": "docs/architecture/fallback/design/S4_domains_decisions_final.md",
+      "text": "The commit result itself can be a false negative or a false positive"
+    },
+    {
+      "line_at_record": 90,
+      "path": "firmware/include/ecco_durable_snapshot.h",
+      "text": "Returns true only if BOTH the queue step and the flash sync succeeded"
+    },
+    {
+      "line_at_record": 296,
+      "path": "docs/architecture/fallback/design/S4_domains_decisions_final.md",
+      "text": "Markers are never deleted by firmware"
+    }
+  ],
+  "source_digests": {
+    "docs/architecture/fallback/design/S4_domains_decisions_final.md": "06263342ae40c6af72f05c77520d3214789417c4261e028ac345fa98a635b220",
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36",
+    "registry/tests/assurance_lab/_lab_fw.py": "6ec2f3ccba12be6ac6fe9bc7aa3b9e2dce14b8c6eba9a455b3648789494496b8"
+  },
+  "synthetic": true,
+  "tier": "firmware",
+  "title": "A Phase-B Dump marker commit that returns true without storing the record (lab false_positive) on a used device, then a reboot during the lease: the marker keeps the previous lease's CLEAR, the boot reads CLEAR and export stays enabled (244 = 0) with no visible obligation",
+  "trace_digest": "0f0fb733a5eacd7e26dc282a4e31a5db25d441deab16a9b5a384ba0bb06d6e28",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {
+    "warmup_s": 60
+  }
+}

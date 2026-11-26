@@ -1,0 +1,11 @@
+{
+  "name": "ecco-plan-core",
+  "version": "0.1.0",
+  "description": "Pure, dependency-free TypeScript core of the ECCO Charge Battery and Export to Grid master cards: canonical settings, derived TOU compiler, quick overrides, gentle charge planner, Tomorrow's Plan model and safety guards. Returns data only; issues no write.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  }
+}

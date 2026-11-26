@@ -1,0 +1,1197 @@
+{
+ "_provenance": {
+  "what": "A read-only listing of the SHAPE of the ecco_intel entities in a running Home Assistant: entity ids, attribute names, value types and encoded sizes, the first-level keys of dict attributes. It holds no state value and no attribute value.",
+  "captured": "2026-11-14",
+  "object_id_contains": "ecco_intel",
+  "removed_from_the_raw_listing": [
+   "age_s (the measured age of each entity)",
+   "total_states",
+   "other_ecco_prefix_counts"
+  ],
+  "used_by": "tools/geek_mode_coverage.py --shape (the live comparison of the ledger)"
+ },
+ "ecco_intel": [
+  {
+   "entity_id": "automation.ecco_intel_alert_no_fresh_intelligence_result",
+   "state_type": "str",
+   "state_len": 2,
+   "attributes": {
+    "current": {
+     "type": "int",
+     "bytes": 1,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 50,
+     "top_keys": null
+    },
+    "id": {
+     "type": "str",
+     "bytes": 33,
+     "top_keys": null
+    },
+    "last_triggered": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "automation.ecco_intel_alert_output_not_recognised",
+   "state_type": "str",
+   "state_len": 2,
+   "attributes": {
+    "current": {
+     "type": "int",
+     "bytes": 1,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 43,
+     "top_keys": null
+    },
+    "id": {
+     "type": "str",
+     "bytes": 36,
+     "top_keys": null
+    },
+    "last_triggered": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "automation.ecco_intel_alert_self_test_failed",
+   "state_type": "str",
+   "state_len": 2,
+   "attributes": {
+    "current": {
+     "type": "int",
+     "bytes": 1,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 38,
+     "top_keys": null
+    },
+    "id": {
+     "type": "str",
+     "bytes": 35,
+     "top_keys": null
+    },
+    "last_triggered": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "binary_sensor.ecco_intel_fresh",
+   "state_type": "str",
+   "state_len": 2,
+   "attributes": {
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 45,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 7,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "binary_sensor.ecco_intel_watchdog_fresh",
+   "state_type": "str",
+   "state_len": 2,
+   "attributes": {
+    "friendly_name": {
+     "type": "str",
+     "bytes": 27,
+     "top_keys": null
+    },
+    "icon": {
+     "type": "str",
+     "bytes": 25,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "input_boolean.ecco_intel_paused",
+   "state_type": "str",
+   "state_len": 3,
+   "attributes": {
+    "editable": {
+     "type": "bool",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 19,
+     "top_keys": null
+    },
+    "icon": {
+     "type": "str",
+     "bytes": 26,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_accuracy",
+   "state_type": "str",
+   "state_len": 17,
+   "attributes": {
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "coverage_7d": {
+     "type": "float",
+     "bytes": 18,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 48,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 10,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "n": {
+     "type": "int",
+     "bytes": 3,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[0]",
+     "bytes": 2,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_charge_target",
+   "state_type": "str",
+   "state_len": 5,
+   "attributes": {
+    "advice": {
+     "type": "dict[22]",
+     "bytes": 1031,
+     "top_keys": [
+      "achievable_soc_pct",
+      "binding_constraint",
+      "buffer_pct",
+      "changed_from_previous",
+      "conservative_fallback",
+      "demand_expected_kwh",
+      "demand_planning_kwh",
+      "desired_morning_soc_pct",
+      "effective_reserve_pct",
+      "end_of_period_floor_pct",
+      "grid_charge_kwh",
+      "inputs_used",
+      "need_soc_pct",
+      "net_need_kwh",
+      "pv_credit_used_kwh",
+      "raw_target_soc_pct",
+      "reserve",
+      "shortfall_soc_pct",
+      "target_soc_pct",
+      "window",
+      "window_start_soc_pct",
+      "window_start_soc_source"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[0]",
+     "bytes": 2,
+     "top_keys": null
+    },
+    "confidence": {
+     "type": "str",
+     "bytes": 6,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "engine_comparison": {
+     "type": "dict[6]",
+     "bytes": 260,
+     "top_keys": [
+      "authority",
+      "basis",
+      "difference_pct",
+      "v11_target_soc_pct",
+      "v1_feasible_on_pessimistic_path",
+      "v1_target_soc_pct"
+     ]
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 53,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 15,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[7]",
+     "bytes": 184,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 3,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 3,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_data_quality",
+   "state_type": "str",
+   "state_len": 8,
+   "attributes": {
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "coverage_7d": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "device_class": {
+     "type": "str",
+     "bytes": 6,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 52,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 14,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "n": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "options": {
+     "type": "list[4]",
+     "bytes": 40,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[4]",
+     "bytes": 87,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_dump_to_grid",
+   "state_type": "str",
+   "state_len": 7,
+   "attributes": {
+    "advice": {
+     "type": "dict[2]",
+     "bytes": 70,
+     "top_keys": [
+      "blocker_codes",
+      "status"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[1]",
+     "bytes": 100,
+     "top_keys": null
+    },
+    "confidence": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "engine_comparison": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 61,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 14,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[4]",
+     "bytes": 126,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 9,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_export_event",
+   "state_type": "str",
+   "state_len": 7,
+   "attributes": {
+    "advice": {
+     "type": "dict[2]",
+     "bytes": 70,
+     "top_keys": [
+      "blocker_codes",
+      "status"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[1]",
+     "bytes": 100,
+     "top_keys": null
+    },
+    "confidence": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "engine_comparison": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 52,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 14,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[4]",
+     "bytes": 126,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 9,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_overnight_demand",
+   "state_type": "str",
+   "state_len": 6,
+   "attributes": {
+    "advice": {
+     "type": "dict[19]",
+     "bytes": 610,
+     "top_keys": [
+      "baseline_median_kwh",
+      "conservative_fallback",
+      "expected_kwh",
+      "latest_night",
+      "learned_kwh",
+      "nights_clipped",
+      "nights_excluded",
+      "nights_invalid",
+      "nights_missing_since_latest",
+      "nights_used",
+      "nights_window",
+      "planning_kwh",
+      "planning_quantile",
+      "prior_kwh",
+      "prior_weight",
+      "recent_median_kwh",
+      "recent_robust_z",
+      "recent_to_baseline_ratio",
+      "regime"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[0]",
+     "bytes": 2,
+     "top_keys": null
+    },
+    "confidence": {
+     "type": "str",
+     "bytes": 6,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "engine_comparison": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 56,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 18,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[2]",
+     "bytes": 41,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_predicted_day_load",
+   "state_type": "str",
+   "state_len": 5,
+   "attributes": {
+    "advice": {
+     "type": "dict[11]",
+     "bytes": 217,
+     "top_keys": [
+      "confidence",
+      "kind",
+      "label",
+      "n_days",
+      "n_residuals",
+      "p10",
+      "p50",
+      "p90",
+      "t0",
+      "t1",
+      "usable"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[0]",
+     "bytes": 2,
+     "top_keys": null
+    },
+    "confidence": {
+     "type": "str",
+     "bytes": 6,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 58,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 20,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "p10": {
+     "type": "float",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "p90": {
+     "type": "float",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[1]",
+     "bytes": 20,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_predicted_morning_soc",
+   "state_type": "str",
+   "state_len": 4,
+   "attributes": {
+    "advice": {
+     "type": "dict[3]",
+     "bytes": 197,
+     "top_keys": [
+      "at",
+      "basis",
+      "planned_window_end_soc_pct"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[0]",
+     "bytes": 2,
+     "top_keys": null
+    },
+    "confidence": {
+     "type": "str",
+     "bytes": 6,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 61,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "p10": {
+     "type": "float",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "p90": {
+     "type": "float",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[7]",
+     "bytes": 225,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 3,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 3,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_pv_tomorrow",
+   "state_type": "str",
+   "state_len": 4,
+   "attributes": {
+    "advice": {
+     "type": "dict[16]",
+     "bytes": 529,
+     "top_keys": [
+      "confidence",
+      "day",
+      "inflation",
+      "label",
+      "mae_corrected",
+      "mae_raw",
+      "n_pairs",
+      "notes",
+      "p10",
+      "p50",
+      "p90",
+      "plausibility",
+      "ratio",
+      "raw_kwh",
+      "source",
+      "usable"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[0]",
+     "bytes": 2,
+     "top_keys": null
+    },
+    "confidence": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 51,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 13,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "p10": {
+     "type": "float",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "p90": {
+     "type": "float",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[1]",
+     "bytes": 18,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "unit": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "unit_of_measurement": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "valid_until": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    }
+   }
+  },
+  {
+   "entity_id": "sensor.ecco_intel_status",
+   "state_type": "str",
+   "state_len": 2,
+   "attributes": {
+    "accuracy": {
+     "type": "dict[3]",
+     "bytes": 75,
+     "top_keys": [
+      "coverage_7d",
+      "mae_7d",
+      "n"
+     ]
+    },
+    "applies_nothing": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "blockers": {
+     "type": "list[0]",
+     "bytes": 2,
+     "top_keys": null
+    },
+    "calibration": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "config_hash": {
+     "type": "str",
+     "bytes": 18,
+     "top_keys": null
+    },
+    "contract_version": {
+     "type": "str",
+     "bytes": 23,
+     "top_keys": null
+    },
+    "data_quality": {
+     "type": "str",
+     "bytes": 10,
+     "top_keys": null
+    },
+    "decisions": {
+     "type": "dict[9]",
+     "bytes": 176,
+     "top_keys": [
+      "I-D1",
+      "I-D2",
+      "I-D3",
+      "I-D4",
+      "I-D5",
+      "I-D6",
+      "I-D7",
+      "I-D8",
+      "I-D9"
+     ]
+    },
+    "device_class": {
+     "type": "str",
+     "bytes": 6,
+     "top_keys": null
+    },
+    "drift": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "engine_version": {
+     "type": "str",
+     "bytes": 51,
+     "top_keys": null
+    },
+    "friendly_name": {
+     "type": "str",
+     "bytes": 46,
+     "top_keys": null
+    },
+    "generated_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "git_sha": {
+     "type": "str",
+     "bytes": 42,
+     "top_keys": null
+    },
+    "input_ages": {
+     "type": "list[24]",
+     "bytes": 2030,
+     "top_keys": null
+    },
+    "integration_version": {
+     "type": "str",
+     "bytes": 7,
+     "top_keys": null
+    },
+    "kind": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "last_good": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "mode": {
+     "type": "str",
+     "bytes": 8,
+     "top_keys": null
+    },
+    "next_run_at": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "options": {
+     "type": "list[8]",
+     "bytes": 102,
+     "top_keys": null
+    },
+    "pause_control": {
+     "type": "str",
+     "bytes": 5,
+     "top_keys": null
+    },
+    "plan": {
+     "type": "dict[3]",
+     "bytes": 133,
+     "top_keys": [
+      "headroom_ceiling_pct",
+      "precharge_by",
+      "reserve_runout_at"
+     ]
+    },
+    "provenance_ok": {
+     "type": "bool",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "reason_codes": {
+     "type": "list[4]",
+     "bytes": 87,
+     "top_keys": null
+    },
+    "self_test": {
+     "type": "null",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "status": {
+     "type": "str",
+     "bytes": 4,
+     "top_keys": null
+    },
+    "tariff": {
+     "type": "dict[3]",
+     "bytes": 158,
+     "top_keys": [
+      "price_range",
+      "provenance",
+      "window"
+     ]
+    },
+    "valid_until": {
+     "type": "str",
+     "bytes": 34,
+     "top_keys": null
+    },
+    "value": {
+     "type": "dict[3]",
+     "bytes": 512,
+     "top_keys": [
+      "assumptions",
+      "baselines",
+      "range_gbp"
+     ]
+    }
+   }
+  }
+ ]
+}

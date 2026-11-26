@@ -73,8 +73,8 @@ def child(path: Path) -> dict:
     return json.loads(p.stdout.strip().splitlines()[-1])
 
 
-check("the runtime package has its six modules", RUNTIME == ["engine_link", "gates", "history_source", "selftest", "sources",
-                                                             "store"], str(RUNTIME))
+check("the runtime package has its seven modules", RUNTIME == ["engine_link", "gates", "ghost_link", "history_source", "selftest",
+                                                              "sources", "store"], str(RUNTIME))
 print("== the source tree, homeassistant absent")
 r = child(REPO)
 check("no crash", "crash" not in r, r.get("crash", ""))

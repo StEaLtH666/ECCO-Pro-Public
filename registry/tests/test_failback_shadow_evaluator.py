@@ -955,11 +955,20 @@ def fbc_raw_negative_controls() -> list[tuple[str, list[str]]]:
 #          entity or HA shadow decoder;
 #   (vii)  the only Home Assistant files that name the two helpers are the two schedule packages (their only writers) and the
 #          dashboards, and the schedule packages name no shadow entity or decoder - so no shipped automation can route a shadow
-#          string into the helpers;
+#          string into the helpers; the one other file allowed to name them is a DECLARED READ-ONLY READER (bpd1: the start bypass
+#          detector reads a helper's state inside Jinja templates to see whether ECCO's own run recorded a start): reader_problems()
+#          requires every occurrence of a helper id to be a states('<id>') / states.<id> read, no helper name to be partial or
+#          constructed, and no shadow entity or decoder in the file, so a reader cannot write a helper or route a shadow string into it;
 #   (viii) the card source names no Failback Shadow entity / decoder at all.
 # ===========================================================================
 SCHEDULE_RESULT_HELPERS = ("input_text.ecco_free_power_schedule_last_result", "input_text.ecco_dump_to_grid_schedule_last_result")
 SCHEDULE_PACKAGES = ("home-assistant/packages/ecco_free_power_schedule.yaml", "home-assistant/packages/ecco_dump_to_grid_schedule.yaml")
+# DECLARED READ-ONLY READERS of the two result helpers (any other file that names a helper and is not a schedule package or a dashboard is an
+# undeclared writer / reader). bpd1: the start bypass detector. Declare a reader here only with reader_problems() clean and its own suite.
+SCHEDULE_RESULT_READERS = ("home-assistant/packages/ecco_start_bypass_detector.yaml",)
+# a minimal reader that only READS the helpers (the positive control and the base of the reader negative controls)
+READER_CLEAN = ("template:\n  - sensor:\n      - name: probe\n        state: \"{{ states('" + SCHEDULE_RESULT_HELPERS[0] + "') }}\"\n"
+                "      - name: probe_two\n        state: \"{% set o = states." + SCHEDULE_RESULT_HELPERS[1] + " %}{{ o.state }}\"\n")
 # the five firmware shadow entities (ids, names, HA entity ids) and the FB-C3 HA shadow decoder (sensor.ecco_shadow_check,
 # binary_sensor.ecco_shadow_episode_open) and anything named like them
 SHADOW_TOKENS = ("failback_shadow", "failback shadow", "ecco_shadow_", "shadow_check", "shadow_episode", "shadow_verdict")
@@ -1015,6 +1024,30 @@ def _regex_literals(src: str) -> list[tuple[str, str]]:
     pats = re.findall(r"const\s+\w+\s*=\s*/((?:\\.|[^/\n\\])+)/([a-z]*)\s*;", src)
     pats += re.findall(r"(?<![\w/])/((?:\\.|[^/\n\\])+)/([a-z]*)\.test\(", src)
     return pats
+
+
+def reader_problems(rel: str, text: str) -> list[str]:
+    # A declared READ-ONLY reader of the schedule result helpers (bpd1). Every occurrence of a helper id must be a Jinja state read:
+    # states('<id>') or states.<id>, never an entity_id, target, trigger or a constructed name, so the file cannot write a helper;
+    # it must name no Failback Shadow entity or decoder; and every 'schedule_last_result' in the file must belong to a full helper id
+    # (a partial or concatenated name could build a target the textual rule cannot see).
+    bad = []
+    n = 0
+    for hid in SCHEDULE_RESULT_HELPERS:
+        for m in re.finditer(re.escape(hid) + r"(?![A-Za-z0-9_])", text):
+            n += 1
+            if not re.search(r"states(?:\(\s*['\"]|\.)$", text[max(0, m.start() - 12):m.start()]):
+                bad.append(f"{rel}: a schedule result helper is named outside a states('...') / states.<id> read: "
+                           f"{text[max(0, m.start() - 30):m.end() + 12]!r}")
+    if n == 0:
+        bad.append(f"{rel}: a declared reader names no schedule result helper (declare a reader only if it reads one)")
+    if text.count("schedule_last_result") != n:
+        bad.append(f"{rel}: 'schedule_last_result' occurs {text.count('schedule_last_result')}x but only {n} full helper ids: a partial or constructed name")
+    low = text.lower()
+    hit = [t for t in SHADOW_TOKENS if t in low]
+    if hit:
+        bad.append(f"{rel} (a declared reader of the schedule result helpers) names a shadow entity / decoder {hit}")
+    return bad
 
 
 def z11_card_scope(card: dict[str, str], ha: dict[str, str]) -> list[str]:
@@ -1100,10 +1133,15 @@ def z11_card_scope(card: dict[str, str], ha: dict[str, str]) -> list[str]:
             hit = [t for t in SHADOW_TOKENS if t in low]
             if hit:
                 bad.append(f"(vii) {rel} (a writer of the schedule result helpers) names a shadow entity / decoder {hit}")
+        elif rel in SCHEDULE_RESULT_READERS:
+            bad.extend("(vii) " + p for p in reader_problems(rel, text))
         elif not rel.startswith("home-assistant/dashboards/"):
             bad.append(f"(vii) {rel} names a schedule result helper: an undeclared writer / reader")
     if not all(p in ha for p in SCHEDULE_PACKAGES):
         bad.append("(vii) a schedule package is missing from the scan")
+    for rdr in SCHEDULE_RESULT_READERS:
+        if rdr in ha and not any(hid in ha[rdr] for hid in SCHEDULE_RESULT_HELPERS):
+            bad.append(f"(vii) {rdr} is declared a reader of the schedule result helpers but names none: remove the stale declaration")
     return bad
 
 
@@ -1140,6 +1178,19 @@ def z11_negative_controls() -> list[tuple[str, list[str]]]:
     run("an undeclared package writes a schedule result helper",
         h=dict(ha, **{"home-assistant/packages/zz_probe.yaml": "script:\n  zz:\n    sequence:\n      - action: input_text.set_value\n"
                                                               "        target:\n          entity_id: " + SCHEDULE_RESULT_HELPERS[0] + "\n"}))
+    rdr = SCHEDULE_RESULT_READERS[0]
+    run("an undeclared package only READS a schedule result helper (not a declared reader)",
+        h=dict(ha, **{"home-assistant/packages/zz_probe_reader.yaml": READER_CLEAN}))
+    run("a declared reader writes a schedule result helper (a service target)",
+        h=dict(ha, **{rdr: READER_CLEAN + "\nscript:\n  zz:\n    sequence:\n      - action: input_text.set_value\n        target:\n          entity_id: " + SCHEDULE_RESULT_HELPERS[0] + "\n"}))
+    run("a declared reader triggers on a schedule result helper as an entity_id",
+        h=dict(ha, **{rdr: READER_CLEAN + "\nautomation:\n  - triggers:\n      - trigger: state\n        entity_id: " + SCHEDULE_RESULT_HELPERS[1] + "\n"}))
+    run("a declared reader builds a helper name by concatenation",
+        h=dict(ha, **{rdr: READER_CLEAN + "\n# x: \"{{ 'input_text.ecco_' ~ kind ~ '_schedule_last_result' }}\"\n"}))
+    run("a declared reader names the HA shadow decoder",
+        h=dict(ha, **{rdr: READER_CLEAN + "\n# x: \"{{ states('sensor.ecco_shadow_check') }}\"\n"}))
+    run("a declared reader names no schedule result helper at all",
+        h=dict(ha, **{rdr: "template:\n  - sensor:\n      - name: probe\n        state: \"{{ 1 }}\"\n"}))
     return out
 
 
@@ -1214,10 +1265,13 @@ def section_static() -> None:
     z11 = z11_card_scope(card_sources(), ha_texts())
     check("Z11: the only card regex a Verdict name matches is schedule.ts /^BLOCKED/i in isScheduleBlocked(); its only callers are the two "
           "schedule LATER panels with lastResult = this._entityState(schedule.last_result); every configured last_result (card defaults "
-          "and every committed dashboard) is one of the two schedule result helpers; their only writers are the two schedule packages; "
+          "and every committed dashboard) is one of the two schedule result helpers; their only writers are the two schedule packages "
+          "(the one other file naming them is a declared read-only reader: states() reads only, no shadow token); "
           "no card source, card config or writer names a Failback Shadow entity or the HA shadow decoder", not z11, "; ".join(z11[:4]))
     for what, found in z11_negative_controls():
         check(f"Z11 negative control caught: {what}", bool(found), "NOT DETECTED")
+    check("Z11 positive control: a declared reader that only reads the helpers (states() forms) is accepted",
+          not z11_card_scope(card_sources(), dict(ha_texts(), **{SCHEDULE_RESULT_READERS[0]: READER_CLEAN})))
     outside = [l for l in LIVE_TEXT.splitlines() if "ecco_failback_shadow::" in l]
     inside = [l for l in yaml.dump(ivs[0]["then"]).splitlines() if "ecco_failback_shadow::" in l]
     check("ecco_failback_shadow:: is referenced only by lines of the FB-C tick lambda (every such YAML line sits inside the interval)",

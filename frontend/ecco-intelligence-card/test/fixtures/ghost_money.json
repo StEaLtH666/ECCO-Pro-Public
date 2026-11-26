@@ -1,0 +1,238 @@
+{
+ "attributes": {
+  "advice": {
+   "followed": 6,
+   "not_followed": {
+    "BLOCKED": 1,
+    "NO_WINDOW": 1
+   },
+   "records_in_period": 8
+  },
+  "applies_nothing": true,
+  "data_quality": {
+   "advice_rows_invalid": 0,
+   "approximations": [
+    "SOC: hourly means, end of hour estimated",
+    "advice windows matched to hourly slots (half a slot in = in)",
+    "spilled PV unknown, taken as 0"
+   ],
+   "dump_advice_without_window": 1,
+   "ghost_model_flags": [
+    "OPENING_STOCK_UNPRICED",
+    "WEAR_UNKNOWN"
+   ],
+   "hours_with_repaired_or_flagged_energy": 0,
+   "notes": [
+    "EXPORT_TARIFF_NOT_VERIFIED: export income counted as 0 (understates a ghost that exports)",
+    "DUMP_ADVICE_HAS_NO_WINDOW: no intended Dump-to-Grid duration is recorded, so dump advice cannot be simulated (counted as not followed)"
+   ],
+   "period_hours": 168,
+   "unattributed_energy_excluded": false,
+   "unusable_by_reason": {},
+   "usable_hours": 168,
+   "window_hours": 168
+  },
+  "days": [
+   {
+    "actual_min_soc_pct": 40.0,
+    "actual_net_before_wear_p": 102.57,
+    "advice_effect_p": 0.0,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-10",
+    "delta_realised_p": 0.0,
+    "delta_stock_adjusted_p": 0.0,
+    "extra_import_kwh_in_ghost": 0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0,
+    "ghost_net_before_wear_p": 102.57,
+    "model_baseline_delta_p": 0.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "actual_net_before_wear_p": 71.02,
+    "advice_effect_p": 15.7,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-11",
+    "delta_realised_p": 25.29,
+    "delta_stock_adjusted_p": 15.7,
+    "extra_import_kwh_in_ghost": -0.42,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0,
+    "ghost_net_before_wear_p": 96.31,
+    "model_baseline_delta_p": 0.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "actual_net_before_wear_p": 66.6,
+    "advice_effect_p": 4.8,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "advice_not_followed": {
+     "BLOCKED": 1
+    },
+    "date": "2030-01-12",
+    "delta_realised_p": 4.8,
+    "delta_stock_adjusted_p": 4.8,
+    "extra_import_kwh_in_ghost": -0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0,
+    "ghost_net_before_wear_p": 71.39,
+    "model_baseline_delta_p": 0.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "actual_net_before_wear_p": 86.81,
+    "advice_effect_p": 2.79,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-13",
+    "delta_realised_p": 2.79,
+    "delta_stock_adjusted_p": 2.79,
+    "extra_import_kwh_in_ghost": -0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0,
+    "ghost_net_before_wear_p": 89.6,
+    "model_baseline_delta_p": 0.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "actual_net_before_wear_p": 103.49,
+    "advice_effect_p": -57.7,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-14",
+    "delta_realised_p": -57.7,
+    "delta_stock_adjusted_p": -57.7,
+    "extra_import_kwh_in_ghost": 2.22,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0,
+    "ghost_net_before_wear_p": 45.78,
+    "model_baseline_delta_p": 0.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "actual_net_before_wear_p": 173.07,
+    "advice_effect_p": -44.57,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "advice_not_followed": {
+     "NO_WINDOW": 1
+    },
+    "date": "2030-01-15",
+    "delta_realised_p": -22.29,
+    "delta_stock_adjusted_p": -44.57,
+    "extra_import_kwh_in_ghost": 0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0,
+    "ghost_net_before_wear_p": 150.78,
+    "model_baseline_delta_p": 0.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "actual_net_before_wear_p": 231.37,
+    "advice_effect_p": -11.03,
+    "advice_followed": 0,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-16",
+    "delta_realised_p": -5.51,
+    "delta_stock_adjusted_p": -11.03,
+    "extra_import_kwh_in_ghost": 0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0,
+    "ghost_net_before_wear_p": 225.85,
+    "model_baseline_delta_p": 0.0
+   }
+  ],
+  "days_dropped": 0,
+  "intelligence_controlled_nothing": true,
+  "kind": "ghost",
+  "label": "SIMULATION: arithmetic on recorded hourly data. Intelligence controlled nothing; the real battery did what it did. Evidence for the owner's decision, never a decision.",
+  "mode": "SHADOW",
+  "model_version": "intel-ghost/1",
+  "money_available": true,
+  "period": {
+   "end": "2030-01-17T00:00:00+00:00",
+   "hours": 168,
+   "longest_usable_run_hours": 168,
+   "slot_minutes": 60,
+   "soc_start_pct": 40.0,
+   "start": "2030-01-10T00:00:00+00:00",
+   "timezone": "UTC"
+  },
+  "ready_for_assisted_evidence": {
+   "advice_effect_p": -90.01,
+   "basis": "net before wear (wear price unknown), stock-adjusted",
+   "days_compared": 7,
+   "days_diverged": 6,
+   "days_ghost_ahead": 3,
+   "days_ghost_behind": 3,
+   "days_level": 1,
+   "decision": null,
+   "delta_realised_p": -52.62,
+   "delta_stock_adjusted_p": -90.01,
+   "effective_reserve_pct": 40.0,
+   "evidence_only": true,
+   "ghost_below_reserve_dates": [],
+   "ghost_below_reserve_days": 0,
+   "ghost_below_reserve_slots": 0,
+   "model_baseline_delta_p": 0.0,
+   "worst_ghost_day": {
+    "date": "2030-01-14",
+    "delta_p": -57.703197467548684
+   }
+  },
+  "reason": null,
+  "schema": "ecco-intel-ghost-feed/1",
+  "simulated": true,
+  "status": "OK",
+  "tariff": {
+   "export": "NOT_VERIFIED",
+   "import": "VERIFIED_FROM_INTEGRATION"
+  },
+  "totals": {
+   "actual_min_soc_pct": 40.0,
+   "actual_net_before_wear_p": 834.92,
+   "actual_throughput_kwh": 52.79,
+   "advice_effect_p": -90.01,
+   "closing_stored_difference_kwh": -0.0,
+   "delta_realised_p": -52.62,
+   "delta_stock_adjusted_p": -90.01,
+   "ghost_min_soc_pct": 40.0,
+   "ghost_net_before_wear_p": 782.3,
+   "ghost_throughput_kwh": 50.79,
+   "model_baseline_delta_p": 0.0,
+   "stock_adjustment_p": -37.39
+  },
+  "uncertainty": {
+   "closing_stock_rules": "closing stock difference valued two ways, the one less favourable to the ghost used: (a) each run's mixed-tank cost basis; (b) deliverable kWh at the period's mean import price",
+   "model_baseline": "the no-advice ghost against reality: 0 when the recorded flows replay exactly; subtracted out of the advice effect",
+   "model_baseline_delta_p": 0.0,
+   "round_trip_efficiency_pct": {
+    "base": 81.0,
+    "minus": 78.0,
+    "plus": 84.0
+   },
+   "sensitivity": {
+    "base": {
+     "advice_effect_p": -90.01,
+     "delta_stock_adjusted_p": -90.01
+    },
+    "minus": {
+     "advice_effect_p": -109.16,
+     "delta_stock_adjusted_p": -109.16
+    },
+    "plus": {
+     "advice_effect_p": -90.01,
+     "delta_stock_adjusted_p": -90.01
+    }
+   },
+   "stock_rules_p": {
+    "cost_basis": 1.38,
+    "mean_import_price": -0.0
+   }
+  }
+ },
+ "state": "OK"
+}

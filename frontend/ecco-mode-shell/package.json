@@ -1,0 +1,19 @@
+{
+  "name": "ecco-mode-shell",
+  "version": "0.1.0",
+  "description": "A dependency-free Home Assistant Lovelace card that gives one view two presentations of the same data: a calm Production Mode and a Geek Mode with every available non-secret data point. A presentation toggle only; it applies nothing.",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "ecco"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check:browser": "node preview/check-strip.mjs",
+    "check:browser:selftest": "node preview/check-strip.mjs --selftest"
+  }
+}

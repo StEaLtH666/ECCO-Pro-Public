@@ -1,0 +1,131 @@
+{
+  "actions": [
+    {
+      "args": {
+        "dom": "fp",
+        "minutes": 20,
+        "power_w": 3000,
+        "start_local": "2026-10-21 12:00:00"
+      },
+      "at_s": 60,
+      "do": "arm_schedule"
+    },
+    {
+      "args": {
+        "at_utc": null,
+        "down_s": 5.0
+      },
+      "at_s": 780,
+      "do": "reboot_dongle"
+    },
+    {
+      "args": {
+        "seconds": 0
+      },
+      "at_s": 1000,
+      "do": "run_for"
+    }
+  ],
+  "classification": "PASS",
+  "confidence": "high",
+  "expect": [
+    {
+      "args": {
+        "names": [
+          "INV-NO-RESUME",
+          "INV-HF-ONE-LEASE",
+          "INV-HF-OWNER-INTENT"
+        ]
+      },
+      "observe": "invariants",
+      "op": "==",
+      "value": []
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "fw_status",
+      "op": "==",
+      "value": "RESTORED OK - original inverter settings verified"
+    },
+    {
+      "args": {
+        "dom": "fp"
+      },
+      "observe": "schedule_status",
+      "op": "==",
+      "value": "COMPLETED"
+    },
+    {
+      "args": {},
+      "observe": "notifications",
+      "op": "==",
+      "value": {}
+    },
+    {
+      "args": {},
+      "observe": "boot_no",
+      "op": "==",
+      "value": 1
+    }
+  ],
+  "failure_outcome": "none (key guard decision: no resume; the early end raises no alert)",
+  "finding_priority": null,
+  "grade": "VERIFIED",
+  "id": "HF-03-b",
+  "invariant": "INV-NO-RESUME",
+  "notes": "key guard decision of HF-03 (HF-03.3); NC-HF03-2 removes it in the suite",
+  "ownership": "synthetic site and synthetic schedule values; the owner arms one schedule (and acts as stated); Home Assistant runs FPS1 / DGS1 / SMR1; the dongle firmware owns every inverter write; nothing else writes the inverter; the dongle loses power for 5 s during the lease",
+  "scenario_priority": "P1",
+  "schema": "ecco-assurance-lab-replay/v0",
+  "seed": 0,
+  "smallest_safe_repair_scope": "none (guard holds)",
+  "source_anchors": [
+    {
+      "line_at_record": 583,
+      "path": "firmware/ecco_clock_dongle_stage3_4_free_power.yaml",
+      "text": "Free Power was ACTIVE at last shutdown - ending and restoring on this boot rather than resuming the lease"
+    }
+  ],
+  "source_digests": {
+    "firmware/ecco_clock_dongle_stage3_4_free_power.yaml": "9cb4bd6c4f4d2dc9a95af8a7a4af2fa770c582d62a7545649dff0895ffef9b8d",
+    "firmware/include/ecco_durable_snapshot.h": "d57cd3b5b951b97e45872be4485c63beec58f604db08ef33fb660b8251e871af",
+    "home-assistant/packages/ecco_dump_to_grid_schedule.yaml": "95c7ed6eeec8ed51b7b43fa0b34f5d3499c3074685af4d7734441be0e4447833",
+    "home-assistant/packages/ecco_free_power_schedule.yaml": "b8734bd9e59333b47cafd12d36fef0e75b529a87562e3a81a21f5afcbcf7c949",
+    "home-assistant/packages/ecco_runtime_config.yaml": "7ee9355cf0489c2af23955d6b026bef6ae77a3349d60a7e36f47a03187b40e2a",
+    "home-assistant/packages/ecco_schedule_manual_restore.yaml": "ddc731548f465eae04c09386f07bd84a724b2b533c05ccfc3675f991f37a462d",
+    "home-assistant/tests/_ha_dump_sim.py": "c1568207022fdbea452fd2bf231a3eb489f722f051fe7726acf746174f8fe6cc",
+    "home-assistant/tests/_ha_script_sim.py": "f7b4c9beac7bc5de03668fae27f16e36e96abab2e5538a6d03622184b249e49b",
+    "registry/fallback_durable.py": "94d3979c63940b072455492c4f6a9c40613fbe0666d98818a3e1748124914e5d",
+    "registry/fallback_profile.py": "0c139987fc0dc5742be430a89632bb6363936f4ba8b6d09913a585802dd97c64",
+    "registry/free_power_recovery_evidence.py": "45217f3688629ed0cb2737a7075e5ecebaf041e3761263ef2f391f89de86a2c0",
+    "registry/free_power_self_partial.py": "2c9cf3e4b52ea9a908b4956b5e960d390d46c7811c232f8b47d3ae4324b1266f",
+    "registry/rtc_policy.py": "641c18554973be5450c6447e59f33fb0fbe5a86cc98bd322e25e629126755c85",
+    "registry/tests/_dump_sim.py": "0ec4d5fe15a273603647dd630cec6296ea999123f89b5ecee37978a24c45d964",
+    "registry/tests/_dump_v2_evidence_model.py": "a1b873565abe2877f72ef0045296f5ace737506dbec51ef169db4272ac5d2c6c",
+    "registry/tests/_fbb1_engine.py": "563df0575d85c17af3420f837e3eb9a11ba6ee43e66eca7bac65eb01b2ce9d5e",
+    "registry/tests/_fbb1_fbcap.py": "b0083b368a13cd2eb3f7b10dfd592ea740053f73b34176ffb6c5e879796816aa",
+    "registry/tests/_fbb1_types.py": "216f68e6eb8be67d962dc08b854b39692b721046efc4b9c1b64d292d1558caf2",
+    "registry/tests/_fbb1_xpile.py": "253d56d1098116a4d02c262feef5876dbf014698ff4ebc6f998f255184b2720e",
+    "registry/tests/_fbb_harness.py": "03ce225491993038bccfacaff2d72762b628d5aa74ef7c4ed91642811ee73467",
+    "registry/tests/_fbd1_harness.py": "09717e310798d4fc7658a69f5e825e1e49bffa9efdf6d2ee9b763093633a1c2a",
+    "registry/tests/_fbd1_scope.py": "225b3647ec5b90b7f7d6990a0ba1369cb4ea199f6280f27f42153969d3a51a76",
+    "registry/tests/_free_power_action_sim.py": "da49c2d66f9e26757a863f9d52bf02987dd11e83e04fcba9bb8c352f944f4dfc",
+    "registry/tests/_sg01_journal_model.py": "faf73c9a3083bc5a24464731a637e0fff83f3651f2ef5d4cee528ac3fa04730b",
+    "registry/tests/_sg01_recovery_harness.py": "2b045cbed5bc1bd7ff6f58654dd203f4a9d73fa5d6045f3599392b6e877bcd36"
+  },
+  "synthetic": true,
+  "tier": "coupled",
+  "title": "dongle reboot during the ACTIVE scheduled lease: the firmware ends it, nothing resumes it",
+  "trace_digest": "78e76355f73721ef4ab115cc76fb553c29d669496a11d1ed62a50c0fd54ad083",
+  "utc_start": "2026-10-21T10:50:00Z",
+  "world": {
+    "bus": {
+      "windows": []
+    },
+    "fw_world_kwargs": {
+      "warmup_s": 120
+    }
+  }
+}

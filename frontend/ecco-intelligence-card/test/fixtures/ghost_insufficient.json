@@ -1,0 +1,26 @@
+{
+ "attributes": {
+  "applies_nothing": true,
+  "data_quality": {
+   "notes": [
+    "NO_VERIFIED_TARIFF: no money figure; behaviour comparison only"
+   ],
+   "unusable_by_reason": {
+    "missing_hour": 144
+   },
+   "usable_hours": 10,
+   "window_hours": 154
+  },
+  "intelligence_controlled_nothing": true,
+  "kind": "ghost",
+  "label": "SIMULATION: arithmetic on recorded hourly data. Intelligence controlled nothing; the real battery did what it did. Evidence for the owner's decision, never a decision.",
+  "mode": "SHADOW",
+  "model_version": "intel-ghost/1",
+  "money_available": false,
+  "reason": "no_24h_run_of_usable_hours",
+  "schema": "ecco-intel-ghost-feed/1",
+  "simulated": true,
+  "status": "INSUFFICIENT_HISTORY"
+ },
+ "state": "INSUFFICIENT_HISTORY"
+}

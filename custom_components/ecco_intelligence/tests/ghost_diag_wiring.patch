@@ -1,0 +1,371 @@
+diff --git a/custom_components/ecco_intelligence/coordinator.py b/custom_components/ecco_intelligence/coordinator.py
+--- a/custom_components/ecco_intelligence/coordinator.py
++++ b/custom_components/ecco_intelligence/coordinator.py
+@@ -4,7 +4,9 @@
+ 
+   * hass.states.get(...)                     read the mapped entities and the pause helper (never a write)
+   * recorder get_instance(hass).async_add_executor_job(statistics_during_period, ...)   read statistics, recorder executor
+-  * hass.async_add_executor_job(...)         the start-up gates, the engine and the state store, never on the event loop
++  * hass.async_add_executor_job(...)         the start-up gates, the engine and the state store, never on the event loop;
++                                             and, only when the diagnostics are downloaded, the Ghost block (read-only,
++                                             one job at a time, with a time budget: runtime/ghost_link.py)
+   * hass.async_add_import_executor_job(...)  in __init__.py: this module (and through it most of the vendored engine) is
+                                              imported in the import executor, never on the event loop
+   * hass.loop.call_soon(...)                 the release of each executor job above (__init__.release_after_step): a job
+@@ -186,7 +188,7 @@
+ import math
+ import time as time_mod
+ from collections import deque
+-from dataclasses import dataclass
++from dataclasses import dataclass, replace
+ from datetime import datetime, time, timedelta, timezone
+ from typing import Any, Callable, Mapping
+ from zoneinfo import ZoneInfo
+@@ -200,6 +202,7 @@
+ from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
+ from homeassistant.util import dt as dt_util
+ 
++from intelligence import ghost_compare
+ from intelligence.advisory_contract import (ENTITY_IDS, INTEGRATION_ENTITY_KEYS, AdvisoryEnvelope, ItemStatus, SystemStatus,
+                                             Versions, envelope_summary, paused_envelope, self_test_failed_envelope,
+                                             stale_from, starting_envelope, to_entity_payloads, with_last_good,
+@@ -214,7 +217,7 @@
+                     PROPOSED_RECORDER_RETRY_S, PROPOSED_REFRESH_FLOOR_S, PROPOSED_RESULT_MAX_AGE_S,
+                     PROPOSED_STALE_BACKOFF_S, PROPOSED_STARTUP_GRACE_S, PROPOSED_TICK_MARGIN_S, PROPOSED_TIME_BUDGET_S,
+                     REFRESH_MARGIN_S, SCHEDULE_DAILY_LOCAL, SITE_TZ, SUBMIT_COOLDOWN_S, TICK_JOB_NAME, TICK_S)
+-from .runtime import engine_link, gates, history_source, sources
++from .runtime import engine_link, gates, ghost_link, history_source, sources
+ from .runtime import store as rstore
+ from .runtime.selftest import FAIL, PASS, WARN, SelfTest
+ 
+@@ -464,6 +467,8 @@
+         self._history_reuse = engine_link.HistoryReuse()  # the parsed history, reused while the statistics are unchanged
+         self._metrics: Any = None
+         self._metrics_ok = False
++        self._ghost_job: engine_link.EngineJob | None = None   # the last cycle's job without its rows (the Ghost block, diagnostics)
++        self._ghost_busy = False                          # a Ghost block job is running (one at a time)
+         self._entity_mismatch: dict[str, str] = {}
+         self._entities_seen: set[str] = set()
+         self._closed = False
+@@ -537,6 +542,7 @@
+             self._task.cancel()
+         self._listeners.clear()
+         self._hist = None
++        self._ghost_job = None
+         self._history_reuse.clear()
+         self.store.close()
+ 
+@@ -1328,6 +1334,7 @@
+                 previous=None if self._last_computed is None else envelope_summary(self._last_computed),
+                 versions=self.versions, config_liveness_at=config_liveness_at,
+                 history_reuse=self._history_reuse)
++            self._ghost_job = replace(job, statistics=None, history_reuse=None, previous=None)   # a reference copy, no rows
+             t0 = time_mod.perf_counter()
+             env, diag, history = await self._bounded(
+                 self._submit(self.hass.async_add_executor_job, engine_link.compute, job, self._run_cycle), deadline)
+@@ -1478,3 +1485,34 @@
+                                    "PROPOSED_HISTORY_ROW_CAP": history_source.PROPOSED_HISTORY_ROW_CAP,
+                                    "PROPOSED_HISTORY_LOOKBACK_DAYS": history_source.PROPOSED_HISTORY_LOOKBACK_DAYS},
+         }
++
++    async def async_ghost_diagnostics(self) -> dict:
++        """The Ghost block of the diagnostics download (runtime/ghost_link.py): the existing schedule against Intelligence's
++        advice, a read-only simulation computed only now, in the executor, from the last cycle's inputs and the cached recorder
++        rows. One job at a time (a request while one runs, or one that outlived its time budget, gets BUSY), at most
++        PROPOSED_GHOST_BUDGET_S of waiting (then TIME_BUDGET; the thread, which only reads, runs to its end and its result is
++        discarded). Never raises: any failure is a small block with a constant reason. It touches no cycle state."""
++        try:
++            job, hist = self._ghost_job, self._hist
++            if self._closed or job is None:
++                return ghost_link.unavailable(ghost_compare.R_NO_CYCLE)
++            stats = None if hist is None else hist.get("stats")
++            if stats is None:
++                return ghost_link.unavailable(ghost_compare.R_NO_STATISTICS)
++            if self._ghost_busy:
++                return ghost_link.unavailable(ghost_compare.R_BUSY)
++            fut = self._submit(self.hass.async_add_executor_job, ghost_link.ghost_block, replace(job, statistics=stats), self.store)
++            self._ghost_busy = True                      # only once the job exists (a submit that raises leaves it free)
++            fut.add_done_callback(self._ghost_done)
++            try:
++                return await asyncio.wait_for(asyncio.shield(fut), ghost_link.PROPOSED_GHOST_BUDGET_S)
++            except asyncio.TimeoutError:
++                return ghost_link.unavailable(ghost_compare.R_BUDGET)
++        except Exception as exc:  # noqa: BLE001 - the download never fails for the Ghost; only the class name is kept
++            return ghost_compare.error_block(exc)
++
++    def _ghost_done(self, fut: asyncio.Future) -> None:
++        """The Ghost job's thread has ended (also after its wait timed out): one job at a time is free again."""
++        self._ghost_busy = False
++        if not fut.cancelled():
++            fut.exception()                              # retrieved, so it is never logged as unhandled
+diff --git a/custom_components/ecco_intelligence/diagnostics.py b/custom_components/ecco_intelligence/diagnostics.py
+--- a/custom_components/ecco_intelligence/diagnostics.py
++++ b/custom_components/ecco_intelligence/diagnostics.py
+@@ -3,7 +3,12 @@
+ cycle's source notes are shown (A42, RT4-1 (b)): each is a contract key and a constant code (runtime/sources.public_notes,
+ SOURCE_NOTE_CODES), never an entity id, an attribute name, a state text or a site number, so a refused rate table's code
+ (TABLE_*) is visible in the download. The last cycle's signals are listed by contract name, and a PV forecast observation
+-by its day and position only (A45, RV9-3: runtime/sources.public_signals), never by the site file's source name."""
++by its day and position only (A45, RV9-3: runtime/sources.public_signals), never by the site file's source name.
++
++The `ghost` block (diagnostics only; no entity, no contract): the existing schedule against Intelligence's advice, a read-only
++SIMULATION computed lazily at the download (runtime/ghost_link.py, intelligence/ghost_compare.py). It carries dates, numbers and
++constant codes only, never an entity id, a site value or a sensor text; any failure gives a small block with a status and a
++constant reason, and the rest of the download is unchanged."""
+ 
+ from __future__ import annotations
+ 
+@@ -12,6 +17,8 @@
+ from homeassistant.components.diagnostics import async_redact_data
+ from homeassistant.core import HomeAssistant
+ 
++from .runtime import ghost_link
++
+ TO_REDACT = {"entities", "config_hash", "latitude", "longitude", "git_sha"}
+ 
+ 
+@@ -19,4 +26,9 @@
+     coordinator = getattr(entry, "runtime_data", None)
+     if coordinator is None:
+         return {"loaded": False}
+-    return async_redact_data({"loaded": True, **coordinator.diagnostics()}, TO_REDACT)
++    data = {"loaded": True, **coordinator.diagnostics()}
++    try:                                    # the Ghost block (diagnostics-only, read-only): never allowed to fail the download
++        data["ghost"] = await coordinator.async_ghost_diagnostics()
++    except Exception:  # noqa: BLE001 - a failure of the Ghost is a small block, the rest of the download stands
++        data["ghost"] = ghost_link.unavailable("OTHER")
++    return async_redact_data(data, TO_REDACT)
+diff --git a/custom_components/ecco_intelligence/runtime/ghost_link.py b/custom_components/ecco_intelligence/runtime/ghost_link.py
+new file mode 100644
+--- /dev/null
++++ b/custom_components/ecco_intelligence/runtime/ghost_link.py
+@@ -0,0 +1,103 @@
++"""The Ghost's diagnostics block from the integration's own data (no homeassistant import; runs in the executor, never on the
++event loop). Read-only: it reads, it simulates, it returns a dict. It writes nothing, calls no service, adds no entity, changes
++no contract and gives no control authority; the block appears only in the diagnostics download.
++
++    ghost_block(job, store) -> dict          (never raises: a failure is a small block with a status and a constant reason)
++    unavailable(reason) -> dict              the small block for a failure before any computation
++
++Where it is computed, and why there. LAZILY, when the owner downloads the diagnostics, from data the coordinator already holds:
++  * the last cycle's EngineJob (the coordinator keeps a reference, without its recorder rows): the HA state copies, the site
++    plan, the decisions, the site facts and the cycle time `now`;
++  * the recorder statistics the coordinator caches for the slot (the same parsed image the cycles use), turned into a History by
++    a THROW-AWAY HistoryReuse, so the coordinator's own reused history is never touched and no recorder read happens;
++  * the same input judgement the engine makes (quality.assess_inputs on the same sources.build_sources and
++    engine_link.cycle_inputs), so the verified tariffs, the decided battery configuration and the reserve helper are the
++    engine's own, not a second opinion;
++  * the logged advice, read through RuntimeStateStore.advice_rows (SQLite mode=ro).
++So the poll cycle does no extra work and has no new failure path: the cost is paid by the download only, in the executor, with a
++time budget (PROPOSED_GHOST_BUDGET_S) and one job at a time. The history is as of the LAST cycle (the block says so: inputs_as_of).
++
++The decided SiteConfig comes from site_decisions.apply_to_siteconfig exactly as the engine's cycle builds it, with ONE
++difference: the charge window it insists on is a placeholder (the base configuration's own window), because the Ghost never reads
++the cheap window (the advice carries its own windows); a test pins that the block does not depend on it. The grid-charge limit is
++the register reading, without the engine's further cap by the TOU table's lowest slot power (a cap that can only lower it).
++
++PROPOSED (engineering suggestion, NOT an owner value): PROPOSED_GHOST_BUDGET_S.
++"""
++
++from __future__ import annotations
++
++from dataclasses import replace
++from datetime import datetime, timedelta
++
++from intelligence import ghost_compare
++from intelligence import tariff as tf
++from intelligence.ghost_feed import DEFAULT_DAYS
++from intelligence.quality import assess_inputs
++from intelligence.site_decisions import CHARGE_WINDOW_KEY, InputState, apply_to_siteconfig
++
++from . import engine_link, sources
++
++PROPOSED_GHOST_BUDGET_S = 30.0                # the download waits at most this long for the Ghost block (then: TIME_BUDGET)
++ADVICE_LOOKBACK_DAYS = DEFAULT_DAYS + 3       # advice issued up to three days before the period can still be in force in it
++HA_RESERVE_KEY = "reserve.ha_minimum_soc"
++IMPORT_KEY, EXPORT_KEY = "tariff.import_rates", "tariff.export_rates"
++
++
++def unavailable(reason: str) -> dict:
++    """The block of a failure before any computation (UNAVAILABLE and a constant reason code)."""
++    return ghost_compare.small_block(ghost_compare.UNAVAILABLE, reason)
++
++
++def _observed_at(readings, key: str) -> datetime | None:
++    for r in readings:
++        if getattr(r, "key", None) == key:
++            return getattr(r, "observed_at", None)
++    return None
++
++
++def _helper_reserve(ages) -> float | None:
++    """The Home Assistant reserve helper, only when the quality layer judged it fresh under a defined limit and it is a
++    percentage; otherwise None (the reserve is then the configuration's, and the advice's own recorded reserve)."""
++    st = ages.get(HA_RESERVE_KEY)
++    v = st.usable_number if isinstance(st, InputState) else None
++    return v if v is not None and 0.0 <= v <= 100.0 else None
++
++
++def ghost_block(job: engine_link.EngineJob | None, store) -> dict:
++    """The diagnostics block for `job` (the last cycle's job, its `statistics` set by the caller) and the state store. Never
++    raises."""
++    try:
++        return _block(job, store)
++    except Exception as exc:  # noqa: BLE001 - diagnostics must never fail the download; only the exception class is kept
++        return ghost_compare.error_block(exc)
++
++
++def _block(job: engine_link.EngineJob | None, store) -> dict:
++    if job is None:
++        return unavailable(ghost_compare.R_NO_CYCLE)
++    now = job.now
++    _rows, _truncated, history, newest_end, pv_history, _parsed, _reused = engine_link.HistoryReuse().history(job)
++    if history is None:
++        return unavailable(ghost_compare.R_NO_STATISTICS)
++    src = sources.build_sources(now, job.states, job.entity_map, job.liveness_at, newest_end,
++                                config_liveness_at=job.config_liveness_at)
++    quality = assess_inputs(engine_link.cycle_inputs(job, src.snapshot, src.site_readings, history, pv_history))
++    ages = quality.ages
++    base = job.base_cfg
++    window = (base.cheap_window_start_min, base.cheap_window_end_min)
++    readings = dict(ages)
++    readings[CHARGE_WINDOW_KEY] = InputState(CHARGE_WINDOW_KEY, window, True, 0.0, 1.0)   # the placeholder (module docstring)
++    cfg, _notes = apply_to_siteconfig(replace(base, tz=job.site_facts.tz), job.decisions, readings)
++    if cfg is None:
++        return unavailable(ghost_compare.R_CONFIG_NOT_DECIDED)
++    try:
++        advice = store.advice_rows(now - timedelta(days=ADVICE_LOOKBACK_DAYS), now + timedelta(days=1))
++    except Exception:  # noqa: BLE001 - an unreadable log is not an empty one
++        return unavailable(ghost_compare.R_ADVICE_LOG)
++    imp = tf.assess_rates(ages.get(IMPORT_KEY), now, kind="import", observed_at=_observed_at(src.site_readings, IMPORT_KEY))
++    exp = tf.assess_rates(ages.get(EXPORT_KEY), now, kind="export", observed_at=_observed_at(src.site_readings, EXPORT_KEY))
++    out = ghost_compare.build_ghost_comparison(history, advice, cfg, import_tariff=imp, export_tariff=exp, now=now,
++                                               ha_reserve_pct=_helper_reserve(ages))
++    out["inputs_as_of"] = now.isoformat()
++    return out
+diff --git a/custom_components/ecco_intelligence/runtime/store.py b/custom_components/ecco_intelligence/runtime/store.py
+--- a/custom_components/ecco_intelligence/runtime/store.py
++++ b/custom_components/ecco_intelligence/runtime/store.py
+@@ -43,6 +43,7 @@
+ STATE_PARTS = ("ecco", "intelligence", "state")
+ SCORECARD_FILE = "scorecard.sqlite3"
+ META_FILE = "store_meta.json"
++ADVICE_ROWS_LIMIT = 5000                      # a safety cap on the advice rows one read returns (the newest are kept)
+ SLOTS_DDL = ("CREATE TABLE IF NOT EXISTS ecco_intel_slots (slot_utc TEXT PRIMARY KEY, run_id INTEGER NOT NULL, "
+              "recorded_utc TEXT NOT NULL)")
+ UTC = timezone.utc
+@@ -308,6 +309,31 @@
+         cov = (sum(float(r["coverage"]) * int(r["n"]) for r in cov_rows) / cn) if cn else None
+         return OutcomeMetrics(mae, cov, n)
+ 
++    def advice_rows(self, start: datetime, end: datetime, limit: int = ADVICE_ROWS_LIMIT) -> list[dict]:
++        """READ-ONLY (SQLite mode=ro; nothing is created, altered or written, not even when the store is closed): the logged
++        advice issued in [start, end), oldest first, at most the newest `limit` rows, as the dicts of
++        ghost.AdviceRecord.from_dict (the mapping of Scorecard.advice_records and tools/advice_export.py; a test pins that the
++        three agree). [] when there is no scorecard file or no advice_log table (nothing logged yet); raises sqlite3.Error /
++        OSError when the file cannot be read, so the caller can tell 'nothing logged' from 'unreadable'."""
++        path = self._root / SCORECARD_FILE
++        if not path.is_file():
++            return []
++        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
++        con.row_factory = sqlite3.Row
++        try:
++            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='advice_log'").fetchone() is None:
++                return []
++            got = con.execute("SELECT * FROM advice_log WHERE issued_utc >= ? AND issued_utc < ? "
++                              "ORDER BY issued_utc DESC, advice_id DESC LIMIT ?", (_iso(start), _iso(end), int(limit))).fetchall()
++        finally:
++            con.close()
++        return [{"kind": r["kind"], "status": r["status"], "issued_at": r["issued_utc"], "window_start": r["window_start_utc"],
++                 "window_end": r["window_end_utc"], "target_soc_pct": r["target_soc_pct"], "export_kwh": r["export_kwh"],
++                 "export_kw": r["export_kw_avg"], "effective_reserve_pct": r["effective_reserve_pct"],
++                 "conservative_fallback": bool(r["conservative_fallback"]),
++                 "dump_advisable": True if r["dump_advisable"] is None else bool(r["dump_advisable"]),
++                 "advice_id": f"advice_log:{r['advice_id']}"} for r in reversed(got)]
++
+     def counts(self) -> dict:
+         """Row counts (tests and diagnostics)."""
+         if not (self._root / SCORECARD_FILE).is_file():
+diff --git a/custom_components/ecco_intelligence/tests/test_runtime_build.py b/custom_components/ecco_intelligence/tests/test_runtime_build.py
+--- a/custom_components/ecco_intelligence/tests/test_runtime_build.py
++++ b/custom_components/ecco_intelligence/tests/test_runtime_build.py
+@@ -5,7 +5,7 @@
+   * VENDOR_MANIFEST.json: every vendored module's source sha256 (LF) matches the repository file, every output sha256 matches
+     the kit file; the integration files likewise; the git sha is recorded only when given; the in-package copy is identical;
+   * the vendored set is exactly the AST import closure (module AND function level) of intelligence.shadow_cycle,
+-    intelligence.scorecard, intelligence.history and ecco_core.bridge plus the package __init__ files (recomputed here
++    intelligence.scorecard, intelligence.history, intelligence.ghost_compare and ecco_core.bridge plus the package __init__ files (recomputed here
+     independently);
+   * no absolute intelligence / ecco_core import remains at any depth, in _vendor or in the integration files (AST);
+     ecco_core/bridge.py's function-level import is rewritten; apart from imports every vendored module is unchanged (AST);
+@@ -48,7 +48,8 @@
+ 
+ PREFIX = "ecco_intel_build_"
+ PKG_REL = "custom_components/ecco_intelligence"
+-ROOTS = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "ecco_core.bridge")
++ROOTS = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "intelligence.ghost_compare",
++         "ecco_core.bridge")
+ 
+ 
+ def sha(b: bytes) -> str:
+@@ -143,7 +144,7 @@
+     print("== the vendor closure")
+     want = closure()
+     got = {m["module"] for m in man["modules"]}
+-    check(f"the vendored set is exactly the AST import closure of the four roots ({len(want)} modules)", got == want,
++    check(f"the vendored set is exactly the AST import closure of the five roots ({len(want)} modules)", got == want,
+           f"extra {sorted(got - want)} missing {sorted(want - got)}")
+     check("the closure reaches the function-level import of ecco_core.bridge (intelligence.inputs)", "intelligence.inputs" in got)
+     vend = sorted((pkg / "_vendor").rglob("*.py"))
+diff --git a/custom_components/ecco_intelligence/tests/test_runtime_import_without_ha.py b/custom_components/ecco_intelligence/tests/test_runtime_import_without_ha.py
+--- a/custom_components/ecco_intelligence/tests/test_runtime_import_without_ha.py
++++ b/custom_components/ecco_intelligence/tests/test_runtime_import_without_ha.py
+@@ -73,8 +73,8 @@
+     return json.loads(p.stdout.strip().splitlines()[-1])
+ 
+ 
+-check("the runtime package has its six modules", RUNTIME == ["engine_link", "gates", "history_source", "selftest", "sources",
+-                                                             "store"], str(RUNTIME))
++check("the runtime package has its seven modules", RUNTIME == ["engine_link", "gates", "ghost_link", "history_source", "selftest",
++                                                              "sources", "store"], str(RUNTIME))
+ print("== the source tree, homeassistant absent")
+ r = child(REPO)
+ check("no crash", "crash" not in r, r.get("crash", ""))
+diff --git a/docs/intelligence/INTELLIGENCE_HA_RUNTIME.md b/docs/intelligence/INTELLIGENCE_HA_RUNTIME.md
+--- a/docs/intelligence/INTELLIGENCE_HA_RUNTIME.md
++++ b/docs/intelligence/INTELLIGENCE_HA_RUNTIME.md
+@@ -545,7 +545,8 @@
+ What goes into the kit:
+ 
+ - **The vendor set:** the AST import closure, module level and function level, of `intelligence.shadow_cycle`,
+-  `intelligence.scorecard`, `intelligence.history` and `ecco_core.bridge`, plus the package `__init__` files.
++  `intelligence.scorecard`, `intelligence.history`, `intelligence.ghost_compare` (the Ghost's read-only diagnostics block) and
++  `ecco_core.bridge`, plus the package `__init__` files.
+ - **Import rewriting:** every absolute `intelligence.` / `ecco_core.` import is rewritten to a package-relative one, at any
+   depth, in the vendored modules and in the integration files. Examples:
+   - `bridge.py`'s lazy import becomes `from ..intelligence.inputs import ...`;
+diff --git a/tools/build_ha_integration.py b/tools/build_ha_integration.py
+--- a/tools/build_ha_integration.py
++++ b/tools/build_ha_integration.py
+@@ -7,8 +7,9 @@
+ 
+     custom_components/ecco_intelligence/            the integration sources (no tests, no README) plus _vendor/
+     custom_components/ecco_intelligence/_vendor/    the AST import closure (module level AND function level) of
+-                                                    intelligence.shadow_cycle, intelligence.scorecard, intelligence.history
+-                                                    and ecco_core.bridge, plus the package __init__ files on the path
++                                                    intelligence.shadow_cycle, intelligence.scorecard, intelligence.history,
++                                                    intelligence.ghost_compare and ecco_core.bridge, plus the package
++                                                    __init__ files on the path
+     custom_components/ecco_intelligence/VENDOR_MANIFEST.json   (a copy, read by the integration's start-up self-test)
+     VENDOR_MANIFEST.json                            per module: source path, sha256 of the source (LF), output path and
+                                                     sha256; per integration file the same; the git sha when given
+@@ -39,7 +40,8 @@
+ REPO = Path(__file__).resolve().parents[1]
+ PKG_REL = "custom_components/ecco_intelligence"
+ SRC_PKG = REPO / "custom_components" / "ecco_intelligence"
+-ROOT_MODULES = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "ecco_core.bridge")
++ROOT_MODULES = ("intelligence.shadow_cycle", "intelligence.scorecard", "intelligence.history", "intelligence.ghost_compare",
++                "ecco_core.bridge")
+ VENDOR_TOPS = ("intelligence", "ecco_core")
+ NEVER_VENDOR_MODULES = frozenset({"ecco_core.authority", "ecco_core.capability"})
+ NEVER_VENDOR_PARTS = frozenset({"tests", "tools", "prototypes", "profiles"})
