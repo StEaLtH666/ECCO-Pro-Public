@@ -404,6 +404,10 @@ class Bench:
         elif name == "ADJUST":
             if lease.kind != "gentle" or lease.pending is not None or lease.restore_owed:
                 return
+            if sent is not None and lease.st.last_write_s is not None and sent < lease.st.last_write_s:
+                # the lease wrote (a forced reduction) after this request was decided: the plan it carries is stale, it is dropped and the next plan tick decides again
+                self.run.log(t, "ADJUST %s dropped: the lease wrote at %d s, after it was decided at %d s" % (cmd[1], lease.st.last_write_s, sent))
+                return
             # a lowered power ceiling is a safety reduction the dongle recognises itself (it never takes Home Assistant's word for it)
             forced = lease.st.v_w is not None and cmd[1] < lease.st.v_w and lease.st.v_w > self.power_ceiling_w + 1e-9
             write, why = K.ramp_charge(lease.st, t, cmd[1], self.power_ceiling_w, forced=forced)

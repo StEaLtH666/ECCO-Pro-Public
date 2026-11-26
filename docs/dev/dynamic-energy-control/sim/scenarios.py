@@ -286,7 +286,7 @@ def import_analysis(run):
         if not attributed:
             owner_rows += i1 - i0 + 1
             continue
-        react = react_plan_s(sc) + TICK
+        react = sc.react_s + TICK
         for k in ("before", "gap"):
             if runs[k] * TICK > react:
                 violations.append(("react", "breach from t=%d s lasted %d s before a session held the charge (bound %d s)" % (ep["t0"], runs[k] * TICK, react)))
@@ -378,12 +378,9 @@ def inv_budgets(run):
         else:
             if len([w for w in mine if w.kind in ("start", "change", "loop", "forced")]) > 1:
                 problems.append("lease %d: a fixed-rate session wrote more than once" % l["id"])
-    # a request the dongle refuses for its budget is the policy's failure, unless a write of the lease landed while the request was on its way
-    # (a forced reduction between the decision and the arrival: the dongle is right to refuse the older, ordinary request)
     budget_refusals = [r for r in run.refusals if "budget" in r[2] or "dwell" in r[2]]
-    raced = [r for r in budget_refusals if len(r) > 3 and r[3] is not None and any(w.ok and w.kind in ("forced", "change") and r[3] <= w.t <= r[0] for w in run.writes)]
-    if len(budget_refusals) > len(raced):
-        problems.append("the dongle refused %d requests for the budget" % (len(budget_refusals) - len(raced)))
+    if budget_refusals:
+        problems.append("the dongle refused %d requests for the budget" % len(budget_refusals))
     return not problems, "; ".join(problems[:3]) if problems else "all budgets kept"
 
 
@@ -655,14 +652,11 @@ def outcome_of(run):
 def tolerated_finding(spec, run, name, classes):
     """The finding a FAILED invariant is counted under, instead of failing, when the spec says it tolerates that class (the sweeps only): the
     restore into a breach (F01); the 'never worse than today' comparison on a night where today's rate would breach the owner's import ceiling,
-    which the design ranks lower (a hard ceiling outranks it: the target guard never hands back into a breach); a miss outside the world's
-    envelope that no report foresaw (F06). None: the failure stands."""
+    which the design ranks lower (a hard ceiling outranks it: the target guard never hands back into a breach). None: the failure stands."""
     if name == "IMPORT_CEILING" and classes and classes <= set(spec.tolerate):
         return "F01-restore (tolerated in the sweep)"
     if name == "NEVER_WORSE_THAN_TODAY" and name in spec.tolerate and getattr(run, "baseline", None) is not None and ceiling_binds(run.baseline):
         return "ceiling-outranks (tolerated in the sweep: a hard import ceiling outranks never-worse)"
-    if name == "REACHES_OR_REPORTS" and name in spec.tolerate:
-        return "F06-tail (tolerated outside the envelope)"
     return None
 
 
@@ -1394,7 +1388,7 @@ def random_spec(seed, kind, envelope="world"):
     a trickle not slower than the world's, the gentle-rate knee and trickle drawn too) and the generator ASSERTS it, so the guarantee
     'reached, or reported early' is claimed only where it can hold. With envelope='measured' the knee and trickle are the measured ones
     (knee 92 to 99 percent, trickle 350 to 800 W, 7 percent of the plateau), which the planner's world is NOT pessimistic about: the
-    sweep of that kind counts the nights it misses without a report as finding F06 instead of failing on them."""
+    sweeps of that kind hold the same invariants (no night was found that is missed without a report: finding F06 is a margin, pinned by numbers)."""
     import random
     rng = random.Random(seed)
     rng2 = random.Random(seed * 31 + 7)       # the gentle-rate knee and trickle: a second stream, so the other draws of a seed do not move
@@ -1434,8 +1428,8 @@ def random_spec(seed, kind, envelope="world"):
             assert not bad_draw, "the generator drew a plant outside the declared envelope (seed %d): %s" % (seed, bad_draw)
             tol = ("restore", "NEVER_WORSE_THAN_TODAY")
         else:
-            # outside the world's envelope the projection cannot see a miss: the unreported misses are counted as finding F06, not failed
-            tol = ("restore", "NEVER_WORSE_THAN_TODAY", "REACHES_OR_REPORTS")
+            # outside the world's envelope the projection may not see a miss; no unreported miss was found in 12000 runs, so nothing is tolerated
+            tol = ("restore", "NEVER_WORSE_THAN_TODAY")
         # a restore into a known breach is finding F01 of the design (pinned in the scenarios, README): the sweep counts it, it does not fail on it
         return Spec(sc=sc, skip=(), tolerate=tol)
     cap = rng.uniform(25.0, 40.0)

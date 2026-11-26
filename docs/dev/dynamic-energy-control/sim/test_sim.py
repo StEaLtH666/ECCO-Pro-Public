@@ -1128,7 +1128,7 @@ check(f"finding F01 is alive in the sweep: {F01_HITS} of the {3 * SWEEP_N} runs 
       f"check goes red and the tolerance in scenarios.random_spec must be removed)", F01_HITS >= 1)
 t1 = time.time()
 bad_m = S.sweep(K, 350, base_seed=20261126, kinds=("gentle", "charge_fixed"), envelope="measured")
-check(f"a sweep of {2 * 350} nights with the MEASURED knee and trickle (outside the world's envelope, F06): nothing but the tolerated classes fails ({time.time() - t1:.0f} s)", not bad_m,
+check(f"a sweep of {2 * 350} nights with the MEASURED knee and trickle (outside the world's envelope, F06): every applicable invariant holds, no night is missed without a report ({time.time() - t1:.0f} s)", not bad_m,
       "; ".join("%s %s" % (n, f[0][:80]) for n, f in bad_m[:3]))
 t1 = time.time()
 bad2 = S.sweep(K, 400, base_seed=777001)
@@ -1344,8 +1344,10 @@ BENCH_MUTANTS = [
     ("B08 Home Assistant waits 20 minutes before it alerts about a dead dongle", "ALERT_AFTER_S = 120 ", "ALERT_AFTER_S = 1200 "),
     ("B09 an untrusted inverter clock does not stop a charge", "            if t0 <= t < t1 and (which == \"ntp\" or self.sc.kind in KINDS_CHARGE):\n", "            if t0 <= t < t1 and which == \"ntp\":\n"),
     ("B10 telemetry gaps are not honoured (the dongle always gets a sample)", "        if not self.d_up or self.in_gap(t):\n            return\n", "        if not self.d_up:\n            return\n"),
+    ("B12 a request decided before the lease's last write is executed (a stale ADJUST is not dropped)", "            if sent is not None and lease.st.last_write_s is not None and sent < lease.st.last_write_s:\n", "            if False:\n"),
     ("B11 the restore writes a computed value instead of the owner's snapshot", "            if reg in lease.snap and not self.do_write(t, lease, reg, lease.snap[reg], \"restore\"):\n", "            if reg in lease.snap and not self.do_write(t, lease, reg, 0.0, \"restore\"):\n"),
 ]
+BENCH_SWEEP_KILLERS = {"B12": ("gentle", 400, 777001)}     # a bench mutant only the seeded sweep reaches (a forced reduction racing an ordinary request)
 BENCH_KILLERS = {   # bench mutant -> the scenario that must fail on its own with it (a bench unit may kill the rest, see BENCH_UNITS)
     "BI26": "e10c_reserve_rise_then_ha_outage", "NB1": "g26_plan_lost", "NB2": "g19_inverter_ignores_write", "NB4": "g36b_charger_runs_away_mid_lease",
     "NB7": "g19_inverter_ignores_write", "NB8": "g28b_start_arrives_after_the_clock_is_untrusted", "BI23": "e21_pv_is_not_credited_in_the_duration",
@@ -1418,6 +1420,17 @@ for name, old, new in BENCH_MUTANTS:
     if why is None:
         why = first_bench_unit_failure(bmut)
         by_unit += 1 if why is not None else 0
+    b_sweep = None
+    if name.split()[0] in BENCH_SWEEP_KILLERS:
+        sw_kind, sw_n, sw_base = BENCH_SWEEP_KILLERS[name.split()[0]]
+        old_b = S.B
+        S.B = bmut
+        try:
+            b_sweep = S.sweep(K, sw_n, base_seed=sw_base, kinds=(sw_kind,))
+        finally:
+            S.B = old_b
+        if why is None and b_sweep:
+            why = f"the seeded sweep: {b_sweep[0][1][0][:60]}"
     mid = name.split()[0]
     check(f"bench mutant {name}: killed ({why})", why is not None)
     if why is None:
@@ -1425,6 +1438,9 @@ for name, old, new in BENCH_MUTANTS:
     if mid in BENCH_KILLERS:
         sf = scenario_failure(K, BENCH_KILLERS[mid], bmut)
         check(f"bench mutant {mid} dies in scenario {BENCH_KILLERS[mid]} on its own ({sf})", sf is not None)
+    if mid in BENCH_SWEEP_KILLERS:
+        check(f"bench mutant {mid} dies in the seeded sweep on its own ({len(b_sweep)} of {BENCH_SWEEP_KILLERS[mid][1]} {BENCH_SWEEP_KILLERS[mid][0]} runs from base seed {BENCH_SWEEP_KILLERS[mid][2]} fail: "
+              f"{b_sweep[0][1][0][:70] if b_sweep else None})", bool(b_sweep))
 check(f"every bench mutant is killed ({len(BENCH_MUTANTS) - len(bsurv)} of {len(BENCH_MUTANTS)}; {by_unit} by a bench unit, the rest by the scenarios)", not bsurv, str(bsurv))
 check("the bench units pass on the real bench", first_bench_unit_failure(B) is None)
 bunmut = load_mutant(BSRC, "bench_unmutated")

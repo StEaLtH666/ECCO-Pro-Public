@@ -62,6 +62,10 @@ L4 objectives  ->  L3 KERNEL (this folder, kernel.py)  ->  L2 hard limits / L1 l
   registers before its first write, verifies every write by readback, restores the snapshot (never a computed value) at every end, and
   at a restart ends and restores any open lease instead of resuming it. A Gentle lease happens once a night; a Charge Fixed session may
   be started again after the dwell.
+* **A request that raced a write is stale, not refused.** An ordinary change Home Assistant decided BEFORE the lease's last write (a forced
+  reduction landed while the command was on its way) is dropped by the dongle model as stale and decided again at the next plan tick; the
+  BUDGETS invariant stays strict (any refusal for the budget is the policy's failure), and a bench mutant that executes the stale request
+  dies in the seeded sweep.
 * **The reason code is one of six** (`increase`, `reduce`, `hold`, `stop`, `unreachable`, `blocked`), each with a detail from a closed list
   and a plain sentence with the numbers it used (REQ-B10). A scenario fails if a decision has no sentence or an unfilled number.
 * **The guard order is pinned** (REQ-B21): grid lost, owner end, untrusted time, stale telemetry, reserve floor, hard ceilings, measured
@@ -430,8 +434,8 @@ claims, each change makes it catch more.
   general statement; it holds for the knee (the world assumes 90 percent, the measured knee is 98) and not for the tail. The two errors point
   opposite ways: for a 95 or 100 percent target the world's knee makes 'at risk' the normal word (about 55 and 97 percent of the nights that
   reach with a margin carry a report), while below the knee the false alarms are 0 to 9 percent (the sweep bound is 10 percent, measured about
-  5). The sweep with the measured knee and trickle (outside the envelope) misses no night without a report, because that pessimism and the
-  hand-back absorb it; the finding is a margin, pinned in the self-check by the 255 against 272 minutes, and it flips the day the planner's tail
+  5). The sweep with the measured knee and trickle (outside the envelope) holds the same invariants and misses no night without a report (12000
+  runs over four base seeds), because that pessimism and the hand-back absorb it; the finding is a margin, pinned in the self-check by the 255 against 272 minutes, and it flips the day the planner's tail
   is fixed.
 * **The feasibility guarantee has two halves, judged apart.** REACHES_DEADLINE: on a night today's fixed rate would reach 30 minutes before the
   deadline (and the import ceiling does not bind, the owner did not lower the Power Ceiling, the plant is inside the envelope) the session
@@ -439,7 +443,7 @@ claims, each change makes it catch more.
   inputs, so a controller that cries wolf at every start (the review's BI12b) fails, and the sweep counts false alarms against the bound above.
 * **Mutants test the kernel's tests, not the kernel's correctness.** The mutants are single-line in-memory edits of `kernel.py`; killing all
   of them shows the suite notices those edits, not that no other defect exists. Measured when this was written: the unit tables and the
-  scenarios together kill all 103 kernel mutants and all 21 bench mutants; the scenarios alone kill 52 of the kernel's (the rest are boundary edits, one epsilon or one count,
+  scenarios together kill all 103 kernel mutants and all 22 bench mutants; the scenarios alone kill 52 of the kernel's (the rest are boundary edits, one epsilon or one count,
   that a whole night does not resolve), and the mutants of each class the review named (a dwell that a forced reduction waits for, a guard
   that never trips, a stale frame that drives a change, a lowered ceiling that is ignored, a missing measured-power guard, a double write, a
   tracker that is never used, smoothing that is missing, a restart at the full rate into a breach) die in a NAMED scenario or in the sweep on
