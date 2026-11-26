@@ -1484,7 +1484,7 @@ ECF1 = Entry(
         _ecf1.DIST_REL: "2270a0bec2ceda208c3d8677c7449d94d26615016b225de3b0be9137d7e8ccea",
     },
     # _pex.fingerprint(ECF1): hashes its parent epc3's fingerprint and every declaration above
-    fingerprint="5a12da39569c96a885d41c8f5730310830319807d9d35f0e758e1af8993e8d3c",
+    fingerprint="136ea0d788a86411cf1258b199ef3f109fb785578fd2ee9c6c389c289f2a51bd",
     note="the Energy Actions card corrections after the first install: the current backup reserve is read by the installed scripts' rule (a number from 0 "
          "to 100, so 5 percent is valid) and kept apart from the power-cut target (10 to 100, offered only while above the reserve now), installed is "
          "derived from the entities that exist instead of a static line (ready only when nothing is missing and the plan revision can be read), and the "
