@@ -1,0 +1,41 @@
+# ASSERTED VALUES, NOT A LIVE PIN.
+# The numbers of the guarded charge-rate controller (GRC) design that the simulator's kernel mirrors, vendored here so that a clone of
+# this repository can check them: struct Config of docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h (GRC SPEC revision 3,
+# section 5) on the local, unmerged branch dev/gentle-rate-controller. That branch is NOT part of this tree and nothing here reads it.
+# test_sim.py compares the kernel's constants with THIS file; where the source commit below happens to be present (a local clone that has
+# the branch) it also compares THIS file with the header at that commit and says so; elsewhere that second check is skipped. If the design
+# changes, this file is updated by hand together with the kernel, and the commit is renamed.
+# source commit: ec90232bd89910918970c9cfa906dac4bf4600c2
+# source path: docs/dev/gentle-rate-controller/proposed/ecco_gentle_rate_core.h
+floor_w = 500
+round_w = 100
+fw_bound_w = 8000
+max_step_w = 2000
+hyst_w = 300
+reversal_extra_w = 300
+dwell_ms = 1800000
+settle_ms = 45000
+judge_samples = 4
+max_changes = 6
+max_restore_attempts = 3
+owner_restore_reserve = 1
+night_write_ceiling = 10
+week_write_ceiling = 42
+life_write_ceiling = 4000
+plan_max_age_ms = 1200000
+telemetry_stale_ms = 90000
+clock_skew_max_s = 120
+end_margin_s = 600
+charging_min_w = 1000
+response_min_pct = 30
+wrong_dir_w = 300
+max_ineffective = 2
+gain_min_pct = 50
+gain_max_pct = 150
+runaway_pct = 115
+runaway_margin_w = 500
+runaway_samples = 3
+guard_margin_s = 900
+guard_derate_pct = 85
+guard_tail_pct = 25
+taper_max_pct = 95
