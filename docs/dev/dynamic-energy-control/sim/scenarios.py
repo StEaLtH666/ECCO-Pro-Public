@@ -535,6 +535,32 @@ def X_reported_by(t_s):
     return ("unreachable reported by t=%d s" % t_s, f)
 
 
+def X_report_between(t0, t1):
+    def f(run):
+        t = run.first_unreachable_t
+        return t is not None and t0 <= t <= t1, "first unreachable report at %s" % t
+    return ("the first unreachable report is between t=%d and %d s" % (t0, t1), f)
+
+
+def X_leases_count(n):
+    def f(run):
+        return len(run.leases) == n, "%d lease(s)" % len(run.leases)
+    return ("exactly %d lease(s) in the night" % n, f)
+
+
+def X_never_worse_binding():
+    """The never-worse comparison is not vacuous on this night: today's fixed rate (the same night with no ECCO) reaches the target at least
+    END_MARGIN_S + GUARD_MARGIN_S before the window end, so the session MUST reach it too (REQ-A12)."""
+    def f(run):
+        base = getattr(run, "baseline", None)
+        if base is None:
+            return False, "no baseline run"
+        we = run.sc.window[1]
+        got = max(x.read for x in base.rows if x.t <= we - KR.END_MARGIN_S - KR.GUARD_MARGIN_S)
+        return got >= run.sc.target_soc_pct - 1e-9, "today's rate reads %.0f %d s before the window end (target %.0f)" % (got, KR.END_MARGIN_S + KR.GUARD_MARGIN_S, run.sc.target_soc_pct)
+    return ("today's fixed rate reaches the target in good time (the never-worse comparison binds)", f)
+
+
 def X_min_decisions(n):
     return ("at least %d decisions were explained" % n, lambda run: (len(run.recs) >= n, "%d decisions" % len(run.recs)))
 
@@ -709,10 +735,32 @@ add(gentle("g32_hold_pressed_charge", "The owner presses Hold mid-lease: the ses
            events=((7000.0, "hold", {"dur": 1800.0}),)),
     X_lease_ended("owner_end"), X_reached(),
     covers=("REQ-C12", "REQ-B21"))
-add(gentle("g33_target_guard", "The real battery is far larger than the plan (46 kWh against 35): the plan falls behind and the target is handed back to today's rate in time.",
+add(gentle("g33_plan_catches_up_alone", "The real battery is far larger than the plan (46 kWh against 35): the plan falls behind, raises the rate itself to today's and reaches the target in good time; the target guard has nothing to do and stays quiet.",
            plant=P.PlantParams(capacity_kwh=46.0), soc0_pct=25.0, target_soc_pct=90.0),
-    X_reached_by_window_end(),
-    skip=("REACHES_OR_REPORTS",), covers=("REQ-A12", "REQ-B21"))
+    X_reached(), X_reached_by_window_end(), X_saw("dongle", "stop", "target_guard", present=False), X_saw("ha", "increase", "behind_plan"),
+    covers=("REQ-A12",))
+add(gentle("g34_target_guard_hands_back", "The never-worse target guard decides the night: the charging efficiency collapses to 0.50 at 90 minutes on a 38 kWh battery; the raises are slower than the collapse, so the guard hands the charge back to today's rate at 9015 s and today's rate reaches the target by the window end (a controller without the guard misses it). The target is reported at risk, never lowered.",
+           plant=P.PlantParams(capacity_kwh=38.0), soc0_pct=30.0, buffer_s=1800.0, events=((5400.0, "plant", {"charge_eff": 0.50}),)),
+    X_lease_ended("target_guard"), X_reached_by_window_end(), X_never_worse_binding(), X_saw("ha", "unreachable", "at_risk"),
+    X_report_between(5400, 9100),
+    covers=("REQ-A9", "REQ-A12", "REQ-B21"))
+add(gentle("g34b_target_guard_reports_missed_target", "The hand-back that cannot save the night: a 40 kWh battery, efficiency 0.55 from 90 minutes. The guard ends the lease at 8415 s, today's rate does not reach the target either, and the miss is REPORTED (before the end of the lease and again by the watch that goes on after it), never silent.",
+           plant=P.PlantParams(capacity_kwh=40.0), soc0_pct=20.0, events=((5400.0, "plant", {"charge_eff": 0.55}),)),
+    X_lease_ended("target_guard"), X_report_between(5400, 8500), X_saw("ha", "unreachable", "deadline"), X_leases_count(1),
+    covers=("REQ-A9", "REQ-A12"))
+
+add(gentle("g21b_stale_end_then_collapse", "The lease ends on a 5 minute telemetry gap, then the charging efficiency collapses to 0.40: today's rate is back and the plan can no longer write (one lease a night), but it keeps watching and reports that the target will be missed.",
+           tel_gaps=((3600.0, 3900.0),), events=((7000.0, "plant", {"charge_eff": 0.40}),)),
+    X_lease_ended("stale_telemetry"), X_leases_count(1), X_report_between(7000, 13000), X_saw("ha", "unreachable", "at_risk"),
+    covers=("REQ-A9", "REQ-B3", "REQ-B9"))
+add(gentle("g23b_restart_then_collapse", "The dongle restarts mid-lease (the lease is restored, never resumed), then the charging efficiency collapses to 0.40: the plan watches the rate in force and reports the miss.",
+           events=((6000.0, "dongle_restart", {"boot_s": 60.0}), (7000.0, "plant", {"charge_eff": 0.40}))),
+    X_lease_ended("restart"), X_leases_count(1), X_report_between(7000, 13000), X_saw("ha", "unreachable", "at_risk"),
+    covers=("REQ-A9", "REQ-B9"))
+add(gentle("g26b_plan_lost_then_collapse", "Home Assistant stops handing over plans (the lease ends after 20 minutes) and the charging efficiency collapses to 0.40: the hand-over is stopped, the judging is not, and the miss is still reported.",
+           events=((6000.0, "plan_stop", {}), (7000.0, "plant", {"charge_eff": 0.40}))),
+    X_lease_ended("plan_lost"), X_leases_count(1), X_report_between(7000, 13000), X_saw("ha", "unreachable", "at_risk"),
+    covers=("REQ-A9", "REQ-B9"))
 
 # ----- Charge Fixed (Free Power style): one rate, ended early -----------------------------------------------------------------
 add(fixed("f01_fixed_nominal", "Charge Fixed at 8 kW from 30 to 90 percent: one rate, ended at the target (two writes: start and restore).",

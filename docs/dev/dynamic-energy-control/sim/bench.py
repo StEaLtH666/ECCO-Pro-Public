@@ -290,7 +290,9 @@ class Bench:
 
     def rec(self, t, who, policy, d):
         self.run.recs.append(Rec(t, who, policy, d.reason, d.detail, d.wanted_w, d.write_w, d.end, d.unreachable, d.explanation))
-        if d.unreachable and who == "ha" and self.run.first_unreachable_t is None:
+        # a REPORT is any published decision that says the objective cannot be met, from Home Assistant or from the dongle's own guard
+        # (the target guard's hand-back is the dongle's: its stop says 'at risk' at once, F02 of the N4 review)
+        if d.unreachable and self.run.first_unreachable_t is None:
             self.run.first_unreachable_t = t
             self.run.first_unreachable_detail = d.detail
 
@@ -578,28 +580,51 @@ class Bench:
                 self.run.alerts.append((t, "dongle unavailable for %d s while session %d is open: no firmware guard runs" % (t - self.unavailable_since, lease.id)))
             return
         self.unavailable_since = None
-        if self.ha_plan_stopped:
-            return
-        if lease is not None and not lease.restore_owed and lease.kind == "gentle":
+        stopped = self.ha_plan_stopped
+        # a stopped plan hand-over sends no PLAN, START, ADJUST or END command; Home Assistant's own judging goes on and still REPORTS a
+        # target that is going to be missed (report only, F02 of the N4 review)
+        if lease is not None and not lease.restore_owed and lease.kind == "gentle" and not stopped:
             self.send(t, ("PLAN",))
         if sc.kind == "gentle":
-            self.ha_charge(t, inp, lease, K.plan_gentle, "gentle")
+            self.ha_charge(t, inp, lease, K.plan_gentle, "gentle", report_only=stopped)
         elif sc.kind == "charge_fixed":
-            self.ha_charge(t, inp, lease, lambda i, o, l, s: K.plan_charge_fixed(i, o, l, s, owner_rate_w=sc.owner_rate_w), "charge_fixed")
-        else:
+            self.ha_charge(t, inp, lease, lambda i, o, l, s: K.plan_charge_fixed(i, o, l, s, owner_rate_w=sc.owner_rate_w), "charge_fixed", report_only=stopped)
+        elif not stopped:
             self.ha_export(t, inp, lease)
 
     def can_resend(self, t):
         sc = self.sc
         return self.ha_start_sent_t is None or t - self.ha_start_sent_t >= 2 * max(sc.plan_s, sc.cmd_delay_s + TICK)
 
-    def ha_charge(self, t, inp, lease, plan, name):
+    def ha_report(self, t, name, d):
+        """Report only (the plan hand-over is stopped): a decision that says the target cannot be met is published without its write or its
+        end; nothing else is recorded and nothing is sent."""
+        if d.unreachable:
+            self.rec(t, "ha", name, replace(d, write_w=None, end=False))
+
+    def ha_watch(self, t, inp, obj, lim, name):
+        """After a Gentle lease has ended, for any reason, the night's lease is used up (one lease a night) and the plan can no longer START,
+        ADJUST or END anything; it keeps judging the rate in force and REPORTS a target that is going to be missed (kernel.plan_watch).
+        Report only: this method never sends a command."""
+        d = self.K.plan_watch(inp, obj, lim, self.ha_state)
+        if d.unreachable:
+            self.rec(t, "ha", name, d)
+        elif d.reason == "stop":
+            self.rec(t, "ha", name, d)
+            self.ha_over = True          # the target is reached or the window is over: nothing more to watch tonight
+
+    def ha_charge(self, t, inp, lease, plan, name, report_only=False):
         K, sc = self.K, self.sc
         obj, lim = self.charge_objective(), self.limits()
         if lease is None:
             if self.night_used or (self.last_end_t is not None and t - self.last_end_t < K.CHARGE_DWELL_S):
+                if self.night_used:
+                    self.ha_watch(t, inp, obj, lim, name)      # night_used stops ACTUATION, not reporting (F02)
                 return
             d = plan(inp, obj, lim, self.ha_state)
+            if report_only:
+                self.ha_report(t, name, d)
+                return
             self.rec(t, "ha", name, d)
             if d.reason == "stop":
                 self.ha_over = True      # the target is reached or the window is over: nothing more to plan tonight
@@ -614,6 +639,9 @@ class Bench:
             return
         st = K.carry_memory(lease.st, self.ha_state)
         d = plan(inp, obj, lim, st)
+        if report_only:
+            self.ha_report(t, name, d)
+            return
         self.rec(t, "ha", name, d)
         if d.end:
             self.send(t, ("END", d.detail))

@@ -288,7 +288,7 @@ EXPLAIN = {
     ("stop", "runaway"): "Stopping: the measured power {measured_w} W is far above what the setpoint should give ({expected_w} W) for {samples} samples.",
     ("stop", "write_budget"): "Stopping: the write budget of this session is used up; the session ends through the restore.",
     ("stop", "response_failed"): "Stopping: the plant did not respond to the setpoint as a setpoint should; control is not safe.",
-    ("stop", "target_guard"): "Stopping: finishing at the pre-session rate would no longer leave the safety margin before the slot end, so the charge is handed back to it.",
+    ("stop", "target_guard"): "Stopping: finishing at the pre-session rate would no longer leave the safety margin before the slot end, so the charge is handed back to it; the target is at risk and is reported, not lowered.",
     ("stop", "plan_lost"): "Stopping: no plan hand-over for {age_s} s (limit {limit_s} s); the pre-session values are restored.",
     ("stop", "lease_end"): "Stopping: the planned end of the session has come.",
     ("stop", "export_over_limit"): "Stopping: net export {export_w} W is above the Max Grid Export limit of {limit_w} W.",
@@ -878,6 +878,8 @@ def target_guard_trips(inp, obj, lim, st):
     Never when handing back would put the import over the owner's ceiling: a hard ceiling outranks 'never worse than today'."""
     if st.original_w is None or st.gain is None:
         return False
+    if inp.frame.soc_pct is not None and inp.frame.soc_pct >= obj.target_soc_pct:
+        return False        # the reading is at the target: nothing is at risk (the pessimistic start sits below the reading, which must not trip a false report)
     headroom = import_headroom_w(st, inp, lim)
     if headroom is not None and st.original_w * st.gain > headroom:
         return False
@@ -928,7 +930,9 @@ def charge_guards(inp, obj, lim, st, kind):
             return make("stop", "deadline", end=True)
         return make("stop", "window_end", left_min=(obj.window_end_s - inp.now_s) / 60.0, margin_min=END_MARGIN_S / 60.0)
     if g == "target_guard":
-        return make("stop", "target_guard", end=True)
+        # the hand-back trips exactly when finishing at today's rate is at risk: the target is REPORTED at risk with it (REQ-A9, F02 of the
+        # N4 review: a stop that said nothing left a missed night unreported, because the night's lease was over)
+        return make("stop", "target_guard", end=True, unreachable=True)
     if f.soc_pct >= obj.target_soc_pct:
         return make("stop", "target_reached", end=active, soc=f.soc_pct, target=obj.target_soc_pct)
     return None
@@ -1015,6 +1019,46 @@ def plan_gentle(inp, obj, lim, st):
     return _gentle_decision(inp, obj, lim, st, charge_progress(inp, obj, lim, st), starting=False)
 
 
+def unreachable_detail(prog):
+    """The detail of an 'unreachable' report for a charge, from charge_progress: None when the highest allowed rate reaches the target by
+    the deadline in the pessimistic projection (nothing to report). 'import_headroom': the import ceiling is what limits the rate and even
+    the window end is missed; 'at_risk': the deadline is missed but the highest rate still reaches by the window end (or the rate in force
+    still does); 'deadline': not even the window end is reached. One definition for the lease, the start and the watch after a lease."""
+    if prog["feasible"]:
+        return None
+    margin = prog["margin_min"]
+    if prog["ceiling_name"] == "import" and not prog["top_ok"]:
+        return "import_headroom"
+    if prog["top_ok"] or (margin is not None and margin > -EPS):
+        return "at_risk"
+    return "deadline"
+
+
+def plan_watch(inp, obj, lim, st):
+    """REQ-A9 after a Gentle lease has ended, for ANY reason (F02 of the N4 review): the owner's own rate is back in force and the plan can
+    no longer write it, but it keeps WATCHING: a report-only feasibility check on the rate in force, so a night that is going to miss
+    the target is still said so early. It never writes and never ends anything (`write_w` None, `end` False). `st` is the planner's memory
+    (house history, progress tracker) of Home Assistant; the lease state is gone. One Decision: a guard decision (blocked or stop) as for a
+    start, 'blocked' when no charge runs, 'hold/on_plan' when the rate in force reaches the deadline, else 'unreachable'."""
+    g = charge_guards(inp, obj, lim, st, "gentle")
+    if g is not None:
+        return g
+    gain, why = measure_gain(inp, st)
+    if why == "no_charge_running":
+        return make("blocked", "no_charge_running", min_w=GRC_CHARGING_MIN_W)
+    if why == "implausible_gain":
+        return make("blocked", "implausible_gain", gain=gain, gain_min=GRC_GAIN_MIN * st.gain0, gain_max=GRC_GAIN_MAX * st.gain0)
+    run = replace(st, phase="active", gain=gain, original_w=inp.in_force_w, v_w=inp.in_force_w)
+    prog = charge_progress(inp, obj, lim, run)
+    if prog["need_w"] is None:
+        return make("blocked", "no_headroom")
+    unreach = unreachable_detail(prog)
+    if unreach is None:
+        return make("hold", "on_plan", wanted_w=run.v_w, v_w=run.v_w, margin_min=prog["margin_min"])
+    return make("unreachable", unreach, unreachable=True, want_w=run.v_w, target=obj.target_soc_pct, ceiling_w=prog["ceiling_ac"],
+                late_min=prog["late_min"])
+
+
 def _hold(st, inp, why, v, want):
     since = 0.0 if st.last_write_s is None else (inp.now_s - st.last_write_s)
     return make("hold", why or "no_change_needed", wanted_w=want, v_w=v, want_w=want, since_min=since / 60.0,
@@ -1032,14 +1076,7 @@ def _gentle_decision(inp, obj, lim, st, prog, starting):
     ceiling_sp = prog["ceiling_sp"]
     need_sp = min(ceiling_sp, _ceil_step(prog["need_w"] / gain, CHARGE_STEP_W))
     margin = prog["margin_min"]
-    unreach = None
-    if not prog["feasible"]:
-        if prog["ceiling_name"] == "import" and not prog["top_ok"]:
-            unreach = "import_headroom"
-        elif prog["top_ok"] or (margin is not None and margin > -EPS):
-            unreach = "at_risk"
-        else:
-            unreach = "deadline"
+    unreach = unreachable_detail(prog)
     if starting:
         goal = max(CHARGE_MIN_W, min(need_sp, st.original_w))
         write = None if abs(goal - st.original_w) < EPS else goal

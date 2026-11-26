@@ -469,6 +469,17 @@ def u_guards(Km):
     assert Km.target_guard_trips(late, cobj(Km, deadline=17400.0), Km.Limits(import_ceiling_w=9500.0), act) is False, "never hand back into an import breach"
     assert Km.target_guard_trips(late, cobj(Km, deadline=17400.0), Km.Limits(import_ceiling_w=12000.0), act) is True, "with room under the ceiling it does hand back"
     assert Km.target_guard_trips(late, cobj(Km, deadline=17400.0), Km.Limits(), Km.State()) is False
+    # the boundary of the guard: it looks at the pessimistic finish at the pre-session rate against 25 minutes before the slot end (the 10 minute
+    # end margin plus the 15 minute guard margin); at 80 percent the finish needs about 31 minutes
+    ob2, gi = cobj(Km, deadline=17400.0), (lambda now, soc: cin(Km, now=now, soc=soc, house=800.0, ac=7071.0, inforce=6300.0))
+    assert Km.target_guard_trips(gi(15000.0, 80.0), ob2, Km.Limits(), act) is True, "25 minutes left, the finish needs 31: hand back"
+    assert Km.target_guard_trips(gi(14400.0, 80.0), ob2, Km.Limits(), act) is False, "35 minutes left: the lease goes on"
+    assert Km.target_guard_trips(gi(16510.0, 80.0), ob2, Km.Limits(), act) is True, "past the margin and below the target: hand back"
+    assert Km.target_guard_trips(gi(16440.0, 90.0), ob2, Km.Limits(), act) is False, "a reading at the target never trips it (no false 'at risk')"
+    d = Km.charge_guards(gi(16440.0, 90.0), ob2, Km.Limits(), act, "gentle")
+    assert (d.reason, d.detail, d.unreachable) == ("stop", "target_reached", False), d
+    d = Km.charge_guards(gi(15000.0, 80.0), ob2, Km.Limits(), act, "gentle")
+    assert (d.reason, d.detail, d.end, d.unreachable) == ("stop", "target_guard", True, True), "the hand-back is reported at risk (F02)"
 
 
 def u_plan_charge(Km):
@@ -512,6 +523,15 @@ def u_plan_charge(Km):
     assert Km.plan_gentle(cin(Km, now=2000.0, soc=26.0, age=45.0, ac=7070.0, inforce=6300.0), ob, lim, act).detail != "stale_short"
     d = Km.plan_gentle(run_in(7000.0, 70.0), ob, Km.Limits(power_ceiling_w=5000.0), replace(act, last_write_s=0.0))
     assert (d.reason, d.detail, d.write_w) == ("reduce", "power_ceiling", 5000.0), d
+    # the watch after a lease (F02): report only, on the rate in force
+    wt = lambda now, soc, **kw: Km.plan_watch(cin(Km, now=now, soc=soc, house=800.0, ac=7070.0, inforce=6300.0, **kw), ob, lim, st0)
+    d = wt(7000.0, 40.0)
+    assert d.unreachable and d.reason == "unreachable" and d.write_w is None and not d.end and d.detail in ("at_risk", "deadline"), d
+    d = wt(1000.0, 60.0)
+    assert (d.reason, d.detail, d.write_w, d.end) == ("hold", "on_plan", None, False), d
+    assert wt(7000.0, 92.0).detail == "target_reached" and wt(14400.0, 60.0).detail == "window_end" and wt(7000.0, 40.0, hold=True).detail == "owner_hold"
+    assert Km.plan_watch(cin(Km, now=7000.0, soc=40.0, ac=500.0), ob, lim, st0).detail == "no_charge_running"
+    assert wt(7000.0, 40.0, time_ok=False).detail == "time_untrusted" and wt(7000.0, 40.0, age=91.0).detail == "stale_telemetry"
     fx = Km.plan_charge_fixed(Km.Inputs(now_s=300.0, frame=Km.Frame(soc_pct=30.0, age_s=0.0, grid_w=800.0, inv_ac_w=0.0, pv_w=0.0)), ob, lim, st0, owner_rate_w=8000.0)
     assert (fx.reason, fx.detail, fx.write_w) == ("increase", "start", 8000.0), fx
     lo = Km.plan_charge_fixed(Km.Inputs(now_s=300.0, frame=Km.Frame(soc_pct=10.0, age_s=0.0, grid_w=800.0, inv_ac_w=0.0, pv_w=0.0)), cobj(Km, target=100.0), lim, st0, owner_rate_w=2000.0)
@@ -920,6 +940,11 @@ MUTANTS = [
      'if g == "grid_lost":\n        return make("hold", "tracking", wanted_w=st.v_w, v_w=st.v_w, export_w=0.0, target_w=0.0, band_w=0.0)\n    if g == "owner_end":\n        return make("stop", "owner_end", end=True)\n    if g == "time_untrusted":\n        return make("stop", "time_untrusted", end=True)\n    if g == "stale":\n        return make("stop", "stale_telemetry", end=True, **ages)\n    if g == "floor":'),
     ("M64 target guard ignores the import ceiling", "    if headroom is not None and st.original_w * st.gain > headroom:\n        return False", "    if False:\n        return False"),
     ("M66 the target guard never trips", '"target_guard": active and kind == "gentle" and fresh and target_guard_trips(inp, obj, lim, st),', '"target_guard": False,'),
+    ("M67 the hand-back is not reported at risk", 'return make("stop", "target_guard", end=True, unreachable=True)', 'return make("stop", "target_guard", end=True)'),
+    ("M68 the watch after a lease never reports", 'return make("unreachable", unreach, unreachable=True, want_w=run.v_w, target=obj.target_soc_pct, ceiling_w=prog["ceiling_ac"],\n                late_min=prog["late_min"])', 'return make("hold", "on_plan", wanted_w=run.v_w, v_w=run.v_w, margin_min=prog["margin_min"])'),
+    ("M69 the target guard trips with the reading at the target", "    if inp.frame.soc_pct is not None and inp.frame.soc_pct >= obj.target_soc_pct:\n        return False        # the reading is at the target: nothing is at risk (the pessimistic start sits below the reading, which must not trip a false report)\n", ""),
+    ("N08 the target guard never trips once its margin has passed", "    if until <= 0:\n        return inp.frame.soc_pct < obj.target_soc_pct\n", "    if until <= 0:\n        return False\n"),
+    ("N09 the target guard margin is 5 minutes instead of 15", "GUARD_MARGIN_S = 900 ", "GUARD_MARGIN_S = 300 "),
     ("M65 forced reduction taken from the planning peak", "write, _why = ramp_charge(st, inp.now_s, want, lim.power_ceiling_w, forced=True)\n    if write is None:\n        return make(\"stop\", \"write_budget\", end=True)", "write, _why = ramp_charge(st, inp.now_s, want, lim.power_ceiling_w, forced=False)\n    if write is None:\n        return make(\"stop\", \"write_budget\", end=True)"),
 ]
 
