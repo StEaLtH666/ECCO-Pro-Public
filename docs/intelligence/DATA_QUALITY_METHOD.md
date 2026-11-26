@@ -114,7 +114,8 @@ and the items each one affects (BLOCK withholds the item, WARN is shown with the
 | Canonical or fresh raw SOC not a percentage | `SOC_OUT_OF_RANGE` | BLOCK | SOC items |
 | An online flag (it holds its last state; no timeout) reads on while the liveness is not fresh | `ONLINE_FLAG_UNCONFIRMED` | BLOCK for `inverter.healthy`; WARN for the controller and canonical telemetry flags | export_event, dump_to_grid |
 | The inverter does not report normal operation | `INVERTER_NOT_HEALTHY` | BLOCK | export_event, dump_to_grid |
-| Live power balance (house = PV + battery + grid) fits only with the grid sign reversed, only with the battery sign reversed, or neither way | `CT_SIGN_REVERSED`, `BATTERY_SIGN_REVERSED`, `POWER_BALANCE_INCONSISTENT` | BLOCK | export_event, dump_to_grid |
+| Live power balance (house = PV + battery + grid; lossless unless the site file carries the optional inverter conversion facts, section 10.1) fits only with the grid sign reversed, only with the battery sign reversed, or neither way | `CT_SIGN_REVERSED`, `BATTERY_SIGN_REVERSED`, `POWER_BALANCE_INCONSISTENT` (evidence `balance: loss_aware` when the conversion is in force) | BLOCK | export_event, dump_to_grid |
+| The optional inverter conversion site facts (section 10.1) are incomplete, not finite numbers, or outside their bounds. The balance is then judged lossless, as if they were absent, and the items resting on it are withheld whether or not the balance holds (evidence `problems`: `<fact>:<missing, not_a_number or out_of_bounds>`, never a value) | `POWER_LOSS_FACTS_INVALID` | BLOCK | export_event, dump_to_grid |
 | Native-load false zero: house load zero while inverter + grid show a load (HD1) | `LOAD_FALSE_ZERO` | BLOCK | export_event, dump_to_grid |
 | Negative house load | `HOUSE_POWER_NEGATIVE` | BLOCK | export_event, dump_to_grid |
 | The LiveInputs carry a value (or a time) different from the snapshot's, so the two do not describe the same moment and neither is trusted; the LiveInputs is not a LiveInputs | `LIVE_INPUTS_DISAGREE`, `LIVE_INPUTS_MALFORMED` | BLOCK | every item resting on a snapshot signal, whichever signal differs (the reserve helper included) |
@@ -276,6 +277,122 @@ shows a reversed CT (`quality.ct_reversal`, the same judgement and windows as `a
 itself derived from the same CT (HD1's inverter + grid), the reversed reading still balances; that fault is out of reach of
 this check and needs the counter check or a supervised look.
 
+### 10.1 The live power balance and the optional inverter conversion
+
+**Why a loss term.** The balance rule expects house = PV + battery + grid (battery positive while discharging, grid positive
+while importing). On a hybrid inverter the PV and battery power readings are DC-side values, while the house power is the
+inverter's AC output plus the grid CT, so the two sides differ by what the inverter loses in converting and what it draws
+itself. A lossless check therefore finds the balance broken whenever enough PV or battery power flows, and withholds
+export and Dump advice for a reason that is physics, not a data fault. It was found on the first installed site, from
+recorded history of the four readings; the diagnosis and the fit stay with that site's offline evidence. The facts move the
+accepted region down by that loss and no further than the bounds allow, which is why they are bounded, reported when invalid
+and calibrated from data; the sign-reversal tests move with it.
+
+**The model.** With the net DC-side power d = PV + battery, the expected house power is
+
+- d >= 0 (the discharge and PV side): `grid + dc_to_ac x d - standby`
+- d < 0 (the charge side: the battery charges, from the grid or beyond what the PV supplies): `grid + d / ac_to_dc - standby`
+
+It is continuous at d = 0, where it is `grid - standby` (an idle inverter draws its standby power from the grid). With the
+defaults (factors 1, standby 0) it is exactly PV + battery + grid, evaluated in the same order, so a site without the facts
+gets the verdicts, residuals and tolerances it always had (`test_intel_power_balance.py` compares the two over thousands of
+sets). The tolerance is unchanged: the larger of the PROPOSED floor and the PROPOSED fraction of the largest magnitude,
+applied to the residual against this expectation. The CT-reversed and battery-reversed tests use the same expectation with
+the reversed reading (`quality.power_balance_verdict`, which the engine and the fitting tool share). `LOAD_FALSE_ZERO` and
+`HOUSE_POWER_NEGATIVE` are unchanged and run first, as before.
+
+**The native-load false zero stays on the lossless flow, on purpose.** `LOAD_FALSE_ZERO` (HD1) fires when the house load reads
+zero (0.5 W or less) while the lossless flow PV + battery + grid exceeds 150 W, with or without the facts. For every conversion
+inside the bounds the loss-aware expectation is at most that flow (the inverter's loss and own draw only take power off the AC
+side), so a zero reading that passes the rule can never hide more than the flow, that is, 150 W: HD1's own documented margin
+([`../HOUSE_LOAD_HD1.md`](../HOUSE_LOAD_HD1.md)). The facts can therefore only change the balance verdict that follows, and in
+two directions that are both pinned by `test_intel_power_balance.py` (section 8): the zero rule may block a set the loss-aware
+expectation would accept (an idle inverter at the largest standby, 100 W, importing 160 W with the house reading zero: the
+model says 60 W of real load, the rule still reports it; conservative, it can only block more), and a zero reading with a
+flow of 150 W or less reaches the balance, which a valid set of facts can pass where the lossless balance would not (the
+battery charging 500 W from a 650 W import with the house reading zero: flow exactly 150 W, loss-aware expectation about
+80 W, inside the 100 W floor; without the facts the balance blocks it).
+
+**Where the values live.** Three optional site facts in the `site` block of the site file (never in the repository; the
+file is placed with `tools/place-ha-site-file.ps1`, which needs no change):
+
+| Site fact | Meaning | Bound (inclusive) |
+|---|---|---|
+| `inverter_dc_to_ac_factor` | share of the net DC-side power that reaches the AC side while d >= 0 | 0.90 to 1.0 |
+| `inverter_ac_to_dc_factor` | share of the AC power that reaches the DC side while d < 0 | 0.90 to 1.0 |
+| `inverter_standby_w` | the inverter's own draw, taken off the AC side | 0 to 100 W |
+
+All three absent (or null) means the lossless balance, the default, so every existing test and every installed site behaves
+as before until its site file carries them. Present means all three, each a finite number inside its bound. Anything else
+(one or two of the three, a string, true or false, a list, an object, a number outside its bound, an integer too large for a float) is reported and never
+read as a looser rule: the runtime's loader WARNs `SITE_INVERTER_CONVERSION` (naming no value; the fact names and reasons go
+to the debug detail), `tools/ecco_intel_drill.py site-check` reports PROBLEMS and shows export_event and dump_to_grid as
+BLOCKED with `POWER_LOSS_FACTS_INVALID`, and the engine BLOCKs those two items with `POWER_LOSS_FACTS_INVALID` while still
+judging the balance lossless. A valid set shows a PASS check. The factors and the standby are **PROPOSED engineering
+parameters calibrated for one site, not owner decisions**; the bounds are PROPOSED too (section 11). The rule set carries the
+version `QUALITY_VERSION` `intel-quality-0.3.2-cfg` (0.3.1 had no conversion), which the capture validator prints in its summary,
+so that results and summaries made before and after the change are told apart.
+
+**How to recalibrate.** `intelligence/tools/power_balance_fit.py` (standard library only; reads the files it is given, prints a
+report, writes nothing, needs no network or Home Assistant access) fits the three values from a recorded history of the
+four readings: a generic CSV (`timestamp, house_w, pv_w, battery_w, grid_w`) or the Home Assistant history JSON, one file
+per entity per period. It prints (a) the fitted slopes and constants of the two sides, separately and jointly with one shared
+standby, and the facts rounded as they would be entered; (b) the share of samples the engine accepts under the lossless and
+the loss-aware rule, with the residual spread; (c) a fault-injection table (grid CT reversed, battery reversed) for the
+lossless rule, the loss-aware rule and the loosest values the bounds allow; (d) a hold-out check (fitted on the first half of
+the days, judged on the second). Refit per season and after any change to the inverter or its settings, and use the facts only
+when the hold-out accepts (nearly) every sample, every reversal that matters is blocked, and the fitted values lie inside the
+bounds. The tool's output holds site values: keep it with the site's offline evidence.
+
+**What it guarantees.** A reversal moves the expectation by an amount that can be stated exactly. Reversing the grid CT
+reading g moves it by 2 x |g|. Reversing the battery reading b moves it by 2 x s x |b|, where s is the slope of the expectation in
+the net DC-side power over the stretch the reversal crosses: the discharge factor on the discharge side, 1 divided by the charge
+factor on the charge side. At the bounds s lies between 0.90 and 1.11, so a battery reversal moves the expectation by between
+1.8 and 2.22 times its reading (2 times only for a lossless rule; below 2 times on the discharge side of a lossy one), not by
+twice the reading as for the grid CT. A reversal passes only if the rule's own expectation error at that sample is at least the
+move less the tolerance: at least the tolerance for a grid CT reversal of at least the tolerance, at least 0.8 of it for a
+battery reversal. So **a rule whose expectation is wrong by less than 0.8 of the tolerance at a sample cannot hide a sign
+reversal of at least the tolerance on it**, whatever the facts inside the bounds. `test_intel_power_balance.py` checks the
+inequality over 12000 random pairs of facts (a reversal that passes is always absorbed by the rule's own error) and the
+consequence over random rules (errors under 0.79 of the tolerance never hide a reversal).
+
+**What a wrong set inside the bounds can still hide.** The bounds limit how wrong a set can be, not whether it is wrong. Two sets
+inside the bounds put the expectation at most 0.1 x d + 100 W apart on the discharge side (d >= 0) and 0.111 x |d| + 100 W on the
+charge side (d < 0); the corners of the bounds reach it (checked by the suite). At 5 kW of net DC-side power that is 600 W and 656 W
+(the former bounds, 0.85 and 150 W, allowed 0.15 x d + 150 W and 0.176 x |d| + 150 W: 900 W and 1032 W), against a balance
+tolerance of 100 W or 5 % of the largest magnitude (250 W at 5 kW). A fault whose effect on the balance is smaller than that shift
+plus the tolerance can be absorbed by a wrong set: a sign reversal of up to about half of (shift + tolerance), or a house sensor
+that reads low by about the share the shift is of the house power (the more PV or battery power flows, the larger that share).
+Measured on 50000 random sets of PV, battery and grid power (a seeded sweep with the engine's own tolerance and round numbers;
+the sets with a true house power of at least 50 W are kept, about 32000), for the loosest set the bounds allow (0.90, 0.90, 100 W;
+the former bounds: 0.85, 0.85, 150 W) against two true inverters (A: factors 0.95 and 50 W; B: no loss at all, the largest gap),
+the share of the samples that pass **only because the set is wrong** (the true facts block them):
+
+| | house reads 12 % low | house reads 20 % low | grid CT reversed (300 W or more) | battery reversed (300 W or more) |
+|---|---|---|---|---|
+| A, former bounds | 47.8 % | 23.6 % | 1.3 % | 1.3 % |
+| A, these bounds | 24.2 % | 13.0 % | 0.4 % | 0.4 % |
+| B, former bounds | 46.4 % | 25.7 % | 1.8 % | 1.8 % |
+| B, these bounds | 47.4 % | 22.8 % | 1.3 % | 1.1 % |
+
+Reversals of 600 W or more that the loosest set lets through: A 0.19 % of the reversals tried at the former bounds, none at
+these; B 0.70 % and 0.16 %. The tighter bounds shrink the exposure but do not remove it, and they do not shrink it for every
+fault: a house sensor that reads 5 to 10 % low is hidden as often as before or more often by the set that cancels it (B at 5 % and
+8 %: 37 % and 56 % of the samples, against 14 % and 36 % at the former bounds, because the smaller shift matches a smaller sensor
+error); the larger sensor errors and the large reversals are hidden clearly less often. A wrong set inside the bounds is therefore
+still able to hide a sign reversal of a few hundred watts at several kilowatts of flow and a house sensor that is several percent
+off. **The facts must come from the fitting tool**: re-fitted per season and after any change of the inverter or its settings,
+used only when its hold-out accepts, its fault-injection row blocks every reversal that matters and the fitted values lie inside
+the bounds, and never entered by estimate, from a data sheet or from another site. The fault-injection row evaluates the loosest
+set the bounds allow as well; it must be read, not assumed.
+
+**What no balance rule can see.** A reversal that leaves
+the sum unchanged (the grid charging the battery: grid and battery cancel) is invisible to any balance rule, lossless or not.
+The balance is checked on instantaneous readings; the history rules in this document are separate. Clearing the balance BLOCK
+does not by itself make `data_quality` OK: any WARN finding (for example `CHARGE_WINDOW_FROM_TOU_TABLE`) keeps it DEGRADED.
+`tools/s0_input_consistency.py` compares two readings of one signal with the same tolerance rule; it is not a balance and is
+unchanged.
+
 ## 11. PROPOSED detection thresholds
 
 Every value is a technical detection constant (`quality.DQ_PROPOSED`, status `PROPOSED`), never an owner value or decision.
@@ -294,6 +411,7 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
 | `soc_agree_points` (S0) | 2 points | one SOC step either way |
 | `protection_margin_pct` | 10 points | export and Dump advice withheld this close to the protection level |
 | `power_agree_w`, `power_agree_fraction` (S0) | 100 W, 5 % | the live power-balance tolerance: the larger of the two |
+| `INVERTER_FACTOR_BOUNDS`, `INVERTER_STANDBY_BOUNDS_W` (`site_decisions`) | 0.90 to 1.0; 0 to 100 W | the bounds of the optional inverter conversion site facts (section 10.1): PROPOSED limits on how far the expectation may move from the lossless sum (a loss of at most 10 % of the net DC-side power, 11.1 % on the charge side, and an own draw of at most 100 W); a value outside is reported, never used. Tightened from 0.85 / 150 W after an independent review showed that wide bounds let a wrong but in-bounds set hide real faults |
 | `load_zero_max_w`, `load_false_zero_flow_w` | 0.5 W, 150 W | HD1's rule: a native zero is false when inverter + grid exceed 150 W ([`../HOUSE_LOAD_HD1.md`](../HOUSE_LOAD_HD1.md)) |
 | `clock_offset_warn_s` | 30 s | the firmware's background clock-correction floor |
 | `clock_offset_block_s` | 30 s | equal to the warning bound: any offset worth a warning refuses a TOU-derived charge window (the work order's "WARN; BLOCK a charge window derived from the TOU slot table", read in the direction that blocks more; the firmware's 120 s correction threshold is not used) |
@@ -333,6 +451,23 @@ tolerances and the capacity plausibility range are reused from `site_decisions.P
   swapped but cannot be told apart never make a reversal (in `assess_inputs` and `prepare_history`), a genuine reversal
   fires in each window on its own with the counts it read as evidence, both PROPOSED bounds are inclusive, and the
   residual rule still counts every hour that balances only swapped.
+- `test_intel_power_balance.py`: the optional inverter conversion (section 10.1) with a synthetic inverter and round numbers
+  only: the facts (absent, valid, every invalid form, both bounds inclusive and one step outside refused); the default as
+  today's rule (a literal table, 30000 seeded sets bit-identical to a verbatim copy of the previous rule, and findings
+  identical through `assess_inputs`); the loss-aware pass cases on both sides, at idle and at zero net DC power; the
+  tolerance floor and fraction; the CT reversed, battery reversed, both, native-load false zero and negative house
+  load still blocking; invalid facts reported and never loosening; a too generous conversion not hiding a reversal at the
+  tested powers, a conversion wrong by less than 0.8 of the tolerance never hiding a reversal of at least the tolerance (the exact
+  inequality over random pairs of facts, and the 0.1 x d + 100 W shift between two sets inside the bounds); 19 re-implemented
+  mutants of the rule killed, and 34 mutants of the real `quality.py` and 18 of the real `site_decisions.py` (each the file's own
+  text with one exact edit, imported as a module of its own and judged on hand-written tables; the one equivalent mutant is
+  correctly not killed); a `site_facts` that is not a `SiteFacts` reads exactly as absent;
+  the native-load false zero with the facts configured (a table with no facts, the synthetic inverter and the loosest facts, and a
+  seeded sweep: its decision never depends on the facts and no zero over the 150 W margin passes silently).
+- `test_intel_power_balance_fit.py`: the fitting tool on synthetic histories (the generic CSV and the Home Assistant JSON
+  adapter, which must give the same report), noise-free recovery of the synthetic inverter, the hold-out, the
+  fault-injection table, gaps and byte-order marks, every refusal (a time without a zone, a missing column, an unusable
+  history, too many rows) and the warning for a history that holds a sign fault; the tool is stdlib only and writes nothing.
 - `test_intel_quality_fuzz.py`: 2400 seeded malformed inputs and 1600 more on a second seed (its CCR-DQ-1 simulation does
   nothing on the integrated code, so both sets are judged under the contract's own limits) never raise, and an
   independent oracle (`_dq_helpers`: written out from this document, not from `quality.py`) confirms that no
