@@ -1,0 +1,172 @@
+{
+ "attributes": {
+  "advice": {
+   "followed": 6,
+   "not_followed": {
+    "BLOCKED": 1,
+    "NO_WINDOW": 1
+   },
+   "records_in_period": 8
+  },
+  "applies_nothing": true,
+  "data_quality": {
+   "advice_rows_invalid": 0,
+   "approximations": [
+    "SOC: hourly means, end of hour estimated",
+    "advice windows matched to hourly slots (half a slot in = in)",
+    "spilled PV unknown, taken as 0"
+   ],
+   "dump_advice_without_window": 1,
+   "ghost_model_flags": [
+    "OPENING_STOCK_UNPRICED",
+    "WEAR_UNKNOWN"
+   ],
+   "hours_with_repaired_or_flagged_energy": 0,
+   "notes": [
+    "NO_VERIFIED_TARIFF: no money figure; behaviour comparison only",
+    "DUMP_ADVICE_HAS_NO_WINDOW: no intended Dump-to-Grid duration is recorded, so dump advice cannot be simulated (counted as not followed)"
+   ],
+   "period_hours": 168,
+   "unattributed_energy_excluded": false,
+   "unusable_by_reason": {},
+   "usable_hours": 168,
+   "window_hours": 168
+  },
+  "days": [
+   {
+    "actual_min_soc_pct": 40.0,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-10",
+    "extra_import_kwh_in_ghost": 0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-11",
+    "extra_import_kwh_in_ghost": -0.42,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "advice_not_followed": {
+     "BLOCKED": 1
+    },
+    "date": "2030-01-12",
+    "extra_import_kwh_in_ghost": -0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-13",
+    "extra_import_kwh_in_ghost": -0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-14",
+    "extra_import_kwh_in_ghost": 2.22,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "advice_followed": 1,
+    "advice_in_force_hours": 5,
+    "advice_not_followed": {
+     "NO_WINDOW": 1
+    },
+    "date": "2030-01-15",
+    "extra_import_kwh_in_ghost": 0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0
+   },
+   {
+    "actual_min_soc_pct": 40.0,
+    "advice_followed": 0,
+    "advice_in_force_hours": 5,
+    "date": "2030-01-16",
+    "extra_import_kwh_in_ghost": 0.0,
+    "ghost_below_reserve": false,
+    "ghost_min_soc_pct": 40.0
+   }
+  ],
+  "days_dropped": 0,
+  "intelligence_controlled_nothing": true,
+  "kind": "ghost",
+  "label": "SIMULATION: arithmetic on recorded hourly data. Intelligence controlled nothing; the real battery did what it did. Evidence for the owner's decision, never a decision.",
+  "mode": "SHADOW",
+  "model_version": "intel-ghost/1",
+  "money_available": false,
+  "period": {
+   "end": "2030-01-17T00:00:00+00:00",
+   "hours": 168,
+   "longest_usable_run_hours": 168,
+   "slot_minutes": 60,
+   "soc_start_pct": 40.0,
+   "start": "2030-01-10T00:00:00+00:00",
+   "timezone": "UTC"
+  },
+  "ready_for_assisted_evidence": {
+   "days_compared": 7,
+   "days_diverged": 6,
+   "decision": null,
+   "effective_reserve_pct": 40.0,
+   "evidence_only": true,
+   "ghost_below_reserve_dates": [],
+   "ghost_below_reserve_days": 0,
+   "ghost_below_reserve_slots": 0
+  },
+  "reason": null,
+  "schema": "ecco-intel-ghost-feed/1",
+  "simulated": true,
+  "status": "OK",
+  "tariff": {
+   "export": "NOT_VERIFIED",
+   "import": "NOT_VERIFIED"
+  },
+  "totals": {
+   "actual_min_soc_pct": 40.0,
+   "actual_throughput_kwh": 52.79,
+   "closing_stored_difference_kwh": -0.0,
+   "ghost_min_soc_pct": 40.0,
+   "ghost_throughput_kwh": 50.79
+  },
+  "uncertainty": {
+   "closing_stock_rules": "closing stock difference valued two ways, the one less favourable to the ghost used: (a) each run's mixed-tank cost basis; (b) deliverable kWh at the period's mean import price",
+   "model_baseline": "the no-advice ghost against reality: 0 when the recorded flows replay exactly; subtracted out of the advice effect",
+   "round_trip_efficiency_pct": {
+    "base": 81.0,
+    "minus": 78.0,
+    "plus": 84.0
+   },
+   "sensitivity": {
+    "base": {
+     "closing_stored_difference_kwh": -0.0,
+     "ghost_below_reserve_slots": 0
+    },
+    "minus": {
+     "closing_stored_difference_kwh": 1.99,
+     "ghost_below_reserve_slots": 0
+    },
+    "plus": {
+     "closing_stored_difference_kwh": -1.81,
+     "ghost_below_reserve_slots": 0
+    }
+   }
+  }
+ },
+ "state": "OK"
+}

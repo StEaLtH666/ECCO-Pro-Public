@@ -25,6 +25,28 @@ repository's licence); the card contains no third-party code.
   (I-D1 .. I-D9) and recent accuracy;
 - the watchdog (`binary_sensor.ecco_intel_watchdog_fresh`) and the pause helper's state.
 
+## Advice versus reality (Ghost): an optional section
+
+When the **optional** Ghost entity exists (default `sensor.ecco_intel_ghost`, key `ghost_entity`; it is not one of the
+eleven contract entities, and the card works unchanged without it), the card adds a read-only section driven by its attributes
+(the summary of `intelligence/ghost_feed.py`, schema `ecco-intel-ghost-feed/1`, SHADOW, `kind: ghost`):
+
+- a banner: a **SIMULATION**, Intelligence controlled nothing, evidence for the assisted decision and **not a decision**;
+- the week headline (ghost minus actual, ahead or behind in words and glyphs), the no-advice model baseline and the
+  uncertainty (the two closing-stock rules, the efficiency plus or minus 3 points), and a verdict when the difference is within
+  that noise;
+- a scoreboard with one row per day (bars from the middle: behind left, ahead right; bad days as plain as good ones), each with
+  the battery low point of the real day and the Ghost against the reserve (a breach marked) and the advice followed or not
+  followed, with the reason in plain words;
+- the `ready_for_assisted_evidence` numbers (days compared, share ahead, worst day, reserve breaches), the data-quality flags
+  and a line saying it **decides nothing**.
+
+Without a verified tariff there is **no money anywhere**: behaviour only (extra grid import, low points, reserve slots). An
+absent entity renders nothing; an unavailable or malformed one renders one quiet "Ghost not available" line. The section has no
+control and makes no call; all attribute text is escaped. Tests: `test/ghost.test.mjs`, with fixtures in `test/fixtures/`
+built by running `ghost_feed` on synthetic data. The preview takes `?g=ghost_money | ghost_nomoney | ghost_insufficient |
+unavailable | malformed | none`.
+
 ## The guards (fail closed)
 
 1. Advice is rendered only when `sensor.ecco_intel_status` carries the `contract_version` `ecco-intel-entities/1`, a non-blank

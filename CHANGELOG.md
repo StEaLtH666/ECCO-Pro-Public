@@ -260,6 +260,22 @@ Development before the first public release happened in a private repository; se
   `ecco_intelligence_prefs.yaml` and the standalone dashboard's registration package `ecco_intelligence_dashboard.yaml`, each
   with its suite. `deployment/ha-manifest.yaml` lists the three packages, the standalone dashboard and the card (manual
   resource registration); `VERSION.yaml` records Intelligence 0.1.0 (SHADOW, applies nothing, not tested in Home Assistant).
+- **Intelligence SHADOW v0.1, advice log: a verified write and an incident record** (diagnostics only; offline source; nothing installed
+  or deployed; no entity, published value, status, mode or advice changes; it takes effect with the Ghost update's own restart): each
+  advice write is read back by its row ids after the commit, on the same connection that wrote it, comparing kind, issue time and
+  content hash (a same-connection read-back: it shows that the rows are visible to the writing connection and match what was written;
+  it is not a durability or fsync proof and says nothing about what a power loss would keep); a failed or unverified write opens an
+  incident (when it began and last failed, the attempts, the slot cycles missed, the exception class name, the issue times of the advice
+  that could not be written; the newest 10 are kept in memory and shown in the diagnostics download as `advice_incidents`; a store step
+  that times out or raises counts only inside the incident, not in the two counters below). `self_test.STORE_RECORD` is WARN while the
+  latest attempt has failed or is unverified and PASS again only after a verified write, when the incident is closed and kept; the
+  cumulative counters `advice_write_failures` and `advice_unverified_writes` are history and are never reset (`advice_current_failure`
+  is). Closed incidents are written after the next verified write to a small table, `advice_incident` (at most 10 rows), created only
+  then; a failed or timed-out write of an incident changes nothing else and keeps it pending for the next verified write (the table keeps
+  the newest 10 by the text of `first_failed_utc`: after a backward clock step a new, older incident is stored and pruned at once, a
+  known limit); an incident still open at a restart is not in it and lives only in the warning logged when it opened. Every slot cycle's advice
+  stays its own row (about 50 a day, 400 days); the old scorecard and the start-up behaviour are unchanged. `advice_export.py --incidents`
+  prints the table.
 - **ECCO 3D Energy Flow card, V2** (`frontend/ecco-flow-3d-card`, `custom:ecco-flow-3d-card`; read-only; placed on the
   production Overview by `ovw3`, see Changed; supersedes the V1 prototype of PR #44). An isometric house scene from the
   owner-approved V4 scene pack (ten

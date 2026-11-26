@@ -11,6 +11,21 @@ Writes: only under <config>/ecco/intelligence/state/, and only
                          the PROPOSED retention are deleted. The slot claim and the run row are committed together (one
                          transaction), so a process that dies at any point records a slot at most once: a restart in the
                          middle of a run, or a crash between the two writes, never records it twice.
+                         The advice just published is also logged (advice_log, additive; record_cycle's `advice`), in its own
+                         transaction after the scorecard work, in the same file: ONE table, two rows per slot cycle at most
+                         (about 52 a day), deleted after PROPOSED_RETENTION_DAYS (a durable write). The table is created by
+                         the first advice write, not when the store is opened, so a failure there (another table of that
+                         name, a failing CREATE, a full disk) is counted and never raised and cannot touch the scorecard
+                         record, the start-up gate or outcome_metrics. This is a durable write of the integration (the
+                         diagnostics download only reads it). Each advice write is READ BACK by its row ids after the commit
+                         (a verified write; record_cycle reports it as advice_verified).
+                         A failed advice write opens an INCIDENT, kept in memory by AdviceHealth (below). Once a later advice
+                         write has been verified, the closed incidents are written by log_advice_incidents, in a table of their
+                         own (advice_incident, at most ADVICE_INCIDENTS_KEPT rows) that is created only then: never at start-up,
+                         never when the scorecard is opened, never by an advice write, and never while the database cannot take
+                         the advice write. Its failure is isolated too. If the database never takes the advice write again, or
+                         the integration restarts before it does, an open incident is lost except for the one warning that was
+                         logged when it opened (the class name only).
 The parent <config>/ecco/intelligence/ must already exist (the owner places the site file there); this module never creates
 anything above state/. Every path is resolved and checked to lie inside state/ before it is written.
 
@@ -30,7 +45,10 @@ from pathlib import Path
 from typing import Mapping
 
 from intelligence.advisory_contract import OutcomeMetrics
-from intelligence.scorecard import Scorecard
+from intelligence.scorecard import (ADVICE_INCIDENT_COLUMNS, ADVICE_INCIDENTS_KEPT, ADVICE_LOG_INCOMPATIBLE, ADVICE_LOG_MISSING,
+                                    ADVICE_READ_BACK_MISSING, Scorecard, advice_incident_status, advice_log_status, incident_reason)
+
+from .selftest import INFO, PASS, WARN
 
 STORE_SCHEMA = "ecco-intel-runtime-store"
 STORE_SCHEMA_VERSION = 1
@@ -41,6 +59,7 @@ SITE_PARTS = ("ecco", "intelligence", "site.local.json")
 STATE_PARTS = ("ecco", "intelligence", "state")
 SCORECARD_FILE = "scorecard.sqlite3"
 META_FILE = "store_meta.json"
+ADVICE_ROWS_LIMIT = 5000                      # a safety cap on the advice rows one read returns (the newest are kept)
 SLOTS_DDL = ("CREATE TABLE IF NOT EXISTS ecco_intel_slots (slot_utc TEXT PRIMARY KEY, run_id INTEGER NOT NULL, "
              "recorded_utc TEXT NOT NULL)")
 UTC = timezone.utc
@@ -113,6 +132,147 @@ def _contains_key(v: object, key: str) -> bool:
 
 def _iso(t: datetime) -> str:
     return t.astimezone(UTC).isoformat()
+
+
+def _count(v: object) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+
+
+OUTCOME_VERIFIED, OUTCOME_NEUTRAL, OUTCOME_FAILED = "VERIFIED", "NEUTRAL", "FAILED"
+OUTCOME_UNVERIFIED, OUTCOME_NOT_OFFERED, OUTCOME_STEP_FAILED = "UNVERIFIED", "NOT_OFFERED", "STEP_FAILED"
+
+
+class AdviceHealth:
+    """The advice log's health since the integration started, and its incidents. Pure (no file, no clock: every time is given); the
+    coordinator owns one, feeds it the result of each slot cycle's store step and shows it in the diagnostics.
+
+    What one slot cycle's store step is, for the advice log (note_store_result reads record_cycle's result):
+      VERIFIED    rows were written and every one was read back by its id after the commit. The only thing that recovers health;
+      NEUTRAL     nothing was written (no advice, or an identical re-publish while current): health is unchanged, it neither
+                  recovers nor fails;
+      FAILED      the write raised (advice_write_failures > 0);
+      UNVERIFIED  rows were reported without a successful read-back (a row not found again, the read-back failing, or no
+                  advice_verified at all): not a recovery, not a success;
+      NOT_OFFERED the store was given no advice (its result has no advice keys): not an advice cycle;
+      STEP_FAILED (note_step_failure) the whole store step timed out or raised, so nothing is known about the advice write.
+
+    An INCIDENT opens at the first FAILED, UNVERIFIED or STEP_FAILED step and stays open, counting each further one (attempts and
+    distinct slot cycles missed), until a VERIFIED step closes it. A closed incident is KEPT (the newest `kept` incidents, the open
+    one included; older ones are dropped and counted) and offered once for persisting (pending_incidents / note_persisted). Its
+    reason is an exception CLASS NAME only (incident_reason); the first reason is kept next to the latest. Health is never assumed:
+    a new ledger has verified nothing, so after a restart it reads PASS only after its own first VERIFIED step. The cumulative
+    failure counters belong to the coordinator and are never reset by a recovery."""
+
+    def __init__(self, kept: int = ADVICE_INCIDENTS_KEPT) -> None:
+        self._kept = max(1, int(kept))
+        self._incidents: list[dict] = []          # oldest first; an open incident, when there is one, is the last
+        self._dropped = 0
+        self._attempts = 0
+        self._verified = 0
+        self._last_verified: str | None = None
+        self._last_outcome: str | None = None
+        self._last_persist: dict | None = None
+
+    # --- reading -----------------------------------------------------------------------------------------------------
+    def _open(self) -> dict | None:
+        return self._incidents[-1] if self._incidents and self._incidents[-1]["state"] == "OPEN" else None
+
+    @property
+    def failing(self) -> bool:
+        """True while an incident is open: the latest advice write attempt failed or is unverified."""
+        return self._open() is not None
+
+    def snapshot(self) -> dict:
+        """The diagnostics block: copies only, newest incident first."""
+        op = self._open()
+        closed = [dict(i) for i in reversed(self._incidents) if i["state"] == "CLOSED"]
+        return {"current_failure": op is not None, "last_outcome": self._last_outcome, "attempts": self._attempts,
+                "verified_writes": self._verified, "last_verified_utc": self._last_verified, "kept_max": self._kept,
+                "dropped": self._dropped, "open": None if op is None else dict(op), "closed": closed,
+                "last_persist": None if self._last_persist is None else dict(self._last_persist)}
+
+    def store_check(self, bad_writes_since_start: int) -> tuple[str, str] | None:
+        """(level, text) for the STORE_RECORD self-test check after an advice store step, or None to leave the check as it is (a
+        neutral step while an incident is open, or after a step failure whose own text the coordinator has recorded).
+        WARN while an incident is open and the latest attempt failed or is unverified; PASS after a verified write, or when
+        the store was not given advice; INFO (never PASS) while nothing has been verified since the start and nothing was written."""
+        op = self._open()
+        if op is not None:
+            if self._last_outcome in (OUTCOME_FAILED, OUTCOME_UNVERIFIED):
+                return (WARN, f"advice log not verified ({op['reason']}): {op['missed_slots']} slot(s) missed, "
+                              f"{int(bad_writes_since_start)} failed/unverified since start; PASS needs a verified write")
+            return None
+        if self._last_outcome == OUTCOME_NEUTRAL and self._verified == 0:
+            return (INFO, "the scorecard step completed; no advice row was written yet, so the advice log is not verified since start")
+        return (PASS, "the scorecard step completed" + ("; the advice log write is verified" if self._verified else ""))
+
+    def pending_incidents(self) -> list[dict]:
+        """Copies of the closed incidents that have not been persisted yet (an open incident is never offered)."""
+        return [dict(i) for i in self._incidents if i["state"] == "CLOSED" and not i["persisted"]]
+
+    # --- writing -----------------------------------------------------------------------------------------------------
+    def note_persisted(self, keys, *, error: object = None, now: datetime | None = None) -> None:
+        """The store has persisted the closed incidents whose first_failed_utc is in `keys` (unknown keys are ignored); `error`
+        and `now`, when given, are kept as the last persist attempt (class name only)."""
+        wanted = {k for k in keys if isinstance(k, str)}
+        for inc in self._incidents:
+            if inc["state"] == "CLOSED" and inc["first_failed_utc"] in wanted:
+                inc["persisted"] = True
+        if now is not None:
+            self._last_persist = {"at": _iso(now), "persisted": len(wanted), "error": None if error is None else incident_reason(error)}
+
+    def note_store_result(self, last_store: object, *, slot: datetime, issued: datetime, now: datetime) -> str:
+        """Feed one slot cycle's record_cycle result (see the class docstring). `slot` is the schedule slot, `issued` the issue time
+        of the advice published, `now` the cycle time. Returns the outcome."""
+        ls = last_store if isinstance(last_store, Mapping) else {}
+        if "advice_rows" not in ls:
+            return self._seen(OUTCOME_NOT_OFFERED)
+        self._attempts += 1
+        rows, failures = _count(ls.get("advice_rows")), _count(ls.get("advice_write_failures"))
+        unverified = _count(ls.get("advice_unverified"))
+        err = ls.get("advice_error")
+        if failures > 0:
+            return self._fail(OUTCOME_FAILED, incident_reason(err), slot, issued, now)
+        if unverified > 0 or (rows > 0 and ls.get("advice_verified") is not True):
+            return self._fail(OUTCOME_UNVERIFIED, ADVICE_READ_BACK_MISSING if err is None else incident_reason(err), slot, issued, now)
+        if rows > 0:
+            return self._verify(rows, now)
+        return self._seen(OUTCOME_NEUTRAL)
+
+    def note_step_failure(self, reason: object, *, slot: datetime, issued: datetime, now: datetime) -> str:
+        """The whole store step timed out or raised: `reason` is the exception class name (TimeoutError for a timeout)."""
+        self._attempts += 1
+        return self._fail(OUTCOME_STEP_FAILED, incident_reason(reason), slot, issued, now)
+
+    def _seen(self, outcome: str) -> str:
+        self._last_outcome = outcome
+        return outcome
+
+    def _fail(self, outcome: str, reason: str, slot: datetime, issued: datetime, now: datetime) -> str:
+        now_s, slot_s, issued_s = _iso(now), _iso(slot), _iso(issued)
+        inc = self._open()
+        if inc is None:
+            inc = {"first_failed_utc": now_s, "last_failed_utc": now_s, "failed_count": 0, "missed_slots": 0, "reason": reason,
+                   "first_reason": reason, "first_issued_utc": issued_s, "last_issued_utc": issued_s, "last_slot_utc": None,
+                   "state": "OPEN", "recovered_utc": None, "rows_since": None, "persisted": False}
+            self._incidents.append(inc)
+            while len(self._incidents) > self._kept:      # the oldest closed incident goes; the open one is the newest
+                self._incidents.pop(0)
+                self._dropped += 1
+        inc["failed_count"] += 1
+        if inc["last_slot_utc"] != slot_s:
+            inc["last_slot_utc"] = slot_s
+            inc["missed_slots"] += 1
+        inc["last_failed_utc"], inc["last_issued_utc"], inc["reason"] = now_s, issued_s, reason
+        return self._seen(outcome)
+
+    def _verify(self, rows: int, now: datetime) -> str:
+        self._verified += 1
+        self._last_verified = _iso(now)
+        inc = self._open()
+        if inc is not None:
+            inc["state"], inc["recovered_utc"], inc["rows_since"] = "CLOSED", _iso(now), rows
+        return self._seen(OUTCOME_VERIFIED)
 
 
 class RuntimeStateStore:
@@ -204,9 +364,18 @@ class RuntimeStateStore:
         return Scorecard(str(self._inside(SCORECARD_FILE)), self._tz)
 
     # --- the scorecard -----------------------------------------------------------------------------------------------
-    def record_cycle(self, report: Mapping | None, slot_utc: datetime, now: datetime, history=None, cfg=None) -> dict:
+    def record_cycle(self, report: Mapping | None, slot_utc: datetime, now: datetime, history=None, cfg=None,
+                     advice: Mapping | None = None, dump_duration_min: float | None = None) -> dict:
         """After a computed cycle: score the pending forecasts against `history`, record `report` for `slot_utc` (once per
-        slot), then apply the retention. Returns what happened (diagnostics)."""
+        slot), then apply the retention. Returns what happened (diagnostics).
+
+        `advice` (default None: nothing is logged) is the payload set the coordinator has just published
+        (advisory_contract.to_entity_payloads). When given, it is logged in the scorecard's advice_log AFTER the scorecard
+        work, in its own transaction: a failure there is caught and only counted (out['advice_write_failures'] > 0, or
+        out['advice_error']); it never raises, so it cannot affect the published outputs or the scorecard record. The advice
+        keys are added to the result only when `advice` was given: advice_rows, advice_write_failures, advice_unverified,
+        advice_verified (True: every row written was read back by its id after the commit; False: the write failed or the
+        rows were not found again; None: nothing was written) and, after a failure, advice_error (a class name or a code)."""
         out = {"recorded": False, "scored": 0, "removed": 0, "duplicate_slot": False}
         if self._closed:
             out["refused"] = "closed"
@@ -231,6 +400,44 @@ class RuntimeStateStore:
                     self._claim_and_record(sc, dict(report), slot, now)
                     out["recorded"] = True
             out["removed"] = self._retention(sc, now)
+        if advice is not None:
+            self._log_advice(out, advice, dump_duration_min)
+        return out
+
+    def _log_advice(self, out: dict, advice: Mapping, dump_duration_min: float | None) -> None:
+        """Log the published advice (see record_cycle). Never raises: Scorecard.record_advice counts its own failures, and
+        opening the store for it is guarded here."""
+        out["advice_rows"], out["advice_write_failures"], out["advice_unverified"], out["advice_verified"] = 0, 0, 0, None
+        try:
+            with closing(self._scorecard()) as sc:
+                out["advice_rows"] = sc.record_advice(dict(advice), dump_duration_min=dump_duration_min)
+                out["advice_write_failures"] = sc.advice_write_failures
+                out["advice_unverified"] = sc.advice_unverified_writes      # rows written but not read back (or the read-back failed)
+                out["advice_verified"] = sc.advice_last_verified            # True read back, False failed or unverified, None no write
+                if sc.advice_last_error:
+                    out["advice_error"] = sc.advice_last_error      # the exception class name (or the code AdviceReadBackMissing)
+        except Exception as exc:  # noqa: BLE001 - the advice log is diagnostics only; the type is the whole message
+            out["advice_write_failures"] += 1
+            out["advice_verified"] = False
+            out["advice_error"] = type(exc).__name__
+
+    def log_advice_incidents(self, incidents, now: datetime) -> dict:
+        """Persist the CLOSED incidents of `incidents` (AdviceHealth.pending_incidents) in the scorecard's advice_incident table,
+        created by the first such write. The coordinator calls this only right after a slot cycle's advice write was VERIFIED, so
+        the database has just shown that it takes the advice write; it is never called while an incident is open and never at
+        start-up. Never raises: a failure (the table has another shape, a failing CREATE, a full disk) is counted by the scorecard
+        and returned as the exception class name. Returns {"persisted": [first_failed_utc, ...], "error": None or a class name},
+        and {"refused": "closed"} added after close()."""
+        out: dict = {"persisted": [], "error": None}
+        if self._closed:
+            out["refused"] = "closed"
+            return out
+        try:
+            with closing(self._scorecard()) as sc:
+                res = sc.persist_advice_incidents(list(incidents), now)
+            out["persisted"], out["error"] = list(res["persisted"]), res["error"]
+        except Exception as exc:  # noqa: BLE001 - diagnostics only; the type is the whole message
+            out["error"] = type(exc).__name__
         return out
 
     @staticmethod
@@ -285,6 +492,57 @@ class RuntimeStateStore:
         cov = (sum(float(r["coverage"]) * int(r["n"]) for r in cov_rows) / cn) if cn else None
         return OutcomeMetrics(mae, cov, n)
 
+    def advice_rows(self, start: datetime, end: datetime, limit: int = ADVICE_ROWS_LIMIT) -> list[dict]:
+        """READ-ONLY (SQLite mode=ro; nothing is created, altered or written, not even when the store is closed): the logged
+        advice issued in [start, end), oldest first, at most the newest `limit` rows, as the dicts of
+        ghost.AdviceRecord.from_dict (the mapping of Scorecard.advice_records and tools/advice_export.py; a test pins that the
+        three agree). [] when there is no scorecard file or no advice_log table (nothing logged yet); raises sqlite3.Error /
+        OSError when the file cannot be read or the table has another shape (an advice_log of other columns), so the caller can
+        tell 'nothing logged' from 'unreadable'."""
+        path = self._root / SCORECARD_FILE
+        if not path.is_file():
+            return []
+        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            st = advice_log_status(con)
+            if st == ADVICE_LOG_MISSING:
+                return []
+            if st == ADVICE_LOG_INCOMPATIBLE:
+                raise sqlite3.DatabaseError("advice_log exists with another shape")
+            got = con.execute("SELECT * FROM advice_log WHERE issued_utc >= ? AND issued_utc < ? "
+                              "ORDER BY issued_utc DESC, advice_id DESC LIMIT ?", (_iso(start), _iso(end), int(limit))).fetchall()
+        finally:
+            con.close()
+        return [{"kind": r["kind"], "status": r["status"], "issued_at": r["issued_utc"], "window_start": r["window_start_utc"],
+                 "window_end": r["window_end_utc"], "target_soc_pct": r["target_soc_pct"], "export_kwh": r["export_kwh"],
+                 "export_kw": r["export_kw_avg"], "effective_reserve_pct": r["effective_reserve_pct"],
+                 "conservative_fallback": bool(r["conservative_fallback"]),
+                 "dump_advisable": True if r["dump_advisable"] is None else bool(r["dump_advisable"]),
+                 "advice_id": f"advice_log:{r['advice_id']}"} for r in reversed(got)]
+
+    def advice_incidents(self) -> list[dict]:
+        """READ-ONLY (SQLite mode=ro; nothing is created, altered or written, not even when the store is closed): the persisted
+        advice-log incidents, newest first, as dicts of ADVICE_INCIDENT_COLUMNS (at most ADVICE_INCIDENTS_KEPT). [] when there is
+        no scorecard file or no advice_incident table (no incident has been persisted); raises sqlite3.Error / OSError when the
+        file cannot be read or the table has another shape, so the caller can tell 'none' from 'unreadable'."""
+        path = self._root / SCORECARD_FILE
+        if not path.is_file():
+            return []
+        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            st = advice_incident_status(con)
+            if st == ADVICE_LOG_MISSING:
+                return []
+            if st == ADVICE_LOG_INCOMPATIBLE:
+                raise sqlite3.DatabaseError("advice_incident exists with another shape")
+            got = con.execute(f"SELECT {','.join(ADVICE_INCIDENT_COLUMNS)} FROM advice_incident ORDER BY first_failed_utc DESC LIMIT ?",
+                              (ADVICE_INCIDENTS_KEPT,)).fetchall()
+        finally:
+            con.close()
+        return [{c: r[c] for c in ADVICE_INCIDENT_COLUMNS} for r in got]
+
     def counts(self) -> dict:
         """Row counts (tests and diagnostics)."""
         if not (self._root / SCORECARD_FILE).is_file():
@@ -292,7 +550,7 @@ class RuntimeStateStore:
         con = sqlite3.connect(f"file:{(self._root / SCORECARD_FILE).as_posix()}?mode=ro", uri=True)
         try:
             out = {}
-            for t in ("model_runs", "forecasts", "recommendations", "ecco_intel_slots"):
+            for t in ("model_runs", "forecasts", "recommendations", "ecco_intel_slots", "advice_log"):
                 try:
                     out[t] = int(con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
                 except sqlite3.Error:
