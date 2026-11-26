@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECCO Mode Shell strip check</title>
+<!--
+  The measuring half of the headless-browser check of the alert strip (review round 3). Run it with `node preview/check-strip.mjs` (see that file); it is not
+  meant to be opened by hand, though it can be: serve the REPOSITORY ROOT on the loopback address and open
+  /frontend/ecco-mode-shell/preview/strip-check.html?widths=390,1000 (add &card=/path to try a copy of the card).
+
+  It renders the REAL card against the REAL Intelligence catalogue and the SYNTHETIC state fixtures (all read in place), in Production and Geek Mode, in light and
+  dark, with and without Home Assistant's theme variables, for a scenario with alerts of every severity and a healthy one, at each width. For each state it
+  records what the browser computed for the alert strip: the boxes, display, visibility, opacity, transforms, filters, clipping, the text and icon colours, the
+  background layers behind them and what covers the middle of each line. It decides nothing: strip-check-lib.mjs judges the numbers. It never reads the
+  stylesheet, so no way of writing CSS that hides or moves the strip can pass it by looking different.
+
+  The result goes into <pre id="strip-check-result"> as base64 of a JSON text (so that the dumped DOM carries it without escaping). No network, no write, no hass call:
+  the card gets a stand-in `hass` that holds only states, locale and themes.
+-->
+<style>
+  body { margin: 0; font: 14px/1.45 "Segoe UI", Roboto, Arial, sans-serif; background: #0b1220; color: #e8edf4; }
+  body.dark { background: #0b1220; --primary-text-color: #e8edf4; --secondary-text-color: #aab5c4; --card-background-color: #172133; --divider-color: rgba(255, 255, 255, 0.18); }
+  body.light { background: #eef1f6; color: #1b2330; --primary-text-color: #1b2330; --secondary-text-color: #4a5565; --card-background-color: #ffffff; --divider-color: rgba(80, 90, 110, 0.32); }
+  body.bare-dark { background: #0b1220; color: #e8edf4; }
+  body.bare-light { background: #eef1f6; color: #1b2330; }
+  #stage { margin: 0; padding: 0; }
+  #strip-check-result { white-space: pre-wrap; word-break: break-all; font: 10px/1.2 monospace; }
+</style>
+</head>
+<body class="dark">
+<div id="stage"></div>
+<pre id="strip-check-result"></pre>
+<script type="module">
+const out = document.getElementById('strip-check-result');
+const q = new URLSearchParams(location.search);
+const report = { schema: 'ecco-strip-check/1', states: [], error: null };
+const finish = () => {
+  const json = JSON.stringify(report);
+  out.textContent = btoa(unescape(encodeURIComponent(json)));
+  document.title = report.error ? 'strip-check ERROR' : 'strip-check DONE';
+  document.documentElement.setAttribute('data-strip-check', report.error ? 'error' : 'done');
+};
+window.addEventListener('error', (e) => { report.error = report.error || String(e.message || e); finish(); });
+window.addEventListener('unhandledrejection', (e) => { report.error = report.error || String((e.reason && e.reason.stack) || e.reason); finish(); });
+
+async function main() {
+  const cardUrl = q.get('card') || '../ecco-mode-shell.js';
+  await import(cardUrl);
+  const get = async (url) => { const r = await fetch(url); if (!r.ok) throw new Error(`${url}: ${r.status}`); return r.json(); };
+  const FX = '../test/fixtures/';
+  const [catalogue, meta] = await Promise.all([get('../catalogue/intelligence.catalogue.json'), get(`${FX}intelligence.states.meta.json`)]);
+  const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+  const iso = (ms) => new Date(ms).toISOString();
+  const shift = (v, d) => (typeof v === 'string' ? (ISO.test(v) ? iso(Date.parse(v) + d) : v) : Array.isArray(v) ? v.map((x) => shift(x, d)) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shift(x, d)])) : v);
+  const healthy = meta.fixtures.healthy;
+  const raw = await get(FX + healthy.file);
+  const now = Date.now();
+  const delta = now - Date.parse(healthy.reference_now);
+  const baseStates = () => {
+    const s = {};
+    for (const [id, e] of Object.entries(raw)) {
+      if (id.startsWith('_')) continue;
+      const at = (k) => (typeof e[k] === 'string' ? iso(Date.parse(e[k]) + delta) : iso(now - (e.age_s || 0) * 1000));
+      s[id] = { entity_id: id, state: e.state, attributes: shift(structuredClone(e.attributes || {}), delta), last_changed: at('last_changed'), last_updated: at('last_updated') };
+    }
+    return s;
+  };
+  const scenarios = {
+    // the healthy fixture: the strip holds its quiet "no active alerts" line
+    healthy: { states: baseStates(), expectAlerts: 0 },
+    // the preview's 'alerts' scenario: a failed self-test, a missing pause control, the watchdog off and degraded data quality (alerts of every severity)
+    alerts: (() => {
+      const s = baseStates();
+      s['sensor.ecco_intel_status'].state = 'SELF_TEST_FAILED';
+      s['sensor.ecco_intel_status'].attributes.pause_control = 'MISSING';
+      s['binary_sensor.ecco_intel_watchdog_fresh'].state = 'off';
+      s['sensor.ecco_intel_data_quality'].state = 'DEGRADED';
+      return { states: s, expectAlerts: null };
+    })(),
+  };
+  const widths = (q.get('widths') || '390,1000').split(',').map(Number).filter((n) => n > 0);
+  const stage = document.getElementById('stage');
+  // review round 9 (reviewer mutants E05 and E08: an alert hidden a moment AFTER the switch passed a check that measured in the same task as the click): after the switch, wait until the browser has run a zero-delay timer and the
+  // microtasks and promise continuations it leaves, and ask for two animation frames, then measure the strip again. The strip must be the very same strip. REVIEW ROUND 10 (the measured behaviour, which this comment first
+  // got wrong): in the headless, virtual-time run this check uses, animation frames are in practice NOT delivered (a real `check-strip --require` run reported both frames for 0 of its 48 settled measurements, one frame for 1 and none for
+  // 47), so the wait is given up after 250 ms of the page's own clock and the second measurement is made then. What this layer covers is therefore microtasks, promise continuations, async functions and timers of up to 250 ms
+  // (and an observer callback that one of them causes). An animation frame, a longer timer and a hide that waits for time to pass are NOT covered here: they are covered only by the node scheduler (test/async-net.mjs),
+  // which runs frames and timers of any delay and moves the clocks the card sees. How many frames the browser really delivered is counted and reported (framesSeen).
+  const settle = () => new Promise((resolve) => {
+    let frames = 0;
+    const giveUp = setTimeout(() => resolve(frames), 250);
+    setTimeout(() => requestAnimationFrame(() => { frames += 1; requestAnimationFrame(() => { frames += 1; setTimeout(() => { clearTimeout(giveUp); resolve(frames); }, 0); }); }), 0);
+  });
+  const rectOf = (r) => ({ x: r.x, y: r.y, width: r.width, height: r.height });
+  const shadowHost = (n) => { const r = n.getRootNode && n.getRootNode(); return r && r.host ? r.host : null; };
+  const up = (n) => n.parentElement || shadowHost(n);
+  const cs = (n) => getComputedStyle(n);
+  // review round 4: the attributes that decide whether assistive technology gets the strip (a reviewer's mutants hid it with aria-hidden and muted it with aria-live off
+  // while every pixel stayed right). null = the attribute is absent. The browser's own accessibility tree is not reachable from a --dump-dom page, so the attributes are the evidence.
+  const A11Y = ['role', 'aria-hidden', 'aria-live', 'aria-label', 'aria-atomic', 'aria-relevant', 'aria-busy', 'inert', 'hidden'];
+  const a11yOf = (n) => Object.fromEntries(A11Y.map((k) => [k, n.getAttribute(k)]));
+
+  function measure(el, spec) {
+    const root = el.shadowRoot;
+    const strip = root.querySelector('[data-ecco-alert-strip]');
+    const shell = root.querySelector('[data-ecco-shell]');
+    const m = { id: `${spec.scenario}|${spec.theme}|${spec.vars}|${spec.mode}|w${spec.width}|v${innerWidth}${spec.phase === 'settled' ? '|settled' : ''}`, phase: spec.phase === 'settled' ? 'settled' : 'immediate', scenario: spec.scenario, theme: spec.theme, vars: spec.vars, mode: spec.mode, width: spec.width,
+      expectAlerts: spec.expectAlerts, viewport: { w: innerWidth, h: innerHeight }, host: rectOf(el.getBoundingClientRect()),
+      shell: { mode: shell ? shell.getAttribute('data-mode') : null }, strip: { present: Boolean(strip) }, alerts: [], bodies: {} };
+    for (const which of ['production', 'geek']) {
+      const b = root.querySelector(`[data-ecco-body="${which}"]`);
+      m.bodies[which] = b ? { shown: !b.hidden && cs(b).display !== 'none', rect: rectOf(b.getBoundingClientRect()) } : null;
+    }
+    if (!strip) return m;
+    m.strip.rect = rectOf(strip.getBoundingClientRect());
+    m.strip.count = strip.getAttribute('data-alert-count');
+    m.strip.a11y = a11yOf(strip);
+    m.strip.chain = [];
+    for (let n = strip; n; n = up(n)) {
+      const c = cs(n);
+      m.strip.chain.push({ tag: n.localName, cls: typeof n.className === 'string' ? n.className : '', isHost: n === el, a11y: a11yOf(n), display: c.display, visibility: c.visibility, contentVisibility: c.contentVisibility,
+        opacity: Number(c.opacity), transform: c.transform, rotate: c.rotate, scale: c.scale, translate: c.translate, filter: c.filter, clipPath: c.clipPath, maskImage: c.maskImage || c.webkitMaskImage || 'none',
+        backdropFilter: c.backdropFilter, overflowX: c.overflowX, overflowY: c.overflowY, contain: c.contain, rect: rectOf(n.getBoundingClientRect()) });
+    }
+    const lines = [...strip.querySelectorAll('.alert')];
+    for (const line of lines) {
+      const quiet = line.hasAttribute('data-alert-none');
+      const head = quiet ? line.querySelector('span') : line.querySelector('.alert-head');
+      const action = quiet ? null : line.querySelector('.alert-action');
+      const icon = line.querySelector('svg');
+      for (const part of [head, action].filter(Boolean)) {
+        const range = document.createRange();
+        range.selectNodeContents(part);
+        const tb = range.getBoundingClientRect();
+        const c = cs(part);
+        const layers = [];
+        for (let n = part; n; n = up(n)) layers.push(cs(n).backgroundColor);
+        const cx = tb.x + tb.width / 2;
+        const cy = tb.y + tb.height / 2;
+        const stack = root.elementsFromPoint ? root.elementsFromPoint(cx, cy) : [];
+        const top = stack[0] || null;
+        const ic = icon ? cs(icon) : null;
+        m.alerts.push({ id: line.getAttribute('data-alert-id') || 'quiet', quiet, severity: line.getAttribute('data-severity'), role: line.getAttribute('role'), lineA11y: a11yOf(line),
+          part: part === head ? 'head' : 'action', text: part.textContent, textBox: rectOf(tb), fontSize: c.fontSize, lineHeight: c.lineHeight,
+          color: c.color, textFill: c.webkitTextFillColor, bgLayers: layers, hit: { inside: Boolean(top && strip.contains(top)), tag: top ? top.localName + (top.className && typeof top.className === 'string' ? `.${top.className}` : '') : null },
+          icon: part === head && icon ? { color: ic.color, rect: rectOf(icon.getBoundingClientRect()) } : null });
+      }
+    }
+    return m;
+  }
+
+  for (const sc of Object.keys(scenarios)) {
+    for (const theme of ['dark', 'light']) {
+      for (const vars of ['ha', 'bare']) {
+        for (const width of widths) {
+          for (const mode of ['production', 'geek']) {
+            const spec = { scenario: sc, theme, vars, mode, width, expectAlerts: scenarios[sc].expectAlerts };
+            document.body.className = vars === 'ha' ? theme : `bare-${theme}`;
+            stage.replaceChildren();
+            stage.style.width = `${width}px`;
+            const el = document.createElement('ecco-mode-shell');
+            el.setConfig({ type: 'custom:ecco-mode-shell', view_id: 'intelligence', title: 'ECCO Intelligence', catalogue: structuredClone(catalogue), page_size: 25, always: [], production: [] });
+            el.hass = { states: scenarios[sc].states, locale: { language: 'en-GB' }, themes: { darkMode: theme === 'dark' } };
+            stage.appendChild(el);
+            if (mode === 'geek') el.shadowRoot.querySelector('[data-mode-option="geek"]').click();
+            report.states.push(measure(el, spec));
+            const framesSeen = await settle();
+            const again = measure(el, { ...spec, phase: 'settled' });
+            again.framesSeen = framesSeen;
+            report.states.push(again);
+          }
+        }
+      }
+    }
+  }
+  stage.replaceChildren();
+}
+
+main().then(finish, (e) => { report.error = String((e && e.stack) || e); finish(); });
+</script>
+</body>
+</html>

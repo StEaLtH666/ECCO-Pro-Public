@@ -31,11 +31,18 @@ export const STATUS_LINE =
 export const OVERRIDES_LINE_NONE =
   "Quick overrides: none active. Shown as status only; starting one needs a plan helper that does not exist yet.";
 
-export const OVERRIDES_LINE_NONE_HELPER =
-  "Quick overrides: none active. Shown as status only; starting one needs the guarded start path, which is not installed.";
+// This line says only what is true whether or not the guarded scripts exist: nothing is running. Whether starting one is possible is a SEPARATE
+// statement the controls derive from the entities that exist in Home Assistant (controlsModel.ts readinessOf): "Overrides ready", "Turn on the
+// confirmation switch ...", or "not installed" only when the guarded scripts are really absent.
+export const OVERRIDES_LINE_NONE_HELPER = "Quick overrides: none active.";
 
 export const OVERRIDES_STATUS_NOTE =
   "Status only: nothing in this view starts, cancels or enforces an override. An override can only hold back ECCO's own export starts or raise the reserve ECCO's plan uses; it never writes the inverter's table, does not change the inverter's own reserve and never stops a running session.";
+
+// The guarded (compact) view has working Start and Cancel controls, so the line above would be false there. This one says the true, narrower thing,
+// and it stands only right after the list of records it is about (view.ts overrideBlock, compact variant).
+export const OVERRIDES_RECORDS_NOTE =
+  "This list only shows the records Home Assistant holds: nothing in it starts, cancels or enforces an override. Start and Cancel are under Quick overrides. An override only holds back ECCO's own export starts or raises the reserve ECCO's plan uses, and never stops a running session.";
 
 export interface FigureVM {
   key: string;
@@ -132,11 +139,14 @@ export interface OverrideBlockVM {
   /** The proposed defaults, shown only while the limits are not usable. They are never applied. */
   proposed: string[];
   revisionText: string;
+  /** The status-only line of the view WITHOUT controls (the helpers are read but no Start or Cancel is offered). */
+  note: string;
+  /** The records-only line of the guarded view WITH controls: stands after the records, only when there are records. */
+  recordsNote: string;
   rows: OverrideRowVM[];
   /** Kinds Home Assistant holds, or may hold, that are not shown as running rows above. */
   held: HeldRowVM[];
   problems: string[];
-  note: string;
 }
 
 export interface PlanVM {
@@ -177,6 +187,7 @@ function settingRow(f: FieldInfo): SettingRowVM {
   if (f.observed !== null && f.observed !== f.value) remarks.push(`The system reports ${shown(f.observed)}, not ${shown(f.value)}.`);
   if (f.proposal !== null) remarks.push(`Intelligence suggests ${shown(f.proposal)} (not adopted; nothing here changes it).`);
   if (f.state === "PROPOSED" && f.observed === null) remarks.push("No read-back is available for this value.");
+  if (f.note) remarks.push(f.note);
   return { path: f.path, label: f.label, known: true, text: showValue(f, f.value), reason: "", chip: chipFor(f.state), remarks };
 }
 
@@ -275,6 +286,9 @@ function heldSuffix(h: HelperSnapshot): string {
 
 function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
   const policy = h.policy;
+  // The limits themselves are fine and only the power-cut target is not above the reserve now: Hold battery and Skip tonight can start, so the limits are
+  // not "unusable" (only Prepare for power cut is not offered, which the controls say next to its own reserve line).
+  const onlyReserve = !policy.ok && h.startPolicy.ok;
   const rows: OverrideRowVM[] = h.active.map((r) => ({
     kind: r.override.kind,
     label: r.label,
@@ -293,17 +307,22 @@ function overrideBlockVM(h: HelperSnapshot): OverrideBlockVM {
       ? "Plan revision: none recorded yet."
       : `Plan revision ${h.revision.value} (stored in the plan helper).`;
   return {
-    policyOk: policy.ok,
-    policyLine: policy.ok ? limitsLine(policy.config) : "The override limits are not usable, so no override can be started. Nothing falls back to proposed values.",
-    reasons: policy.ok ? [] : [...policy.reasons],
+    policyOk: policy.ok || onlyReserve,
+    policyLine: policy.ok
+      ? limitsLine(policy.config)
+      : h.startPolicy.ok
+        ? limitsLine(h.startPolicy.config) + " The power-cut reserve is not above the reserve now, so Prepare for power cut is not offered."
+        : "The override limits are not usable, so no override can be started. Nothing falls back to proposed values.",
+    reasons: policy.ok || onlyReserve ? [] : [...policy.reasons],
     warnings: policy.ok ? [...policy.warnings] : [],
     missing: [...h.missing],
-    proposed: policy.ok ? [] : proposedLines(),
+    proposed: policy.ok || onlyReserve ? [] : proposedLines(),
     revisionText,
     rows,
     held: h.held.map((r) => ({ kind: r.kind, label: r.label, text: heldText(r, h.nowMin), note: r.note })),
     problems: [...h.problems],
     note: OVERRIDES_STATUS_NOTE,
+    recordsNote: OVERRIDES_RECORDS_NOTE,
   };
 }
 
@@ -342,4 +361,37 @@ export function presentPlan(snap: PlanSnapshot & { helpers?: HelperSnapshot | nu
         : `Quick overrides active: ${snap.overrides.map((o) => o.kind).join(", ")} (status only).`,
     overrideBlock: helpers ? overrideBlockVM(helpers) : null,
   };
+}
+
+/** The always-visible one-line summaries of the compact guarded view (what each collapsed region holds). Pure: a function of the view model only. */
+export interface CompactVM {
+  /** "Import 4.5 kWh · Export 2.2 kWh · Solar 11.4 kWh · Reserve 20 %", or why there are no figures. */
+  tomorrow: string;
+  /** The TOU headline, with the count of slots that differ from the inverter when there are any. */
+  tou: string;
+  /** The override limits in one line; null when no plan helper exists. */
+  limits: string | null;
+  /** True when the limits line carries something the owner should look at (unusable limits, record problems). */
+  limitsAttention: boolean;
+}
+
+// The Reserve figure is always the owner's own backup reserve helper (never the reserve ECCO's plan uses, which an override can raise), so the one-line summary says so.
+const SUMMARY_LABEL: Record<string, string> = { import: "Import", export: "Export", solar: "Solar", reserve: "Your reserve" };
+
+export function compactSummaries(vm: PlanVM): CompactVM {
+  const parts = vm.figures.filter((f) => f.known && SUMMARY_LABEL[f.key] !== undefined).map((f) => (SUMMARY_LABEL[f.key] as string) + " " + f.text);
+  const tomorrow = parts.length > 0 ? parts.join(" \u00b7 ") : (vm.adviceNote ?? "No figures yet.");
+  const b = vm.overrideBlock;
+  const tou = vm.tou.headline;
+  let limits: string | null = null;
+  let limitsAttention = false;
+  if (b) {
+    const bits: string[] = [b.policyOk ? "Limits in force" : "Limits not usable"];
+    if (b.problems.length > 0) bits.push(b.problems.length + (b.problems.length === 1 ? " record problem" : " record problems"));
+    if (b.missing.length > 0) bits.push(b.missing.length + " helper" + (b.missing.length === 1 ? "" : "s") + " not found");
+    bits.push(b.revisionText.replace(/ \(stored in the plan helper\)\.$/, ".").replace(/\.$/, ""));
+    limits = bits.join(" \u00b7 ");
+    limitsAttention = !b.policyOk || b.problems.length > 0 || b.missing.length > 0;
+  }
+  return { tomorrow, tou, limits, limitsAttention };
 }

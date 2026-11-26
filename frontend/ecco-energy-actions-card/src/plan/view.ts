@@ -6,8 +6,8 @@ import type { TemplateResult } from "lit";
 import type { StatesLike } from "./adapter.ts";
 import { buildPlanSnapshotWithHelpers } from "./helpers.ts";
 import type { PlanSnapshotWithHelpers } from "./helpers.ts";
-import { presentPlan } from "./present.ts";
-import type { Chip, FigureVM, HeldRowVM, OverrideBlockVM, OverrideRowVM, PlanVM, SettingRowVM, SlotVM } from "./present.ts";
+import { compactSummaries, presentPlan } from "./present.ts";
+import type { Chip, CompactVM, FigureVM, HeldRowVM, OverrideBlockVM, OverrideRowVM, PlanVM, SettingRowVM, SlotVM } from "./present.ts";
 import type { EccoEnergyActionsCardConfig } from "../config";
 
 function chip(c: Chip): TemplateResult {
@@ -62,11 +62,15 @@ function heldRow(r: HeldRowVM): TemplateResult {
   `;
 }
 
-/** Shown only when the proposed plan helper entities exist: the override limits, the stored revision and any active override. */
-function overrideBlock(b: OverrideBlockVM): TemplateResult {
+/**
+ * Shown only when the proposed plan helper entities exist: the override limits, the stored revision and any active override. `compact` is the guarded
+ * view, which has Start and Cancel controls: its trailing "Status only: nothing in this view starts, cancels or enforces an override" is replaced by a note
+ * scoped to the records it follows (and shown only when there are records). Without `compact` the markup is exactly what it was.
+ */
+function overrideBlock(b: OverrideBlockVM, compact = false): TemplateResult {
   return html`
     <div class="plan-override-block" data-block="overrides">
-      ${b.rows.length ? html`<ul class="plan-settings">${b.rows.map(overrideRow)}</ul>` : nothing}${b.held.length ? html`<ul class="plan-settings" data-override-held-list>${b.held.map(heldRow)}</ul>` : nothing}
+      ${b.rows.length ? html`<ul class="plan-settings">${b.rows.map(overrideRow)}</ul>` : nothing}${b.held.length ? html`<ul class="plan-settings" data-override-held-list>${b.held.map(heldRow)}</ul>` : nothing}${compact && (b.rows.length || b.held.length) ? html`<p class="plan-reason" data-records-note>${b.recordsNote}</p>` : nothing}
       <p class="plan-reason" data-override-policy=${b.policyOk ? "ok" : "unusable"}>${b.policyLine}</p>
       ${b.reasons.length ? html`<ul class="plan-reasons">${b.reasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
       ${b.warnings.length ? html`<ul class="plan-reasons">${b.warnings.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
@@ -80,8 +84,8 @@ function overrideBlock(b: OverrideBlockVM): TemplateResult {
             </details>
           `
         : nothing}
-      <p class="plan-reason">${b.revisionText}</p>
-      <p class="plan-reason">${b.note}</p>
+      <p class="plan-reason">${b.revisionText}</p>${compact ? nothing : html`
+      <p class="plan-reason">${b.note}</p>`}
     </div>
   `;
 }
@@ -102,7 +106,60 @@ function slot(s: SlotVM): TemplateResult {
 }
 
 /** The section's start and cancel controls, built by the card (controls.ts) from the snapshot the section was built from. */
-export type ControlsRenderer = (ctx: { snap: PlanSnapshotWithHelpers; states: StatesLike; nowMs: number }) => TemplateResult | typeof nothing;
+export type ControlsRenderer = (ctx: { snap: PlanSnapshotWithHelpers; states: StatesLike; nowMs: number; guardedStart?: string | null }) => TemplateResult | typeof nothing;
+
+/**
+ * The COMPACT body, used only when the guarded controls are present (the plan helpers exist). The two primary tiles stay above it; here the
+ * plan text, "Why?", the planned settings, the override limits and the six-slot timeline sit behind collapsed details (closed by default), each
+ * with an always-visible one-line summary, so the section is about half its former height. Every element, data attribute and word of the
+ * expanded view is the same as before (nothing is removed, only folded). The read-only variant (no plan helper) keeps its former markup byte
+ * for byte (planBody), which the golden renders pin.
+ */
+function planBodyCompact(vm: PlanVM, controls: TemplateResult, sum: CompactVM): TemplateResult {
+  const tou = vm.tou;
+  return html`
+      <h2 class="plan-title">Plan <span class="plan-badge"><ha-icon icon="mdi:shield-check-outline" aria-hidden="true"></ha-icon>Guarded controls</span></h2>
+      <p class="plan-statusline" role="status"><ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon><span>${vm.statusLine}</span></p>
+
+      <div class="plan-block" data-block="tomorrow">
+        <details class="plan-why plan-fold" data-fold="tomorrow">
+          <summary><h3 class="plan-heading">Tomorrow's Plan</h3><span class="plan-fold-line" data-summary="tomorrow">${sum.tomorrow}</span></summary>
+          ${vm.adviceNote ? html`<p class="plan-reason plan-advice-note">${vm.adviceNote}</p>` : nothing}
+          <dl class="plan-figures">${vm.figures.map((f) => figure(f.key === "reserve" ? { ...f, label: "Your reserve" } : f))}</dl>
+          <details class="plan-why">
+            <summary>Why?</summary>
+            <ul>${vm.why.map((w) => html`<li data-origin=${w.origin}>${w.text}</li>`)}</ul>
+          </details>
+          <details class="plan-why plan-settings-details">
+            <summary>Planned settings</summary>
+            <ul class="plan-settings">${vm.settings.map(settingRow)}</ul>
+          </details>
+        </details>
+        <p class="plan-overrides">${vm.overridesLine}</p>${vm.overrideBlock
+          ? html`<details class="plan-why plan-fold ${sum.limitsAttention ? "needs-attention" : ""}" data-fold="limits">
+              <summary><span class="plan-fold-title">Override limits and records</span><span class="plan-fold-line" data-summary="limits">${sum.limits}</span></summary>
+              ${overrideBlock(vm.overrideBlock, true)}
+            </details>`
+          : nothing}${controls}
+      </div>
+
+      <div class="plan-block" data-block="tou">
+        <details class="plan-why plan-fold" data-fold="tou">
+          <summary><h3 class="plan-heading">Six-slot TOU timeline${tou.statusText ? html` <span class="plan-note">${tou.statusText}</span>` : nothing}</h3><span class="plan-fold-line" data-summary="tou">${sum.tou}</span></summary>
+          <p class="plan-tou-headline">${tou.headline}</p>
+          ${tou.reasons.length ? html`<ul class="plan-reasons">${tou.reasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
+          ${tou.slots.length
+            ? html`
+                <div class="plan-bar" aria-hidden="true">
+                  ${tou.slots.map((s) => html`<span class="plan-seg ${s.mismatch ? "is-mismatch" : ""}" style=${"flex-grow:" + s.spanMin}>${s.index}</span>`)}
+                </div>
+                <ol class="plan-slots">${tou.slots.map(slot)}</ol>
+              `
+            : nothing}
+        </details>
+      </div>
+    `;
+}
 
 /** Everything inside the section. Kept apart so the read-only section's markup stays byte for byte what it was before the controls existed. */
 function planBody(vm: PlanVM, controls: TemplateResult | typeof nothing, guarded: boolean): TemplateResult {
@@ -149,7 +206,7 @@ function planBody(vm: PlanVM, controls: TemplateResult | typeof nothing, guarded
 export function renderPlanVM(vm: PlanVM, controls: TemplateResult | typeof nothing = nothing): TemplateResult {
   if (controls !== nothing) {
     return html`
-    <section class="plan-section" aria-label="Plan, with guarded controls">${planBody(vm, controls, true)}</section>
+    <section class="plan-section plan-compact" aria-label="Plan, with guarded controls">${planBodyCompact(vm, controls, compactSummaries(vm))}</section>
   `;
   }
   return html`
@@ -167,7 +224,8 @@ export function renderPlanSection(config: EccoEnergyActionsCardConfig | undefine
   const at = typeof nowMs === "number" && Number.isFinite(nowMs) ? nowMs : Date.now();
   const snap = buildPlanSnapshotWithHelpers(config, states ?? {}, Math.floor(at / 60000));
   const vm = presentPlan(snap);
-  return renderPlanVM(vm, controls ? controls({ snap, states: states ?? {}, nowMs: at }) : nothing);
+  const guardedStart = config.dump_to_grid?.guarded_start;
+  return renderPlanVM(vm, controls ? controls({ snap, states: states ?? {}, nowMs: at, guardedStart: typeof guardedStart === "string" ? guardedStart : null }) : nothing);
 }
 
 export const planStyles = css`
@@ -339,6 +397,52 @@ export const planStyles = css`
     margin: 10px 0 0;
     font-size: 12px;
     color: var(--eaa-text-muted);
+  }
+  /* The compact guarded view: folded regions with an always-visible one-line summary. */
+  .plan-compact .plan-block {
+    margin-top: 6px;
+  }
+  .plan-compact .plan-statusline {
+    margin: 0 0 6px;
+    font-size: 12px;
+  }
+  .plan-fold {
+    margin-top: 6px;
+    border-top: 1px solid var(--eaa-border);
+  }
+  .plan-fold > summary {
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    min-height: 36px;
+  }
+  .plan-fold > summary .plan-heading,
+  .plan-fold > summary .plan-fold-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .plan-fold > summary::before {
+    content: "";
+    flex: 0 0 auto;
+    align-self: center;
+    border-left: 6px solid var(--eaa-text-muted);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    margin-right: 2px;
+  }
+  .plan-fold[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .plan-fold-line {
+    flex: 1 1 200px;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--eaa-text-muted);
+    overflow-wrap: anywhere;
+  }
+  .plan-fold.needs-attention > summary .plan-fold-line {
+    color: var(--eaa-warning);
   }
   .plan-tou-headline {
     margin: 0 0 6px;

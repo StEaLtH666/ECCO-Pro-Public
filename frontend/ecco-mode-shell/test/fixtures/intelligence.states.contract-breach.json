@@ -1,0 +1,605 @@
+{
+ "automation.ecco_intel_alert_no_fresh_intelligence_result": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: no fresh Intelligence result",
+   "id": "ecco_intel_alert_watchdog_stale",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "automation.ecco_intel_alert_output_not_recognised": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: output not recognised",
+   "id": "ecco_intel_alert_contract_mismatch",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "automation.ecco_intel_alert_self_test_failed": {
+  "state": "on",
+  "attributes": {
+   "current": 0,
+   "friendly_name": "ECCO Intel - alert: self-test failed",
+   "id": "ecco_intel_alert_self_test_failed",
+   "last_triggered": null,
+   "mode": "single"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "binary_sensor.ecco_intel_fresh": {
+  "state": "on",
+  "attributes": {
+   "applies_nothing": true,
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel fresh",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "fresh",
+   "mode": "SHADOW",
+   "status": "OK",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "binary_sensor.ecco_intel_watchdog_fresh": {
+  "state": "on",
+  "attributes": {
+   "friendly_name": "ECCO Intel Watchdog Fresh",
+   "icon": "mdi:timer-check-outline"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "input_boolean.ecco_intel_paused": {
+  "state": "off",
+  "attributes": {
+   "editable": false,
+   "friendly_name": "ECCO Intel Paused",
+   "icon": "mdi:pause-circle-outline"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "input_number.ecco_advisory_reserve_raise_pct": {
+  "state": "0.0",
+  "attributes": {
+   "editable": false,
+   "friendly_name": "ECCO Intel Advisory Reserve Raise",
+   "icon": "mdi:battery-arrow-up-outline",
+   "initial": null,
+   "max": 100,
+   "min": 0,
+   "mode": "box",
+   "step": 1,
+   "unit_of_measurement": "%"
+  },
+  "last_changed": "2030-01-10T09:00:00+00:00",
+  "last_updated": "2030-01-10T09:00:00+00:00"
+ },
+ "sensor.ecco_intel_accuracy": {
+  "state": "1.2",
+  "attributes": {
+   "applies_nothing": true,
+   "contract_version": "ecco-intel-entities/1",
+   "coverage_7d": 0.8,
+   "friendly_name": "ECCO Intel accuracy",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "accuracy",
+   "mode": "SHADOW",
+   "n": 7,
+   "reason_codes": [],
+   "status": "OK",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_charge_target": {
+  "state": "80.0",
+  "attributes": {
+   "advice": {
+    "target_soc_pct": 80.0,
+    "raw_target_soc_pct": 77.42,
+    "binding_constraint": "DEMAND",
+    "shortfall_soc_pct": 0.0,
+    "conservative_fallback": false,
+    "effective_reserve_pct": 40.0,
+    "buffer_pct": 5.0,
+    "end_of_period_floor_pct": 45.0,
+    "desired_morning_soc_pct": null,
+    "reserve": {
+     "user_reserve_pct": 40.0,
+     "technical_min_pct": 10.0,
+     "ha_reserve_pct": null,
+     "effective_pct": 40.0,
+     "binding": "user_reserve",
+     "override_code": null,
+     "override_reason": null
+    },
+    "demand_planning_kwh": 6.4,
+    "demand_expected_kwh": 6.1,
+    "pv_credit_used_kwh": 0.0,
+    "net_need_kwh": 6.4,
+    "need_soc_pct": 32.42,
+    "window": [
+     "2030-01-15T23:30:00+00:00",
+     "2030-01-16T05:30:00+00:00"
+    ],
+    "achievable_soc_pct": 95.0,
+    "grid_charge_kwh": 4.8,
+    "window_start_soc_pct": 52.0,
+    "window_start_soc_source": "predicted SOC (synthetic fixture)",
+    "inputs_used": {
+     "end_floor_pct": 45.0,
+     "demand_planning_kwh": 6.4,
+     "pv_credit_used_kwh": 0.0,
+     "battery_capacity_kwh": 10.0,
+     "eta_one_way": 0.96
+    },
+    "changed_from_previous": {
+     "previous_target_soc_pct": 80.0,
+     "target_soc_pct": 80.0,
+     "delta_pct": 0.0,
+     "drivers": [],
+     "unexplained_by_inputs_pct": 0.0,
+     "note": "effects are on the unrounded target; the remainder is rounding to the target step and caps"
+    }
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": "MEDIUM",
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": {
+    "v1_target_soc_pct": 85.0,
+    "v11_target_soc_pct": 80.0,
+    "difference_pct": 5.0,
+    "v1_feasible_on_pessimistic_path": true,
+    "authority": "V1.1 charge_target",
+    "basis": "V1 hourly simulation versus the V1.1 closed-form budget, both on the decided configuration"
+   },
+   "friendly_name": "ECCO Intel charge target",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "charge_target",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": "%",
+   "unit_of_measurement": "%",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_data_quality": {
+  "state": "OK",
+  "attributes": {
+   "applies_nothing": true,
+   "contract_version": "ecco-intel-entities/1",
+   "coverage_7d": null,
+   "device_class": "enum",
+   "friendly_name": "ECCO Intel data quality",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "data_quality",
+   "mode": "SHADOW",
+   "n": null,
+   "options": [
+    "OK",
+    "DEGRADED",
+    "BLOCKED",
+    "UNKNOWN"
+   ],
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": null
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_dump_to_grid": {
+  "state": "2.1",
+  "attributes": {
+   "advice": {
+    "dump_advisable": true,
+    "stop_soc_pct": 60.0,
+    "raw_stop_soc_pct": 58.3,
+    "export_kwh": 2.1,
+    "export_kw_avg": 2.1,
+    "stop_set_by": "RESERVE_AND_DEMAND",
+    "export_limited_by": "STOP_LEVEL",
+    "soc_pct": 85.0,
+    "effective_reserve_pct": 40.0,
+    "desired_min_pct": 45.0,
+    "reserve": {
+     "user_reserve_pct": 40.0,
+     "technical_min_pct": 10.0,
+     "ha_reserve_pct": null,
+     "effective_pct": 40.0,
+     "binding": "user_reserve",
+     "override_code": null,
+     "override_reason": null
+    },
+    "keep_until_refill_kwh": 1.4,
+    "keep_soc_pct": 14.6,
+    "refill_at": "2030-01-15T23:30:00+00:00",
+    "feature_stop_bounds_pct": [
+     10,
+     90
+    ]
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": "LOW",
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": null,
+   "friendly_name": "ECCO Intel Dump to Grid estimate",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "dump_to_grid",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_export_event": {
+  "state": "3.2",
+  "attributes": {
+   "advice": {
+    "event": {
+     "label": "SYNTHETIC EVENT",
+     "start": "2030-01-15T22:00:00+00:00",
+     "end": "2030-01-15T23:00:00+00:00",
+     "started": false,
+     "remaining_hours": 2.0
+    },
+    "cover_household_from_battery": true,
+    "export_advised": true,
+    "export_kwh": 3.2,
+    "export_kw_avg": 3.2,
+    "binding_constraint": "ENERGY_ABOVE_RESERVE",
+    "soc_at_start_pct": 90.0,
+    "soc_at_end_expected_pct": 60.0,
+    "effective_reserve_pct": 40.0,
+    "desired_min_pct": 45.0,
+    "reserve": {
+     "user_reserve_pct": 40.0,
+     "technical_min_pct": 10.0,
+     "ha_reserve_pct": null,
+     "effective_pct": 40.0,
+     "binding": "user_reserve",
+     "override_code": null,
+     "override_reason": null
+    },
+    "energy_above_minimum_kwh": 4.3,
+    "keep_for_after_kwh": 0.5,
+    "household_during_kwh": 0.6,
+    "energy_for_export_kwh": 3.2
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": "MEDIUM",
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": null,
+   "friendly_name": "ECCO Intel export event",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "export_event",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_overnight_demand": {
+  "state": "6.4",
+  "attributes": {
+   "advice": {
+    "expected_kwh": 6.1,
+    "planning_kwh": 6.4,
+    "planning_quantile": 0.9,
+    "learned_kwh": 6.0,
+    "nights_used": 14,
+    "nights_window": 28,
+    "latest_night": "2030-01-14",
+    "nights_missing_since_latest": 0,
+    "nights_clipped": [],
+    "nights_excluded": {},
+    "nights_invalid": 0,
+    "prior_kwh": null,
+    "prior_weight": 0.0,
+    "regime": "NORMAL",
+    "recent_median_kwh": 6.0,
+    "baseline_median_kwh": 6.2,
+    "recent_to_baseline_ratio": 0.968,
+    "recent_robust_z": -0.3,
+    "conservative_fallback": false
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": "HIGH",
+   "contract_version": "ecco-intel-entities/1",
+   "engine_comparison": null,
+   "friendly_name": "ECCO Intel overnight demand",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "overnight_demand",
+   "mode": "SHADOW",
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_predicted_day_load": {
+  "state": "14.2",
+  "attributes": {
+   "advice": {
+    "kind": "day",
+    "t0": "2030-01-16T00:00:00+00:00",
+    "t1": "2030-01-17T00:00:00+00:00",
+    "p10": 11.0,
+    "p50": 14.2,
+    "p90": 17.5,
+    "n_days": 14,
+    "n_residuals": 10,
+    "confidence": 0.62,
+    "label": "MEDIUM",
+    "usable": true
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": "MEDIUM",
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel predicted day load",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "predicted_day_load",
+   "mode": "SHADOW",
+   "p10": 11.0,
+   "p90": 17.5,
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_predicted_morning_soc": {
+  "state": "72.0",
+  "attributes": {
+   "advice": {
+    "at": "2030-01-16T07:00:00+00:00",
+    "planned_window_end_soc_pct": 80.0,
+    "basis": "the V1.1 charge target reached at the window end, then the forecast load and PV, with the effective reserve held"
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": "MEDIUM",
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel predicted morning SOC",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "predicted_morning_soc",
+   "mode": "SHADOW",
+   "p10": null,
+   "p90": null,
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": "%",
+   "unit_of_measurement": "%",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_pv_tomorrow": {
+  "state": "9.8",
+  "attributes": {
+   "advice": {
+    "inflation": 1.0,
+    "usable": true,
+    "day": "2030-01-16",
+    "source": "synthetic-forecast",
+    "raw_kwh": 9.4,
+    "ratio": 1.04,
+    "p10": 6.1,
+    "p50": 9.8,
+    "p90": 12.4,
+    "n_pairs": 12,
+    "mae_corrected": 1.1,
+    "mae_raw": 1.6,
+    "confidence": 0.4,
+    "label": "LOW",
+    "notes": [
+     "synthetic fixture value"
+    ],
+    "plausibility": {
+     "verdict": "PLAUSIBLE",
+     "ceiling_kwh": 20.0,
+     "rejected": []
+    }
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "confidence": "LOW",
+   "contract_version": "ecco-intel-entities/1",
+   "friendly_name": "ECCO Intel PV tomorrow",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "kind": "pv_tomorrow",
+   "mode": "SHADOW",
+   "p10": 6.1,
+   "p90": 12.4,
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "status": "OK",
+   "unit": "kWh",
+   "unit_of_measurement": "kWh",
+   "valid_until": "2030-01-15T21:30:00+00:00"
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ },
+ "sensor.ecco_intel_status": {
+  "state": "OK",
+  "attributes": {
+   "accuracy": {
+    "mae_7d": 1.2,
+    "coverage_7d": 0.8,
+    "n": 7
+   },
+   "applies_nothing": true,
+   "blockers": [],
+   "calibration": null,
+   "config_hash": "fixture00000hash",
+   "contract_version": "ecco-intel-entities/1",
+   "data_quality": "OK",
+   "decisions": {
+    "I-D1": "RECORDED",
+    "I-D2": "RECORDED",
+    "I-D3": "RECORDED",
+    "I-D4": "RECORDED",
+    "I-D5": "RECORDED",
+    "I-D6": "RECORDED",
+    "I-D7": "OPEN",
+    "I-D8": "RECORDED",
+    "I-D9": "RECORDED"
+   },
+   "device_class": "enum",
+   "drift": null,
+   "engine_version": "intel-v1.1.0-foundation-shadow",
+   "friendly_name": "ECCO Intel status",
+   "generated_at": "2030-01-15T21:00:00+00:00",
+   "git_sha": "0000000",
+   "input_ages": [
+    {
+     "name": "battery.soc",
+     "age_s": 40.0,
+     "limit_s": 900.0,
+     "status": "fresh"
+    },
+    {
+     "name": "pv.forecast_tomorrow_kwh",
+     "age_s": 3000.0,
+     "limit_s": 3600.0,
+     "status": "fresh"
+    },
+    {
+     "name": "tariff.import_rates",
+     "age_s": 7300.0,
+     "limit_s": 7200.0,
+     "status": "stale"
+    },
+    {
+     "name": "tou.slot_table",
+     "age_s": null,
+     "limit_s": 3600.0,
+     "status": "unknown"
+    },
+    {
+     "name": "capacity.helper_kwh",
+     "age_s": null,
+     "limit_s": null,
+     "status": "missing"
+    }
+   ],
+   "integration_version": "0.1.0-fixture",
+   "kind": "status",
+   "last_good": null,
+   "mode": "ASSISTED",
+   "next_run_at": "2030-01-15T21:15:00+00:00",
+   "options": [
+    "PAUSED",
+    "SELF_TEST_FAILED",
+    "STALE",
+    "STARTING",
+    "BLOCKED",
+    "INSUFFICIENT_DATA",
+    "NO_ADVICE",
+    "OK"
+   ],
+   "pause_control": "OFF",
+   "plan": {
+    "precharge_by": "2030-01-15T23:00:00+00:00",
+    "headroom_ceiling_pct": 92.0,
+    "reserve_runout_at": null
+   },
+   "provenance_ok": true,
+   "reason_codes": [
+    "SYNTHETIC_FIXTURE"
+   ],
+   "self_test": {
+    "ENTITY_IDS": "PASS",
+    "ZONEINFO": "PASS",
+    "VENDOR_MANIFEST": "PASS"
+   },
+   "status": "OK",
+   "tariff": {
+    "provenance": "VERIFIED",
+    "window": {
+     "start": "2030-01-15T23:30:00+00:00",
+     "end": "2030-01-16T05:30:00+00:00"
+    },
+    "price_range": [
+     7.5,
+     24.5
+    ]
+   },
+   "valid_until": "2030-01-15T21:30:00+00:00",
+   "value": {
+    "range_gbp": [
+     0.1,
+     0.45
+    ],
+    "assumptions": [
+     "Projected on forecasts; synthetic data gives no real-data claim.",
+     "Rates as the verified tariff states them; VAT and standing charge excluded."
+    ],
+    "baselines": {
+     "ALWAYS_100": [
+      0.1,
+      0.45
+     ],
+     "HOLD_CURRENT": [
+      0.05,
+      0.3
+     ]
+    }
+   }
+  },
+  "last_changed": "2030-01-15T21:00:00+00:00",
+  "last_updated": "2030-01-15T21:00:00+00:00"
+ }
+}

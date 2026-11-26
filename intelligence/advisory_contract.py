@@ -229,11 +229,17 @@ class SiteReading:
 
 @dataclass(frozen=True)
 class SiteFacts:
-    """Facts about the site that are not owner decisions (all may be None = unknown)."""
+    """Facts about the site that are not owner decisions (all may be None = unknown). The three inverter_* facts are the
+    OPTIONAL calibrated inverter conversion of the live power balance (site_decisions.inverter_conversion judges them):
+    all None = the lossless balance; all three valid = the loss-aware balance; anything else is reported and the lossless
+    balance stays in force. They are PROPOSED engineering parameters calibrated per site, never owner decisions."""
     pv_array_kwp: float | None = None
     latitude: float | None = None
     longitude: float | None = None
     tz: str = "Europe/London"
+    inverter_dc_to_ac_factor: float | None = None
+    inverter_ac_to_dc_factor: float | None = None
+    inverter_standby_w: float | None = None
 
 
 @dataclass(frozen=True)

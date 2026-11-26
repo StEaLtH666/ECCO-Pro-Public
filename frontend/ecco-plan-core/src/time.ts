@@ -63,6 +63,18 @@ export function elapsedMinutes(startMin: number, wallMinutes: number, day: Clock
   return crosses ? wallMinutes - day.deltaMin : wallMinutes;
 }
 
+/**
+ * True when a window that STARTS at startMin on this clock day has an AMBIGUOUS real length, so it is unknown and must not be guessed: it starts exactly at
+ * the change minute (the instant of the change), or, on a spring change, inside the hour the wall clock skips (those wall times do not occur). The repeated
+ * hour of an autumn change is NOT treated as ambiguous here: a start inside it is read as the first pass, which the Gentle model and its simulator share;
+ * which pass an owner means is a ruling that is still open.
+ */
+export function ambiguousClockStart(startMin: number, day: ClockDay): boolean {
+  if (day.deltaMin === 0 || !Number.isFinite(startMin)) return false;
+  const off = norm(startMin - day.changeAtMin);
+  return off === 0 || (day.deltaMin > 0 && off < day.deltaMin);
+}
+
 /** True when any minute of the wall-clock interval lies in [00:00, 03:00), where clock changes happen. */
 export function touchesChangeHours(startMin: number, wallMinutes: number): boolean {
   for (let k = 0; k <= wallMinutes; k += GRID_MIN) if (norm(startMin + k) < 180) return true;

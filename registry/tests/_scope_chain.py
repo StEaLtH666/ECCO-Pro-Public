@@ -126,6 +126,8 @@ import _isp1_scope as _isp1  # noqa: E402
 import _epc1_scope as _epc1  # noqa: E402
 import _epc2_scope as _epc2  # noqa: E402
 import _epc3_scope as _epc3  # noqa: E402
+import _ecf1_scope as _ecf1  # noqa: E402
+import _epc4_scope as _epc4  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
@@ -1470,6 +1472,52 @@ OVW5 = Entry(
          "only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core "
          "change, ZERO Modbus operation, no service call, no entity",
 )
+# ecf1 (the Energy Actions card corrections found on the first live install: the CURRENT backup reserve against the power-cut TARGET reserve, what
+# "installed" means, the compact guarded view; offline, nothing installed by this entry; _ecf1_scope.py): made on the export after epc3. FROZEN edits
+# (PEX): the card's README.md (one added paragraph) and the rebuilt dist/ecco-energy-actions-card.js. The src/plan files and the card tests that exist
+# already are epc1 / epc2 ADDED files (no reverter needed). ADDED: the new card suite and its probe. Measured, not declared: no chain-pinned reverter,
+# no delta, no op path; ZERO firmware, Home Assistant package, deployment, registry data, Intelligence, ecco_core, config.ts, ecco-energy-actions-card.ts
+# or VERSION.yaml byte; ZERO Modbus operation; no new service call (the allow-list, the two click handlers and the three declared ids are unchanged).
+ECF1 = Entry(
+    id="ecf1", pr="ECF1", commit="unmerged",
+    added_files=_ecf1.ADDED_FILES,
+    frozen_reverts=dict(_ecf1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after ecf1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _ecf1.README_REL: "d799ff82d0a6227018a37bec59adb5a40e489cb9ac20d813de0fad8cfab3aa12",
+        _ecf1.DIST_REL: "2270a0bec2ceda208c3d8677c7449d94d26615016b225de3b0be9137d7e8ccea",
+    },
+    # _pex.fingerprint(ECF1): hashes its parent epc3's fingerprint and every declaration above
+    fingerprint="136ea0d788a86411cf1258b199ef3f109fb785578fd2ee9c6c389c289f2a51bd",
+    note="the Energy Actions card corrections after the first install: the current backup reserve is read by the installed scripts' rule (a number from 0 "
+         "to 100, so 5 percent is valid) and kept apart from the power-cut target (10 to 100, offered only while above the reserve now), installed is "
+         "derived from the entities that exist instead of a static line (ready only when nothing is missing and the plan revision can be read), and the "
+         "guarded Plan section is compact (folded text with one-line summaries); the owner's reserve is labelled apart from the reserve the plan uses, "
+         "and a target must be above the owner's reserve rounded up; the card README and the rebuilt bundle: ZERO firmware, Home Assistant package, deployment, registry data, Intelligence or ecco_core change, "
+         "ZERO Modbus operation, no new service call",
+)
+# epc4 (the Energy Actions card bundle rebuilt from the plan-core sources after the Gentle Smart Charging work: the model review fixes G1 to G7 and the model
+# constraints from the offline limits and authority resolution; offline, nothing installed or actuated; _epc4_scope.py): made on the export after ecf1, so
+# its parent is ecf1 (the card corrections) and the bundle it edits is ecf1's. ONE FROZEN edit (PEX): the card's rebuilt dist/ecco-energy-actions-card.js
+# (enrolled by esb1; ecf1 declared its previous state). The card never calls the model, but plan-core's index re-exports it and the bundler keeps the
+# model's top-level constants, which the Gentle work changed: 987 hunks, 12 of them in those constants (inert) and 975 the minifier's consistent renames
+# (measured: with the one model source file put back to its text at ecf1's tip, the combined tree builds ecf1's bundle byte for byte). ADDED: its scope
+# module. The plan-core files the Gentle work adds or edits are epc1 / epc3 added files or lie outside every pinned set (not declared). epc1 to epc3, ecf1,
+# r9 and isp1 are untouched; undoing epc4 lands on ecf1's checkpoint. Measured, not declared: no chain-pinned reverter, no delta, no op path; ZERO
+# firmware, Home Assistant package, deployment, registry, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation; no service call and no write
+# of any kind.
+EPC4 = Entry(
+    id="epc4", pr="EPC4", commit="unmerged",
+    added_files=_epc4.ADDED_FILES,
+    frozen_reverts=dict(_epc4.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the bundle after epc4; as of ecf1 it is ecf1's checkpoint, as of pub0 its enrolled hash
+        _epc4.DIST_REL: "8aa9e1365768cc0999c5c50fce8da9f25d911782785c456365f2539fdd6200f9",
+    },
+    # _pex.fingerprint(EPC4): hashes its parent ecf1's fingerprint and every declaration above
+    fingerprint="8bc6a91946c97a87d6c340c4ccfc3248b749355eb292479ce69b2379374eb44c",
+    note="the Energy Actions card bundle rebuilt from the plan-core sources after the Gentle model work (987 hunks: 12 in the controller "
+         "model's constants, which the card never calls, and 975 minifier renames); the model stays read only: ZERO firmware, Home "
+         "Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
+)
 # ttr1 (time trust: THREE CLOCKS, ONE EXPLICIT TIMING-SAFETY INPUT, read only; offline, nothing installed; _ttr1_scope.py): made on the export after bpd1. ADDED: the package, its suite and the
 # test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path; ZERO firmware, registry data,
 # Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation; the package is template entities only (no automation, helper, script, trigger, action or service call) and writes nothing.
@@ -1481,7 +1529,7 @@ TTR1 = Entry(
     },
     added_files=_ttr1.ADDED_FILES,
     # _pex.fingerprint(TTR1): hashes its parent bpd1's fingerprint and every declaration above
-    fingerprint="7c26168c2a276b184c6cfa2eee659702ad80b02d8a13fbb620df1195c595250e",
+    fingerprint="a4c1df0a5e4e56c66b53a444df86aa596b5740bdcfad74d0928bf916d029a2e1",
     note="the time trust inputs (read only): a trust state for each of three clocks (Home Assistant, the dongle's NTP time, the inverter's), the worst of the three and three yes/no consumers, as template "
          "entities that read eight entities the dongle already publishes and write nothing; an input that is missing, unavailable, unknown or not a finite number is never TRUSTED; nothing is wired to a "
          "gate yet; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
@@ -1503,7 +1551,7 @@ SGT1 = Entry(
          "the owner's separate install authorisation (the Free Power guards press the operator's End only for a verified running lease, at most once per lease); the gate is soft (the dongle's own Start button bypasses it), the card is not changed, a missing or unreadable input closes the gate, the guards only press "
          "an existing End button and never act at a restart, a reload or a reconnect; ZERO firmware, registry data, Intelligence or ecco_core change, no register operation of its own",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, TTR1, SGT1)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, TTR1, SGT1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
