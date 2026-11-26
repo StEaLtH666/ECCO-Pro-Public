@@ -24,7 +24,8 @@ prove" says what that leaves open.
 | [bench.py](bench.py) | the closed-loop bench: telemetry and command channels (delay, loss, gaps, staleness), a MODEL of the dongle lease engine (one owner, snapshot, readback, 15 s guards, restore, restart, dead dongle) and of the Home Assistant planner host (plan ticks, outage) around the plant and ONE kernel module |
 | [scenarios.py](scenarios.py) | the named scenarios, the invariants, the expectations, the property-sweep generator, the generated scenario table |
 | [run_sim.py](run_sim.py) | runs every scenario and prints one table row each; exit status 1 on any failure |
-| [test_sim.py](test_sim.py) | the self-check: statements and static shape, pins, unit tables, closed lists, scenarios, plant replay, README tables, seeded property sweep, in-memory mutants of the kernel |
+| [test_sim.py](test_sim.py) | the self-check: statements and static shape, pins, unit tables, closed lists, scenarios, the invariants judged on hand-made runs, plant replay, README tables, seeded property sweeps, in-memory mutants of the kernel AND of the bench |
+| [grc_core_constants.txt](grc_core_constants.txt) | the numbers of the guarded charge-rate controller design the kernel mirrors, vendored with their source commit: asserted values, not a live pin |
 
 Run (Python 3.12, standard library only; no Node, no network):
 
@@ -33,7 +34,7 @@ cls
 $py = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
 $env:PYTHONDONTWRITEBYTECODE = "1"
 & $py -I -B -X utf8 docs\dev\dynamic-energy-control\sim\run_sim.py          # the table; add -v for invariants and explanations, a name for one scenario
-& $py -I -B -X utf8 docs\dev\dynamic-energy-control\sim\test_sim.py         # the self-check (about 30 seconds)
+& $py -I -B -X utf8 docs\dev\dynamic-energy-control\sim\test_sim.py         # the self-check (about two minutes)
 ```
 
 **Where it lives, and why.** `docs/dev/dynamic-energy-control/sim/`, next to `evidence_replay.py` (the precedent): no registry test, pin
@@ -222,6 +223,8 @@ Every run is judged by `scenarios.check_invariants` with the REAL kernel's const
 | POWER_CEILING | every setpoint written is inside 500 W and the ceiling and, for a lease, never above the pre-session value; and with a Gentle session open the setpoint IN FORCE stays above a lowered Power Ceiling for no longer than a plan period plus the command |
 | BUDGETS | dwell, change count, write count (charge), settle and write count (export) are never exceeded, and the dongle never has to refuse a request |
 | REACHES_OR_REPORTS | the SOC reading reached the target by the deadline, or 'unreachable' was reported at least 15 minutes before it |
+| REACHES_DEADLINE | (Gentle) reaching is judged on its own and a report never excuses a miss: on a night that today's fixed rate would reach 30 minutes before the deadline (and the import ceiling does not bind, the owner did not lower the Power Ceiling, the plant is inside the declared envelope) the session reaches the target by the deadline too |
+| REPORT_JUSTIFIED | every 'unreachable' report is asked of the REFERENCE kernel again on the very inputs it was decided on; a report it does not stand behind is a false alarm (the cry-wolf that used to pass REACHES_OR_REPORTS); the sweep also counts false alarms on nights that reach with 30 minutes to spare against a stated 10 percent bound |
 | NEVER_WORSE_THAN_TODAY | (Gentle, REQ-A12) the same night is run beside it with no ECCO at all; whenever today's fixed rate reaches the target 25 minutes before the window end, the Gentle night reaches it by the window end |
 | NO_UNTRUSTED_ACTUATION | no start, change or loop write while the clock it depends on is untrusted |
 | NO_REWRITE | no setpoint write repeats the value already in force (a saturated loop that rewrites the same ceiling spends the flash-wear budget on nothing) |
@@ -234,13 +237,15 @@ Every run is judged by `scenarios.check_invariants` with the REAL kernel's const
 
 ### Scenarios
 
+The catalogue (generated, `run_sim.py --counts`): <!-- counts:begin -->82 scenarios: 50 Gentle, 4 Charge Fixed, 28 Export; 16 invariants (2 of them bench or plant sanity checks)<!-- counts:end -->.
+
 Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails if this table and the code differ, and if the
 `Covered by` column of [../REQUIREMENTS.md](../REQUIREMENTS.md) does not name the same pairs.
 
 <!-- covers:begin -->
 | Scenario | Policy | What it does | Requirements (REQUIREMENTS.md) |
 |---|---|---|---|
-| `g01_nominal` | gentle | Nominal night: 25 to 90 percent, light house load; the lowest practical rate, re-planned from the measured SOC. | REQ-A1, REQ-A2, REQ-A5, REQ-A8, REQ-A12, REQ-B4, REQ-B7, REQ-B8, REQ-B10, REQ-B11, REQ-C9 |
+| `g01_nominal` | gentle | Nominal night: 25 to 90 percent, light house load; the lowest practical rate, re-planned from the measured SOC. | REQ-A1, REQ-A2, REQ-A5, REQ-A8, REQ-A12, REQ-B2, REQ-B4, REQ-B7, REQ-B8, REQ-B10, REQ-B11, REQ-C9 |
 | `g02_heavy_overnight_load` | gentle | A heavy overnight house load (4.5 kW for 90 minutes) with no import ceiling: the grid carries it, progress is unaffected, so the rate is held. | REQ-A3, REQ-A10, REQ-B5 |
 | `g03_heavy_load_import_ceiling` | gentle | The same load with an 11 kW import ceiling: import would pass it, so the setpoint is lowered at once; the ceiling leaves too little for the target, which is reported unreachable for the import headroom from 6000 s (16 reports) and at risk later (11). | REQ-A4, REQ-A7, REQ-A9, REQ-B5, REQ-C10, REQ-D2 |
 | `g03b_restore_into_breach` | gentle | FINDING F01 (the review's variant of g03): the house load ramps up to 6 kW and stays; the lease holds the 11 kW import ceiling for hours, ends at its deadline and the restore writes the owner's 8000 W into a 14.98 kW import for the last 14 minutes of the window. The restore is ECCO's write, so the breach is ECCO's; the design does not yet say what an end should write into a known breach. | REQ-A4, REQ-C10, REQ-D2 |
@@ -250,7 +255,7 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `g07_low_start_soc_tight` | gentle | Low starting SOC and a short window: 8 to 100 percent in four hours cannot make a 60 minute buffer; 'unreachable' is said at the first plan tick. | REQ-A9, REQ-A10, REQ-B8 |
 | `g08_efficiency_drop` | gentle | Charging efficiency falls from 0.945 to 0.70 after 30 minutes: the SOC lags the pessimistic projection, the progress tracker flags it, so the plan sees the real shortfall at once and raises by a large step at the first change the 30 minute dwell allows (about 70 minutes in); without the tracker the raises come late and small and the night misses its deadline. | REQ-A3, REQ-A4, REQ-A10 |
 | `g09_efficiency_gain` | gentle | Efficiency better than assumed (0.97) and a smaller battery (30 kWh): ahead of the plan, the rate is lowered. | REQ-A5, REQ-A10 |
-| `g10_taper_cliff_98` | gentle | Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) makes it say 'unreachable' (deadline) 26 times from the first plan tick at 300 s, and 'at risk' once, where the real knee (98) lets the night reach: conservative about the knee, NOT about the tail (finding F06, g36). | REQ-A7, REQ-A12, REQ-B6 |
+| `g10_taper_cliff_98` | gentle | Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) makes it say 'unreachable' (deadline) 26 times from the first plan tick at 300 s, and 'at risk' once, where the real knee (98) lets the night reach: conservative about the knee, NOT about the tail (finding F06, g36). | REQ-A7, REQ-A12 |
 | `g36_slow_tail_outside_the_world` | gentle | FINDING F06 (the review's night, sweep seed 4395984): a plant with its knee at 94.5 percent and a 357 W trickle, a 100 percent target and a heavy house: at the first plan tick the kernel says 'Starting at 8000 W: the lowest rate that still reaches 100%' (the world's trickle is 1.0 kW), the plant needs 17 minutes more than the world says, the deadline is missed and the miss is reported early by the target guard's hand-back; the planner's tail fraction is the planner owner's to review. | REQ-A9, REQ-A12 |
 | `g11_unit_ac_watts` | gentle | Unit alternative: the setpoint is AC grid watts (scale 1.0). The plan measures the gain; it never assumes it. | REQ-A7, REQ-B18 |
 | `g12_unit_dc_watts` | gentle | Unit alternative: the setpoint is DC battery watts (scale 1/0.945). | REQ-A7, REQ-B18 |
@@ -292,18 +297,19 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `g26b_plan_lost_then_collapse` | gentle | Home Assistant stops handing over plans (the lease ends after 20 minutes) and the charging efficiency collapses to 0.40: the hand-over is stopped, the judging is not, and the miss is still reported. | REQ-A9, REQ-B9 |
 | `f01_fixed_nominal` | charge_fixed | Charge Fixed at 8 kW from 30 to 90 percent: one rate, ended at the target (two writes: start and restore). | REQ-B2, REQ-B11, REQ-B12 |
 | `f02_fixed_import_breach` | charge_fixed | Charge Fixed with an 11 kW import ceiling and a 4 kW house load: import would pass it, so the session ends at once; a later start uses the headroom rate. | REQ-B12, REQ-C10, REQ-D2 |
+| `f04_fixed_power_ceiling_lowered` | charge_fixed | FINDING F14 (found while closing the review, not in it): the owner lowers the Power Ceiling to 4000 W while a Charge Fixed session runs at 8000 W. A fixed-rate session can only be ended, and no guard ends it for this, so it goes on at the old rate until its target: the lowered ceiling is not honoured by the session. | REQ-C10 |
 | `f03_fixed_unreachable` | charge_fixed | Charge Fixed at only 2 kW from 10 to 100 percent: the start says at once that this rate cannot make the target. | REQ-A9, REQ-B8 |
-| `e01_nominal` | export | Nominal export: 2 kW net export from 80 percent, house 1 kW, no solar; the loop settles inside the deadband and the lease ends at its planned end. | REQ-B13, REQ-B14, REQ-C9 |
-| `e02_house_step_up` | export | House load jumps from 1 to 3.5 kW with a 6 kW ceiling: the ceiling is raised in 1 kW steps at least 45 s apart and the export recovers. | REQ-B5, REQ-B13, REQ-B16 |
+| `e01_nominal` | export | Nominal export: 2 kW net export from 80 percent, house 1 kW, no solar; the loop settles inside the deadband and the lease ends at its planned end. | REQ-B2, REQ-B13, REQ-B14, REQ-C9 |
+| `e02_house_step_up` | export | House load jumps from 1 to 3.5 kW with a 6 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): the ceiling is raised in 1 kW steps at least 45 s apart and the export recovers. | REQ-B5, REQ-B13, REQ-B16 |
 | `e02b_house_step_infeasible` | export | The same step with the proven 3 kW ceiling: the target is infeasible high, said plainly; the export is never forced by importing. | REQ-B13, REQ-B16 |
-| `e03_house_step_down` | export | House load falls from 3 kW to 0.5 kW: the export jumps, the loop steps the ceiling down by at most 1 kW per 45 s and returns inside the band. | REQ-B13 |
+| `e03_house_step_down` | export | House load falls from 3 kW to 0.5 kW with a 6 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): the export jumps, the loop steps the ceiling down by at most 1 kW per 45 s and returns inside the band. | REQ-B13 |
 | `e04_kettle_spikes` | export | Kettle-sized bursts (3 kW for 2 minutes): settle and deadband keep the number of writes small. | REQ-B7, REQ-B13 |
 | `e05_pv_cloud` | export | Solar drops from 1.5 kW to 0.3 kW for ten minutes: the loop follows the measured grid, never a forecast. | REQ-B13, REQ-B15 |
 | `e06_pv_evening_drop` | export | Solar falls away to nothing over 90 minutes: the energy plan credited no solar, the floor (not the duration) is the safety, the SOC stays above it. | REQ-B14, REQ-B15 |
 | `e07_infeasible_low` | export | Solar alone (3.5 kW) already exports more than the 1 kW target: nothing is started, the plan says so, the battery is never charged to absorb it. | REQ-B13, REQ-B15, REQ-B16 |
 | `e07b_pv_rises_during_export` | export | Solar rises during a running export: the ceiling falls to the 500 W floor and no further, the export is reported infeasible low, the battery never charges. | REQ-B13, REQ-B15, REQ-B16 |
 | `e08_stale_grid_gap` | export | A 3 minute telemetry gap during the lease: past 90 seconds the lease fails closed and is restored. | REQ-B3, REQ-B9 |
-| `e09_stop_soc_reached` | export | A rising house load drains the battery faster than planned: the Stop SOC (staged above the effective reserve) ends the lease before the reserve. | REQ-B14 |
+| `e09_stop_soc_reached` | export | A rising house load drains the battery faster than planned, with a 5 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): the Stop SOC (staged above the effective reserve) ends the lease before the reserve. | REQ-B14 |
 | `e10_reserve_rises` | export | The effective reserve rises from 20 to 60 percent during the export: Home Assistant asks for a raise-only Stop SOC and the lease ends above the new reserve. | REQ-B14, REQ-B21 |
 | `e10b_reserve_above_soc` | export | The reserve jumps above the battery's own SOC: the discharge stops within the declared reaction time. | REQ-B14, REQ-B21 |
 | `e10c_reserve_rise_then_ha_outage` | export | The reserve rises to 64 percent, Home Assistant relays the raise-only Stop SOC and then goes down for good: the dongle alone ends the export at the raised floor, above the new reserve (its own Stop SOC is the only floor left). | REQ-B14, REQ-B21, REQ-D4 |
@@ -318,7 +324,7 @@ Generated from `scenarios.SPECS` (`run_sim.py --covers`); the self-check fails i
 | `e22_healthy_export_across_a_step_down_and_a_gap` | export | The review's night (sweep seed 23076789): a healthy export whose ceiling is stepped down while the battery is still at the old level and whose telemetry then has a 45 s gap. The first version of the guard counted one 4.7 kW reading twice and ended the healthy lease 'runaway'; the guard counts each NEW reading once and compares with the higher of the old and the new ceiling for 30 s after the write, so the lease runs to its planned end. | REQ-D3, REQ-B13 |
 | `e16_export_time_untrusted` | export | The dongle's NTP time is untrusted for the first 10 minutes: no start until it is trusted. | REQ-D1, REQ-B21 |
 | `e17_grid_loss_export` | export | Grid lost during the export: the session ends first and the pre-session values are restored. | REQ-B21 |
-| `e18_export_over_limit` | export | The house load falls away under a 2.5 kW Max Grid Export: one sample far over ends the lease at once. | REQ-B21, REQ-C10 |
+| `e18_export_over_limit` | export | The house load falls away under a 2.5 kW Max Grid Export with a 6 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): one sample far over ends the lease at once. | REQ-B21, REQ-C10 |
 | `e19_second_policy_export` | export | A Gentle start is attempted while the export owns the setpoint: refused. | REQ-B19, REQ-B20, REQ-C11 |
 | `e20_delayed_commands_export` | export | Commands take 90 seconds: a reserve rise is acted on late but inside the declared reaction time. | REQ-B14, REQ-B22 |
 <!-- covers:end -->
@@ -376,7 +382,29 @@ it is a place where the design as written does the wrong thing and an owner deci
 | Id | Scenarios | What | Open decision |
 |---|---|---|---|
 | F01 | `g03b_restore_into_breach`, `g30_import_ceiling_drop` (and about 2 percent of the sweep's Gentle nights with a ceiling) | the END of a session restores the owner's pre-session value into a house load that puts it over the owner's import ceiling; the breach lasts until the owner's own table stops charging | an END restores min(original, headroom), or the owner accepts that the ceiling ends with the session |
+| F14 | `f04_fixed_power_ceiling_lowered` | found while closing the review (not in it): a Power Ceiling lowered while a Charge Fixed session runs is not honoured: a fixed-rate session can only be ended and no guard ends it for this | whether the session ends, or is re-written at the ceiling, when the owner lowers the Power Ceiling |
 | F06 | a pinned number in the self-check (255 against 272 minutes), `g36_slow_tail_outside_the_world` | the planner's tail fraction (0.125) is more optimistic than the measured trickle (7 percent) for a plant with an early knee and a slow trickle; the planner's knee (90) over-corrects for the others | the planner owner: tailFraction and kneeSocPct (not edited here) |
+
+## The independent review of this folder (N4, round 1): where each finding is closed
+
+The first version of this simulator was reviewed independently (13 findings, 7 major) and changed; nothing below widens what the simulator
+claims, each change makes it catch more.
+
+| Finding | What it was | Where it is closed |
+|---|---|---|
+| F01 | the import-ceiling invariant did not count a breach the END's restore causes, and its in-session bound was loose | `import_analysis`: attribution to ECCO until the import falls, the dongle's guard bound, nothing after the last END, the number of episodes, no own raise; the restore case is the pinned finding F01 (`g03b`, `g30`) |
+| F02 | after an early Gentle lease end a missed target was never reported | `kernel.plan_watch` (report only, after any end and while the plan hand-over is stopped), the target guard's stop says "at risk"; `g21b`, `g23b`, `g26b`, `g34b` |
+| F03 | the never-worse target guard was never exercised | `g34` (the hand-back decides the night), `g33` renamed `g33_plan_catches_up_alone`, boundary units for the guard |
+| F04 | seven bug classes no scenario, invariant or sweep run caught | invariants NO_REWRITE, NO_STALE_DRIVE, COMMAND_FOLLOWED and the Power Ceiling state check; scenarios `g20b`, `g30b`, `g35`, `e10c`, `e15b`, `f02` |
+| F05 | vacuous scenarios | `g05` (bursts the planner sees, a binding ceiling), `g20` (a gap across a plan tick), `g08` (the tracker's effect), ONE_WRITER and PHYSICAL labelled as sanity checks |
+| F06 | the sweep's envelope claim was false, the central unknown never drawn | `envelope_problems`, a generator that draws the gentle-rate knee and trickle and asserts every draw, `top_rate_threshold` as a parameter, the measured-trickle sweep, the planner finding F06 |
+| F07 | any early report passed | REACHES_DEADLINE, REPORT_JUSTIFIED (replayed on the reference kernel), the sweep's false-alarm bound |
+| F08 | the runaway model counted stale readings and lacked the firmware's rules | per-sample counting, one start grace, the transition window, the 12 percent DC allowance and the fence, pinned to the firmware text; `e22` |
+| F09 | calibration claims that overstated the evidence | the trickle is 2 of 4 nights, `tau_discharge_s` is ASSUMED, `fp_dc_per_request` is 0.97 W/W (0.94 is the current ratio), the cliff bound is 2.5 to 4.8 minutes |
+| F10 | undecided plant behaviour hard-coded without a flag | `slot_target_stops_charge` (R1), `top_rate_threshold`, `cliff_shape`, and the charge scenarios run once with R1 false |
+| F11 | the GRC "pins" compared the kernel with itself | `grc_core_constants.txt` (asserted values with their source commit), the differences listed |
+| F12 | the bench was never mutated; survivors among the kernel mutants | 21 bench mutants (each killed), the review's kernel mutants added, named scenario and sweep killers |
+| F13 | claims the runs did not support | the counts are generated, the g03, g10 and g33 statements corrected, the Covered-by pointers of REQ-A6, B2, B6, B15 and A12 repaired, closed loops above 3000 W flagged as not hardware-proven |
 
 ## What this does not prove
 
@@ -411,7 +439,7 @@ it is a place where the design as written does the wrong thing and an owner deci
   inputs, so a controller that cries wolf at every start (the review's BI12b) fails, and the sweep counts false alarms against the bound above.
 * **Mutants test the kernel's tests, not the kernel's correctness.** The mutants are single-line in-memory edits of `kernel.py`; killing all
   of them shows the suite notices those edits, not that no other defect exists. Measured when this was written: the unit tables and the
-  scenarios together kill all 97 kernel mutants; the scenarios alone kill 48 of them (the rest are boundary edits, one epsilon or one count,
+  scenarios together kill all 103 kernel mutants and all 21 bench mutants; the scenarios alone kill 52 of the kernel's (the rest are boundary edits, one epsilon or one count,
   that a whole night does not resolve), and the mutants of each class the review named (a dwell that a forced reduction waits for, a guard
   that never trips, a stale frame that drives a change, a lowered ceiling that is ignored, a missing measured-power guard, a double write, a
   tracker that is never used, smoothing that is missing, a restart at the full rate into a breach) die in a NAMED scenario or in the sweep on

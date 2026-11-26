@@ -334,10 +334,11 @@ def inv_power_ceiling(run):
             lo, hi = KR.CHARGE_MIN_W, power_ceiling_at(sc, w.t)
         if w.value < lo - 1e-9 or w.value > hi + 1e-9:
             bad.append((w.t, w.kind, w.value, lo, hi))
-    # the state: with a Gentle session open the setpoint in force may stay above a LOWERED Power Ceiling for the declared reaction only
+    # the state: with a Gentle or a Charge Fixed session open the setpoint in force may stay above a LOWERED Power Ceiling for the declared reaction only
     over = worst = 0
     for r in run.rows:
-        over = over + 1 if (sc.kind == "gentle" and r.lease and r.slot_w > power_ceiling_at(sc, r.t) + 1e-9) else 0
+        in_force = r.slot_w if sc.kind == "gentle" else r.fp_w
+        over = over + 1 if (sc.kind in ("gentle", "charge_fixed") and r.lease and in_force > power_ceiling_at(sc, r.t) + 1e-9) else 0
         worst = max(worst, over)
     if worst * TICK > react_plan_s(sc):
         bad.append(("in force", worst * TICK, react_plan_s(sc)))
@@ -998,7 +999,7 @@ def add(sc, *expect, covers=(), known_gap=(), known_finding=(), skip=(), backsto
 add(gentle("g01_nominal", "Nominal night: 25 to 90 percent, light house load; the lowest practical rate, re-planned from the measured SOC."),
     X_reached(), X_mean_setpoint_below(0.9), X_changes_at_most(5), X_saw("ha", "increase", "start"), X_saw("dongle", "stop", "target_reached"),
     X_min_decisions(10),
-    covers=("REQ-A1", "REQ-A2", "REQ-A5", "REQ-A8", "REQ-A12", "REQ-B4", "REQ-B7", "REQ-B8", "REQ-B10", "REQ-B11", "REQ-C9"))
+    covers=("REQ-A1", "REQ-A2", "REQ-A5", "REQ-A8", "REQ-A12", "REQ-B2", "REQ-B4", "REQ-B7", "REQ-B8", "REQ-B10", "REQ-B11", "REQ-C9"))
 add(gentle("g02_heavy_overnight_load", "A heavy overnight house load (4.5 kW for 90 minutes) with no import ceiling: the grid carries it, progress is unaffected, so the rate is held.",
            house=Hs((0, 800), (5400, 4500), (10800, 800))),
     X_reached(), X_saw("ha", "increase", "behind_plan", present=False),
@@ -1038,7 +1039,7 @@ add(gentle("g09_efficiency_gain", "Efficiency better than assumed (0.97) and a s
 add(gentle("g10_taper_cliff_98", "Charge to 100 percent through the measured plateau, the cliff at 98 percent and the trickle: the planner's pessimistic knee (90) makes it say 'unreachable' (deadline) 26 times from the first plan tick at 300 s, and 'at risk' once, where the real knee (98) lets the night reach: conservative about the knee, NOT about the tail (finding F06, g36).",
            soc0_pct=40.0, target_soc_pct=100.0, slot_target_pct=100.0),
     X_reached(), X_min_decisions(10),
-    covers=("REQ-A7", "REQ-A12", "REQ-B6"))
+    covers=("REQ-A7", "REQ-A12"))
 def X_missed_deadline():
     def f(run):
         best = max(x.read for x in run.rows if x.t <= deadline_s(run.sc))
@@ -1215,6 +1216,11 @@ add(fixed("f02_fixed_import_breach", "Charge Fixed with an 11 kW import ceiling 
           soc0_pct=30.0, owner_rate_w=8000.0, import_ceiling_w=11000.0, house=Hs((0, 800), (3600, 4000)), react_s=200.0),
     X_lease_ended("import_ceiling"), X_leases_count(2), X_nth_start_at_most(2, 6000),
     covers=("REQ-B12", "REQ-C10", "REQ-D2"))
+add(fixed("f04_fixed_power_ceiling_lowered", "FINDING F14 (found while closing the review, not in it): the owner lowers the Power Ceiling to 4000 W while a Charge Fixed session runs at 8000 W. A fixed-rate session can only be ended, and no guard ends it for this, so it goes on at the old rate until its target: the lowered ceiling is not honoured by the session.",
+          soc0_pct=30.0, owner_rate_w=8000.0, house=Hs((0, 800)), react_s=200.0, events=((1800.0, "power_ceiling", {"w": 4000.0}),)),
+    X_lease_ended("target_reached"), X_leases_count(1),
+    known_finding=(("POWER_CEILING", "F14", "Charge Fixed has no guard for a Power Ceiling lowered during the session: it keeps the old fixed rate until the target (a guard that ends the session, or a lowered rate, is a design decision)"),),
+    covers=("REQ-C10",))
 add(fixed("f03_fixed_unreachable", "Charge Fixed at only 2 kW from 10 to 100 percent: the start says at once that this rate cannot make the target.",
           soc0_pct=10.0, target_soc_pct=100.0, owner_rate_w=2000.0),
     X_reported_by(600),
@@ -1224,8 +1230,8 @@ add(fixed("f03_fixed_unreachable", "Charge Fixed at only 2 kW from 10 to 100 per
 add(export("e01_nominal", "Nominal export: 2 kW net export from 80 percent, house 1 kW, no solar; the loop settles inside the deadband and the lease ends at its planned end.",
            soc0_pct=80.0),
     X_export_tracks(600.0, 300.0), X_lease_ended("lease_end"), X_saw("ha", "increase", "feed_forward"),
-    covers=("REQ-B13", "REQ-B14", "REQ-C9"))
-add(export("e02_house_step_up", "House load jumps from 1 to 3.5 kW with a 6 kW ceiling: the ceiling is raised in 1 kW steps at least 45 s apart and the export recovers.",
+    covers=("REQ-B2", "REQ-B13", "REQ-B14", "REQ-C9"))
+add(export("e02_house_step_up", "House load jumps from 1 to 3.5 kW with a 6 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): the ceiling is raised in 1 kW steps at least 45 s apart and the export recovers.",
            lease_ceiling_w=6000.0, house=Hs((0, 1000), (1800, 3500)), duration_s=5400.0),
     X_export_tracks(2700.0, 400.0), X_saw("dongle", "increase", "export_short"),
     covers=("REQ-B5", "REQ-B13", "REQ-B16"))
@@ -1233,7 +1239,7 @@ add(export("e02b_house_step_infeasible", "The same step with the proven 3 kW cei
            house=Hs((0, 1000), (1800, 3500)), duration_s=5400.0),
     X_saw("dongle", "unreachable", "infeasible_high"),
     covers=("REQ-B13", "REQ-B16"))
-add(export("e03_house_step_down", "House load falls from 3 kW to 0.5 kW: the export jumps, the loop steps the ceiling down by at most 1 kW per 45 s and returns inside the band.",
+add(export("e03_house_step_down", "House load falls from 3 kW to 0.5 kW with a 6 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): the export jumps, the loop steps the ceiling down by at most 1 kW per 45 s and returns inside the band.",
            lease_ceiling_w=6000.0, house=Hs((0, 3000), (1800, 500)), duration_s=5400.0, max_export_w=5000.0),
     X_export_tracks(2700.0, 400.0), X_saw("dongle", "reduce", "export_over"),
     covers=("REQ-B13",))
@@ -1260,7 +1266,7 @@ add(export("e07b_pv_rises_during_export", "Solar rises during a running export: 
 add(export("e08_stale_grid_gap", "A 3 minute telemetry gap during the lease: past 90 seconds the lease fails closed and is restored.", tel_gaps=((1800.0, 1980.0),)),
     X_lease_ended("stale_telemetry"), X_lease_ends_within(1800.0, 150.0),
     covers=("REQ-B3", "REQ-B9"))
-add(export("e09_stop_soc_reached", "A rising house load drains the battery faster than planned: the Stop SOC (staged above the effective reserve) ends the lease before the reserve.",
+add(export("e09_stop_soc_reached", "A rising house load drains the battery faster than planned, with a 5 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): the Stop SOC (staged above the effective reserve) ends the lease before the reserve.",
            soc0_pct=30.0, house=Hs((0, 500), (600, 3000)), lease_ceiling_w=5000.0, duration_s=9000.0, export_len_s=20000.0),
     X_lease_ended_any(("floor_reached", "lease_end")), X_min_soc_at_least(20.0),
     covers=("REQ-B14",))
@@ -1328,7 +1334,7 @@ add(export("e17_grid_loss_export", "Grid lost during the export: the session end
            events=((1800.0, "grid_loss", {"dur": 600.0}),), duration_s=3600.0),
     X_lease_ended("grid_lost"), X_lease_ends_within(1800.0, 30.0),
     covers=("REQ-B21",))
-add(export("e18_export_over_limit", "The house load falls away under a 2.5 kW Max Grid Export: one sample far over ends the lease at once.",
+add(export("e18_export_over_limit", "The house load falls away under a 2.5 kW Max Grid Export with a 6 kW ceiling (a closed loop above 3000 W is NOT hardware-proven, the firmware's proven ceiling is 3000 W): one sample far over ends the lease at once.",
            lease_ceiling_w=6000.0, house=Hs((0, 2500), (1200, 300)), max_export_w=2500.0, duration_s=3600.0),
     X_lease_ended("export_over_limit"), X_lease_ends_within(1200.0, 45.0),
     covers=("REQ-B21", "REQ-C10"))
@@ -1473,6 +1479,13 @@ def sweep(K, n_per_kind, base_seed=20261126, kinds=("gentle", "charge_fixed", "e
 # ---------------------------------------------------------------------------------------------------------------------------
 # generated tables (SIM_README.md carries them verbatim; test_sim.py compares)
 # ---------------------------------------------------------------------------------------------------------------------------
+def catalogue_counts_md():
+    """The size of the catalogue in words, generated (SIM_README.md carries it verbatim; the self-check compares)."""
+    c = Counter(sp.sc.kind for sp in SPECS)
+    return "%d scenarios: %d Gentle, %d Charge Fixed, %d Export; %d invariants (%d of them bench or plant sanity checks)" % (
+        len(SPECS), c["gentle"], c["charge_fixed"], c["export"], len(INVARIANTS), len(SANITY))
+
+
 def coverage_table_md():
     lines = ["<!-- covers:begin -->", "| Scenario | Policy | What it does | Requirements (REQUIREMENTS.md) |", "|---|---|---|---|"]
     for sp in SPECS:

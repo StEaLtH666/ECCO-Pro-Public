@@ -12,11 +12,16 @@ memory; writes nothing.
       feasibility maths must give the planner's numbers); the GRC design constants are pinned by value (that design is not in this tree)
   [3] UNITS: the kernel's pure functions on boundary tables (also the first line of the mutation test)
   [4] CLOSED LISTS AND EXPLANATIONS: every reason and detail has a sentence, none is dead, every emitted sentence is complete
-  [5] SCENARIOS: every named scenario passes (invariants, documented gaps, expectations); at least 30; the requirement pointers are in sync
-  [6] PLANT: the parameter table equals the defaults, every unmeasured parameter is flagged, the README tables are generated from the code
-  [7] PROPERTY SWEEP: thousands of seeded random plants and inputs, every applicable invariant holds
-  [8] MUTANTS: at least 40 in-memory single-line mutants of the kernel (each limit, comparison, clamp, ordering, availability guard and
-      reason code); every one must be killed by the units or the scenarios
+  [5] SCENARIOS: every named scenario passes (invariants, documented gaps, pinned findings, expectations); the failing (scenario, invariant) pairs
+      equal the pinned set exactly; the requirement pointers are in sync
+  [5b] THE INVARIANTS THEMSELVES: each judged on hand-made runs, so each is known to be able to fail as well as to pass
+  [6] PLANT: the parameter table equals the defaults, every unmeasured or assumed behaviour is a flagged parameter, the replay against the saved
+      nights, the charge scenarios once with the slot target not stopping the charge, the README tables are generated from the code
+  [7] PROPERTY SWEEPS: thousands of seeded random plants and inputs inside the declared envelope (every applicable invariant holds; findings
+      counted, false alarms bounded), a second base seed, and a sweep with the measured knee and trickle outside the envelope
+  [8] MUTANTS OF THE KERNEL: in-memory single-line mutants (each limit, comparison, clamp, ordering, availability guard, reason code, and the review's);
+      every one must be killed by the units or the scenarios, and those of the review's classes must die in a NAMED scenario or in the sweep alone
+  [9] MUTANTS OF THE BENCH (the dongle and Home Assistant models): at least 15, each killed by a scenario or a bench unit
 """
 
 import ast
@@ -979,6 +984,8 @@ cov = S.coverage_table_md()
 par = P.parameter_table_md()
 check("SIM_README.md carries the generated scenario table verbatim (run_sim.py --covers prints it)", cov in readme)
 check("SIM_README.md carries the generated parameter table verbatim (run_sim.py --params prints it)", par in readme)
+check("SIM_README.md states the size of the catalogue as the code counts it (run_sim.py --counts prints it)", S.catalogue_counts_md() in readme, S.catalogue_counts_md())
+check("SIM_README.md names every invariant and every pinned finding id", all(n in readme for n in S.INVARIANTS) and all(f[1] in readme for _n, f in FINDINGS))
 check("SIM_README.md names every pinned source file", all(s in readme for s in (FW_REL, PLAN_REL, "gentleNightProbe.golden.json", "GRC")))
 check("SIM_README.md has the honest sections (what is pinned, what this does not prove, how a controller plugs in, how to add a scenario)",
       all(s in readme for s in ("What this does not prove", "How a later controller plugs in", "How to add a scenario", "What is pinned", "MEASURED versus ASSUMED")))

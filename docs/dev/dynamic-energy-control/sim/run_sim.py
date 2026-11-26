@@ -12,6 +12,7 @@ A pinned finding is a defect of the design the bench found (scenarios.py, known_
     python -I -B -X utf8 docs/dev/dynamic-energy-control/sim/run_sim.py g03_heavy_load_import_ceiling -v     # one scenario
     python -I -B -X utf8 docs/dev/dynamic-energy-control/sim/run_sim.py --covers   # the scenario / requirement table of SIM_README.md
     python -I -B -X utf8 docs/dev/dynamic-energy-control/sim/run_sim.py --params   # the MEASURED versus ASSUMED table of SIM_README.md
+    python -I -B -X utf8 docs/dev/dynamic-energy-control/sim/run_sim.py --counts   # the catalogue's size, as SIM_README.md states it
 """
 
 import os
@@ -40,6 +41,9 @@ def short_codes(res, limit=5):
 def main(argv):
     if "--covers" in argv:
         print(S.coverage_table_md())
+        return 0
+    if "--counts" in argv:
+        print(S.catalogue_counts_md())
         return 0
     if "--params" in argv:
         import plant
