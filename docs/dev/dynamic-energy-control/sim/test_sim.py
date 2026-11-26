@@ -960,6 +960,39 @@ pc_rows = lambda n: [mkrow(15.0 * i, lease=1, slot_w=5000.0) for i in range(1, n
 check("POWER_CEILING (crafted): a setpoint left above a lowered Power Ceiling for longer than a plan period fails (the state, not only the writes)",
       S.inv_power_ceiling(mkrun(pc_sc, pc_rows(60)))[0] is False and S.inv_power_ceiling(mkrun(pc_sc, pc_rows(5)))[0] is True)
 
+gsc = replace(S.SPEC_BY_NAME["g01_nominal"].sc)       # Gentle, window 0 to 18000 s, target 90, buffer 3600 s: the deadline is 14400 s
+
+
+def night_rows(reach_t, ceil=None, breach=False):
+    return [mkrow(15.0 * i, grid=12000.0 if breach else 3000.0, house=2000.0, ac_in=1000.0, ceil=ceil, soc=90.0 if (reach_t is not None and 15.0 * i >= reach_t) else 50.0) for i in range(1, 1201)]
+
+
+def night_pair(ours_t, base_t, ceil=None, breach=False):
+    r = mkrun(gsc, night_rows(ours_t, ceil))
+    r.baseline = mkrun(gsc, night_rows(base_t, ceil, breach))
+    return r
+
+
+check("NEVER_WORSE_THAN_TODAY and REACHES_DEADLINE (crafted): today's rate reaches the target in good time and the session never does: both fail",
+      S.inv_never_worse(night_pair(None, 10000.0))[0] is False and S.inv_reaches_deadline(night_pair(None, 10000.0))[0] is False)
+check("NEVER_WORSE_THAN_TODAY and REACHES_DEADLINE (crafted): the session reaches it by the deadline: both hold; a report does not excuse a miss (the first fails with a late finish only by the deadline rule)",
+      S.inv_never_worse(night_pair(12000.0, 10000.0))[0] is True and S.inv_reaches_deadline(night_pair(12000.0, 10000.0))[0] is True
+      and S.inv_reaches_deadline(night_pair(15000.0, 10000.0))[0] is False and S.inv_never_worse(night_pair(15000.0, 10000.0))[0] is True)
+check("NEVER_WORSE_THAN_TODAY and REACHES_DEADLINE (crafted): a night today's rate would not win either holds trivially",
+      S.inv_never_worse(night_pair(None, None))[0] is True and S.inv_reaches_deadline(night_pair(None, 16000.0))[0] is True)
+check("NEVER_WORSE_THAN_TODAY and REACHES_DEADLINE (crafted): where today's rate would breach the owner's import ceiling the ceiling outranks them and both are not applicable",
+      S.inv_never_worse(night_pair(None, 10000.0, ceil=11000.0, breach=True))[0] is None and S.inv_reaches_deadline(night_pair(None, 10000.0, ceil=11000.0, breach=True))[0] is None)
+r46 = night_pair(None, 10000.0)
+r46.sc = replace(gsc, plant=P.PlantParams(capacity_kwh=46.0))
+check("REACHES_DEADLINE (crafted): outside the declared envelope (a 46 kWh battery against 35) it is not applicable", S.inv_reaches_deadline(r46)[0] is None)
+fa_rec = lambda detail, ctx: B.Rec(300.0, "ha", "gentle", "unreachable", detail, None, None, False, True, "x", 15.0, ctx)
+easy_ctx = ("plan", cin(K, now=300.0, soc=30.0), K.ChargeObjective(90.0, 14400.0, 18000.0, 35.0), K.Limits(), K.State(), None)
+hard_ctx = ("plan", cin(K, now=300.0, soc=8.0), K.ChargeObjective(100.0, 10800.0, 14400.0, 35.0), K.Limits(), K.State(), None)
+check("REPORT_JUSTIFIED (crafted): an 'unreachable' report on an easy night (30 to 90 percent in 4 hours) is a false alarm the reference kernel does not stand behind: it fails",
+      S.inv_report_justified(mkrun(gsc, [mkrow(15.0)], recs=[fa_rec("at_risk", easy_ctx)]))[0] is False)
+check("REPORT_JUSTIFIED (crafted): the same report on a night that cannot be made (8 to 100 percent in 3 hours) is confirmed by the reference kernel: it holds",
+      S.inv_report_justified(mkrun(gsc, [mkrow(15.0)], recs=[fa_rec("deadline", hard_ctx)]))[0] is True)
+
 # ===========================================================================
 print("")
 print("[6] plant parameters and the README tables")

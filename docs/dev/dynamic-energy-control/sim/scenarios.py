@@ -17,7 +17,8 @@ Invariants (every run; each is True, False or None = does not apply to this kind
   REPORT_JUSTIFIED       every 'unreachable' report is asked of the REFERENCE kernel again on the same inputs; a report it does not stand behind is a
                          false alarm (the cry-wolf that used to pass REACHES_OR_REPORTS). The SWEEP also counts the false alarms on nights that
                          reach with a 30 minute margin (FALSE_ALARM_MAX_RATE)
-  NEVER_WORSE_THAN_TODAY a night that today's fixed rate would have won (target reached 25 minutes before the window end) is not lost (Gentle)
+  NEVER_WORSE_THAN_TODAY a night that today's fixed rate would have won (target reached 25 minutes before the window end) is not lost (Gentle); not
+                         applicable where today's rate would breach the owner's import ceiling: a hard ceiling outranks it
   NO_UNTRUSTED_ACTUATION no start, change or loop write while the clock it depends on is untrusted
   NO_REWRITE             no setpoint write that repeats the value already in force (a double write wastes the flash-wear budget)
   NO_STALE_DRIVE         no plan-driven change decided on a frame older than STALE_HOLD_S (45 s)
@@ -401,6 +402,12 @@ def inv_reaches_or_reports(run):
     return False, "SOC %.1f at the deadline (target %.0f) and no timely report (first report %s)" % (r.soc, sc.target_soc_pct, t)
 
 
+def ceiling_binds(base):
+    """The same night with no ECCO (today's rate in force all night) would breach the owner's import ceiling: the ceiling binds, today's rate is
+    the wrong yardstick, and a hard ceiling outranks 'never worse than today' (the target guard never hands back into a breach; README)."""
+    return any(x.imp_ceiling is not None and x.grid > x.imp_ceiling and x.ac_in > 0.0 and x.house < x.imp_ceiling for x in base.rows)
+
+
 def inv_reaches_deadline(run):
     """REACHING judged on its own (F07 of the N4 review): a report never excuses a missed deadline on a night that was winnable. Winnable: the
     same night with no ECCO (today's rate in force all night) reaches the target FEASIBLE_MARGIN_S before the deadline and does not breach the
@@ -420,8 +427,8 @@ def inv_reaches_deadline(run):
     today = next((x.t for x in base.rows if x.read >= sc.target_soc_pct - 1e-9), None)
     if today is None or today > dl - FEASIBLE_MARGIN_S:
         return True, "today's rate does not reach the target %d min before the deadline: nothing to hold the session to" % (FEASIBLE_MARGIN_S / 60)
-    if any(x.imp_ceiling is not None and x.grid > x.imp_ceiling for x in base.rows):
-        return True, "the owner's import ceiling binds on this night (today's rate would breach it): today's rate is not the yardstick"
+    if ceiling_binds(base):
+        return None, "n/a: the owner's import ceiling binds on this night (today's rate would breach it): today's rate is not the yardstick"
     ours = next((x.t for x in run.rows if x.read >= sc.target_soc_pct - 1e-9), None)
     ok = ours is not None and ours <= dl
     return ok, ("today's rate reaches it at %d s and the session at %s s, by the deadline (%d s)" % (today, ours, dl)) if ok else \
@@ -460,6 +467,8 @@ def inv_never_worse(run):
     base = getattr(run, "baseline", None)
     if base is None:
         return None, "no baseline run"
+    if ceiling_binds(base):
+        return None, "n/a: the owner's import ceiling binds on this night (today's rate would breach it) and a hard ceiling outranks 'never worse than today'"
     we = sc.window[1]
     today = max(x.read for x in base.rows if x.t <= we - KR.END_MARGIN_S - KR.GUARD_MARGIN_S) >= sc.target_soc_pct - 1e-9
     ours = max(x.read for x in run.rows if x.t <= we) >= sc.target_soc_pct - 1e-9
