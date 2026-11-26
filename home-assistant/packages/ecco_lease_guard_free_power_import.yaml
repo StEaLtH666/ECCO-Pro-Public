@@ -1,0 +1,189 @@
+# ECCO Pro - LEASE GUARD (Free Power, grid import ceiling): end a Free Power lease when the measured grid import stays above the owner's ceiling for 30 seconds
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Start gate and lease guards").
+#
+# WHY. A start gate (ecco_start_gate.yaml) decides only at the START, and its import check judges one instant (the house load now plus the request) with no loss factor and no margin. Nothing ends a
+# Free Power lease when the house and the charge together breach the supply limit later. Item N2 of the architecture reconciliation asks for in-lease END guards. This package is ONE guard, ONE
+# automation, and it only ever presses an existing END button; a second small automation in the same file (the notice, below) only raises a notification and never presses anything. It is one of three
+# lease guards, each its own package file (the others: ecco_lease_guard_dump.yaml and ecco_lease_guard_free_power_time.yaml). The Free Power side is two guards, not one, because each counts its own delay (30 seconds here, 5 minutes in the time guard) and a run that is counting
+# drops every trigger that arrives meanwhile (mode single): one automation would let a long time count hide a breach of the supply limit for minutes.
+#
+# THIS GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION. The three guards are authorised and installed one at a time; they read nothing from one another (each stands alone: the suite
+# proves that this file alone ends its lease), and they are separate from the start gate, which can be installed without any of them. The ceiling helper this guard reads is the start gate's
+# (input_number.ecco_grid_import_ceiling_w): without the helper the guard is inert.
+#
+# WHAT IT DOES
+#   ecco_lease_guard_free_power_import  While a Free Power lease is active and the grid-import ceiling is configured (input_number.ecco_grid_import_ceiling_w, from ecco_start_gate.yaml: 1 to
+#       100000 W) and the measured grid import (sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp, the dongle's CT reading, positive = importing) is above it for 30 SECONDS, it presses END FREE
+#       POWER - RESTORE NOW, but only for a lease it has verified to be running normally (below). The ceiling is a SAFETY ceiling, never a target. 30 s is three 10 s telemetry polls: a short
+#       confirmation, not an average; a kettle does not end a lease, a sustained breach does.
+#   A ceiling that reads 0 means NONE CONFIGURED and the guard is inert, silently, by design. A ceiling that CANNOT BE READ (unknown, unavailable or missing: the helper not created yet, an input_number
+#       domain that failed to load) is not the same thing: the guard never acts on a value it cannot read, so it stays inert, but it says so: when a lease is active and the ceiling has not been
+#       readable for a minute, the notice automation (ecco_lease_guard_free_power_import_inert, the second automation of this file) raises one persistent notification
+#       (ecco_lease_guard_free_power_inert), and the start gate refuses a Charge Battery start while the ceiling cannot be read (IMPORT_CEILING_UNREADABLE).
+#   Then it raises one persistent notification with a fixed id (ecco_lease_guard_free_power_ended, shared with the time guard) that says what was ended and why, or, when it declined to press, one
+#   with another fixed id (ecco_lease_guard_free_power_declined, shared) that says why it pressed nothing; and it pauses for a minute (mode single: a trigger in that minute is dropped silently),
+#   so one violation is one press.
+#
+# THIS PRESS IS THE OPERATOR'S END. END FREE POWER - RESTORE NOW is the one button the firmware reads as an operator's explicit retry. In the firmware, pressed while a lease has a saved snapshot
+# it sets free_power_restore_requested and the one-shot free_power_operator_retry_pending, which restore_free_power_snapshot consumes as an explicit operator request: that clears the durable
+# operator-decision lockout (the lockout trips at two verify mismatches so that a reboot cannot silently re-authorise more unattended writes against a condition no human has seen), zeroes the
+# comms attempts, the verify-mismatch count and the next-attempt time, and so skips the retry backoff. A press while a restore is owed, blocked or locked out would therefore hand a guard the
+# operator's authority to retry. So the guard presses ONLY for a VERIFIED RUNNING lease, judged after its wait, just before the press (the verdict below, the same text in both Free Power guards):
+#       - the lease flag reads on (the condition just before the verdict) and binary_sensor.ecco_clock_dongle_free_power_operation_in_progress reads off (unavailable or unknown is not off);
+#       - sensor.ecco_clock_dongle_free_power_status starts with ACTIVE - VERIFIED OK, the text the firmware publishes after a verified activation (an allow-list: END REQUESTED, END DEFERRED,
+#         END BLOCKED, RESTORE*, RECOVERY*, OPERATOR DECISION*, ACTIVATION VERIFY*, FORCE*, ACCEPT*, REJECTED*, STARTING, SNAPSHOT*, START FAILED, Inactive and every other text refuse);
+#       - sensor.ecco_clock_dongle_free_power_ends_at reads a time in the firmware's exact form YYYY-MM-DD HH:MM:SS that is after Home Assistant's clock (the end is not already due: the dongle's
+#         own watchdog owns a lease that is past it; read as local time in Home Assistant's zone, as the start gate reads the poll text); a lease past its end, or an end that cannot be read,
+#         is left to the dongle;
+#       - END FREE POWER - RESTORE NOW has not been pressed since the lease turned active (AT MOST ONE PRESS PER LEASE, shared by both Free Power guards and by the operator): the button
+#         entity's own state is the time of its last press, and the lease began when binary_sensor.ecco_clock_dongle_free_power_active last changed. Home Assistant resets that change time at
+#         a restart and at a reconnect of the dongle, so a lease that was re-announced counts as beginning then; the status check is the line of defence behind the marker.
+#   When any of this is not true the guard presses nothing and says why in the declined notification; the lease is then the dongle's, or the operator's to end. The Dump guard needs none of this.
+#
+# HARD RULES (each is a static check in home-assistant/tests/test_ecco_start_gate.py).
+#   - The ONLY service calls are button.press on the existing END FREE POWER - RESTORE NOW button and persistent_notification.create. The guard never presses a START button, never arms or
+#     writes anything, never writes a register or a helper, and adds no helper and no template entity. It reads facts and presses nothing else.
+#   - END is never gated for a human: the card's End & Restore Now is untouched. The guard's own press is gated (above) because it is the operator's End.
+#   - A guard acts only on a POSITIVE reading: a measured import that is a number above a configured ceiling. A value that is missing, unavailable or unknown never ends a lease.
+#   - A restart, a template reload, a reconnect of the dongle and a boot never end a lease by themselves: every trigger must be a change in a reading, nothing runs at the Home Assistant start,
+#     and a count in progress dies with a restart. A violation that already stands when Home Assistant starts is NOT acted on until the next change; a lease that runs through a restart with
+#     a standing violation keeps running. The one thing this guard does after a restart is judge a measured breach that persists after the entities return: it is ended after its 30 seconds (a
+#     fact about the supply, not about the restart).
+#
+# WHAT IT DOES NOT DO, AND ITS LIMITS (stated plainly; nothing here is a lock; a firmware guard is the only hard one).
+#   - The guard is SOFT: it runs in Home Assistant. A Home Assistant that is down, a dongle that is dead or in safe mode, or a press that the dongle does not act on ends nothing. It does not retry:
+#     one press per lease, then nothing. The dongle's own watchdogs (the lease's end time, the restore retries) are unchanged and still run. An automatic END with no operator authority is a firmware
+#     option (a separate flash), not something a Home Assistant guard can offer.
+#   - Charge Battery (Free Power) has no target-reached guard here: the lease runs to its end time or to the operator's End (Free Power forces every slot to 100 %). Ending at a target is a later step.
+#   - A lease started from the dongle's own button while a hold is active is NOT ended by the Free Power guards (Charge Battery is not gated by a hold). No loss factor and no margin is applied to
+#     the ceiling: a request that just fits can be ended 30 seconds after it starts.
+#   - The ends-at sensor is published every 10 s: a lease that is only seconds old may read no end yet; the verdict is taken after the 30 second wait, which covers it.
+#   - A trigger that arrives while the guard is busy (its wait, or the minute after a press) is dropped. The notifications live in Home Assistant's memory only; a restart clears them.
+#   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the offline model of them is in the suite): that a template trigger fires when its result changes from false to true and
+#     is not armed while it is already true, that wait_template with continue_on_timeout continues at once when its template is already true, that `mode: single` with max_exceeded silent drops a
+#     trigger while a run is busy, that a button entity's state is the time of its last press (ISO 8601, restored across a restart), that states['<entity id>'].last_changed is the time the
+#     state last changed, and that as_timestamp of a time with no offset reads it as local time in Home Assistant's own zone.
+#
+# INSTALL. One file copy to /config/packages/ecco_lease_guard_free_power_import.yaml, a configuration check, then reload the AUTOMATIONS (Developer tools, YAML, Automations): no restart, no helper to
+# create, never "reload all". It reads the ceiling helper of ecco_start_gate.yaml; without it the guard stays inert (it never acts on a missing reading) and says so. Remove: delete the file and
+# reload the automations. Nothing here is meant to be exposed to a voice assistant.
+
+automation:
+  - id: ecco_lease_guard_free_power_import
+    alias: "ECCO - Lease guard: end a Free Power lease when the grid import stays above the configured ceiling for 30 seconds"
+    description: >-
+      Presses END FREE POWER - RESTORE NOW (nothing else, ever) when a Free Power lease is active, a grid-import ceiling is configured (input_number.ecco_grid_import_ceiling_w, 1 to 100000 W; 0 = none,
+      the guard is inert) and the measured grid import stays above it for 30 seconds, and only for a lease it has verified to be running normally (this press is the operator's End: it is never
+      made while a restore is owed, blocked or in progress, and at most once per lease). Otherwise it presses nothing and says why. A ceiling that cannot be read leaves it inert and it says so. It
+      starts, arms and writes nothing.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: template
+        id: import_breach
+        value_template: >-
+          {%- set c = states('input_number.ecco_grid_import_ceiling_w') | float(0) -%}
+          {%- set g = states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') | float(none) -%}
+          {%- set breached = is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and c >= 1 and c <= 100000 and g is number and g == g and g > c -%}
+          {{ breached }}
+    actions:
+      # The 30 second confirmation: end the wait at once when the breach is over (or the lease has ended).
+      - wait_template: >-
+          {%- set c = states('input_number.ecco_grid_import_ceiling_w') | float(0) -%}
+          {%- set g = states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') | float(none) -%}
+          {%- set breached = is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and c >= 1 and c <= 100000 and g is number and g == g and g > c -%}
+          {{ not breached }}
+        timeout: "00:00:30"
+        continue_on_timeout: true
+      - condition: template
+        value_template: >-
+          {%- set c = states('input_number.ecco_grid_import_ceiling_w') | float(0) -%}
+          {%- set g = states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') | float(none) -%}
+          {%- set breached = is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') and c >= 1 and c <= 100000 and g is number and g == g and g > c -%}
+          {{ breached }}
+      # THE VERDICT (the same text in both Free Power guards; a static check of the suite compares them). "" = a lease verified running normally, in which END has not been pressed yet:
+      # the press is allowed. Anything else is the reason the guard may not press (the first that applies). Judged now, after the wait, never at the trigger.
+      - variables:
+          verdict: >-
+            {%- set st = states('sensor.ecco_clock_dongle_free_power_status') -%}
+            {%- set op = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ea = states('sensor.ecco_clock_dongle_free_power_ends_at') -%}
+            {%- set eat = strptime(ea, '%Y-%m-%d %H:%M:%S', none) -%}
+            {%- set act = states['binary_sensor.ecco_clock_dongle_free_power_active'] -%}
+            {%- set since = as_timestamp(act.last_changed, none) if act is not none else none -%}
+            {%- set bt = states('button.ecco_clock_dongle_end_free_power_restore_now') -%}
+            {%- set pressed = as_timestamp(bt, none) -%}
+            {%- if op != 'off' -%}a start or restore is in progress, or it cannot be read (the operation flag reads {{ op }})
+            {%- elif not st.startswith('ACTIVE - VERIFIED OK') -%}the dongle's status is not the verified running one (it reads: {{ st[:100] }})
+            {%- elif eat is none or as_timestamp(eat) <= as_timestamp(now()) -%}the lease's end time is not a time in the future (the ends-at sensor reads: {{ ea[:40] }})
+            {%- elif bt != 'unknown' and pressed is none -%}the End button's last press cannot be read (it reads: {{ bt[:40] }})
+            {%- elif pressed is not none and pressed >= since -%}END FREE POWER - RESTORE NOW was already pressed during this lease
+            {%- endif -%}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ verdict == '' }}"
+            sequence:
+              - action: button.press
+                target:
+                  entity_id: button.ecco_clock_dongle_end_free_power_restore_now
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_lease_guard_free_power_ended
+                  title: "ECCO: a Free Power lease was ended by the lease guard (grid import above the ceiling)"
+                  message: >-
+                    The lease guard pressed END FREE POWER - RESTORE NOW because the measured grid import ({{ states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') | float(0) | int(0) }} W) stayed above the
+                    grid-import ceiling ({{ states('input_number.ecco_grid_import_ceiling_w') | float(0) | int(0) }} W) for 30 seconds while a Free Power lease was active. The ceiling is a safety
+                    ceiling, never a target. THIS PRESS IS THE OPERATOR'S END, the same press as the card's End & Restore Now, which the firmware reads as an operator's explicit retry (pressed while a
+                    restore is owed or blocked it would clear the dongle's operator-decision lockout and its retry backoff); the guard pressed it only because it had verified that the lease was running
+                    normally (status ACTIVE - VERIFIED OK, no start or restore in progress, an end time in the future) and that END had not been pressed in this lease, and it presses at most once per
+                    lease. The dongle now restores the settings it saved before the lease; check the Charge Battery status on the card. The guard only presses the End button: it starts and writes nothing,
+                    and it is soft (it runs in Home Assistant).
+        default:
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_lease_guard_free_power_declined
+              title: "ECCO: the lease guard did NOT end a Free Power lease (it is not a verified running lease)"
+              message: >-
+                The lease guard's condition holds (the measured grid import stayed above the grid-import ceiling for 30 seconds) but it pressed nothing: {{ verdict }}. END FREE POWER - RESTORE NOW is the
+                operator's End: in the firmware the press that retries a restore and clears the operator-decision lockout, so a guard presses it only for a lease it has verified running normally, in
+                which END has not been pressed yet. Look at the Charge Battery status on the card: a lease that is ending, owed or blocked is the dongle's or the operator's to deal with.
+      - delay: "00:01:00"
+
+  # THE NOTICE (never a press). A guard that cannot read its ceiling is inert; it must not be inert in silence. This is a second automation, not a branch of the guard's: the guard's run is
+  # single and a run that waits would drop a real breach that arrives meanwhile. It raises one persistent notification when a Free Power lease is active and the ceiling has read unknown or
+  # unavailable for a minute (a restart, a reload or a reconnect makes entities unreadable for a moment and is not a finding). It starts nothing, arms nothing and presses nothing.
+  - id: ecco_lease_guard_free_power_import_inert
+    alias: "ECCO - Lease guard: say so when the grid import guard cannot read its ceiling during a Free Power lease"
+    description: >-
+      Raises one persistent notification, and does nothing else (it never presses a button), when a Free Power lease is active and input_number.ecco_grid_import_ceiling_w has read unknown or
+      unavailable for a minute: the grid import guard cannot know whether a ceiling is configured and is inert. A ceiling that reads 0 means none configured and is not reported.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: template
+        id: ceiling_unreadable
+        value_template: >-
+          {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+             and states('input_number.ecco_grid_import_ceiling_w') in ['unknown', 'unavailable'] }}
+    actions:
+      # A minute of grace: end the wait at once when the lease ends or the ceiling can be read again.
+      - wait_template: >-
+          {{ not (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+                  and states('input_number.ecco_grid_import_ceiling_w') in ['unknown', 'unavailable']) }}
+        timeout: "00:01:00"
+        continue_on_timeout: true
+      - condition: template
+        value_template: >-
+          {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+             and states('input_number.ecco_grid_import_ceiling_w') in ['unknown', 'unavailable'] }}
+      - action: persistent_notification.create
+        data:
+          notification_id: ecco_lease_guard_free_power_inert
+          title: "ECCO: the grid import guard is inert (its ceiling cannot be read)"
+          message: >-
+            The grid import guard cannot read its ceiling (input_number.ecco_grid_import_ceiling_w reads {{ states('input_number.ecco_grid_import_ceiling_w') }}) while a Free Power lease is
+            active, so it cannot know whether a ceiling is configured and it is INERT: it ends nothing on a measured grid import until the helper reads a number again. A ceiling that reads 0
+            means none configured and is not reported; one that cannot be read is. The start gate refuses a Charge Battery start meanwhile (IMPORT_CEILING_UNREADABLE). The guard never acts on a
+            value it cannot read.

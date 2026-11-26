@@ -1,0 +1,797 @@
+# ECCO Pro - the shared START GATE for Charge Battery (Free Power) and Export to Grid (Dump to Grid), and a GUARDED FREE POWER START
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Start gate and lease guards").
+#
+# WHY. The same reserve and hold checks exist four times and Free Power has none, time trust is not read by any start, and the dongle's own Start buttons bypass every Home
+# Assistant gate (release gate RG-ST3). Item N2 of the architecture reconciliation asks for ONE start gate for both functions, built only from facts ECCO already has, and a
+# start path bound to it. This package is that gate (read only) and a guarded Free Power start, the analogue of the guarded Dump to Grid start
+# (ecco_dump_to_grid_guarded_start.yaml). The in-lease END guards are SEPARATE packages, one file for each guard (ecco_lease_guard_dump.yaml, ecco_lease_guard_free_power_time.yaml,
+# ecco_lease_guard_free_power_import.yaml): the gate and each guard can be installed or left out on its own.
+#
+# THE GATE IS SOFT. HA GATES ARE SOFT: the dongle's own Start button (button.ecco_clock_dongle_start_free_power_charge_now, button.ecco_clock_dongle_start_dump_to_grid_now)
+# can still be pressed from Home Assistant or by an assistant, past every check in this file, until a firmware gate binds it (a flash, approved separately; item N6). Nothing
+# here is a lock: it protects ECCO's own starts and anything wired to it, not an administrator, an assistant or a press of the dongle's own button. THE CARD IS NOT CHANGED IN
+# THIS STEP: the Energy Actions card's Free Power Start still presses the dongle's start button directly (and its Dump Start is guarded only where dump_to_grid.guarded_start is
+# set); pointing the card's Free Power Start at script.ecco_free_power_start_guarded is a separate card change, with its own approval.
+#
+# WHAT IT PROVIDES (two template entities, one helper and one script; no automation):
+#   binary_sensor.ecco_charge_start_allowed   on only when a Charge Battery (Free Power) start would pass every check below
+#   binary_sensor.ecco_export_start_allowed   on only when an Export to Grid (Dump to Grid) start would pass every check below
+#   input_number.ecco_grid_import_ceiling_w   the owner's grid-import SAFETY ceiling in watts; no initial value; a readable 0 means NO CEILING CONFIGURED; unknown, unavailable or missing BLOCKS
+#   script.ecco_free_power_start_guarded      the guarded Free Power start (below): a NEW START PATH BOUND TO THE GATE
+# Each gate sensor has two attributes: `reasons` (a list; every blocking cause as "<CODE>: <text>" naming the entity and what it reads, then any "NOTE <CODE>: <text>" that does
+# not block, or "ALLOWED: every check passed" first when nothing blocks) and `blocked_by` (the list of the blocking CODES only; empty while the gate is on). The two are produced
+# by the same rule block, repeated in the state and in each attribute template, and a static check of the suite proves the repeats are identical.
+#
+# THE CHECKS, in the order of `blocked_by` (each reads only facts that already exist; nothing here measures anything):
+#   Both gates
+#     TIME_LEASES, TIME_SCHEDULES   binary_sensor.ecco_time_trusted_for_leases and ..._for_ha_schedules (ecco_time_trust.yaml) must read on
+#     TELEMETRY_OFFLINE             binary_sensor.ecco_clock_dongle_telemetry_online must read on
+#     CONFIGURATION_OFFLINE         binary_sensor.ecco_clock_dongle_configuration_online must read on
+#     TELEMETRY_STALE               sensor.ecco_clock_dongle_last_telemetry_update (the dongle's text, published only after a COMPLETE poll) must be a time, in the firmware's exact
+#                                   form YYYY-MM-DD HH:MM:SS, within 300 s of Home Assistant's clock. The proof is the VALUE of the text, never its arrival: Home Assistant resets a state's
+#                                   last_changed on a restart and on every reconnect of the dongle's API, so a copy of any age arrives "now". 300 s is thirty missed 10 s polls and equals the
+#                                   largest skew the time trust package still calls DEGRADED; a Home Assistant clock that far out can block here as well, which fails safe
+#     FREE_POWER_ACTIVE, FREE_POWER_OPERATION, FREE_POWER_SNAPSHOT   the three Free Power flags (a lease, a start or restore in progress, a saved snapshot waiting to be restored: the
+#                                   open recovery obligation; no separate lock entity exists today, the durable R12 lock is a firmware item not yet built) must each read off. For Charge Battery
+#                                   that is "already running or owed"; for Export to Grid it is "the other function"
+#     DUMP_ACTIVE, DUMP_OPERATION, DUMP_SNAPSHOT   the same three for Dump to Grid, read the same way: "the other function" for Charge Battery, "already running or owed" for Export
+#     MANUAL_WRITE                  binary_sensor.ecco_clock_dongle_manual_write_in_progress must read off (a manual inverter write holds the inverter write mutex)
+#   Export to Grid only: the Stage 3 facts of ecco_plan_helpers.yaml, read exactly as the guarded Dump start and the schedules read them
+#     OVERRIDE_ACTIVE, OVERRIDE_UNREADABLE   sensor.ecco_plan_export_hold must read clear (held = a Hold battery, Skip tonight or Prepare for power cut is active; anything else
+#                                   than held or clear = the records cannot be read: refused)
+#     RESERVE_UNKNOWN, RESERVE_INVALID   sensor.ecco_plan_effective_reserve must be a finite number from 0 to 100, tested as a positive range (a comparison with nan is always false)
+#     STOP_SOC_UNREADABLE, STOP_SOC_BELOW_RESERVE   number.ecco_clock_dongle_dump_to_grid_stop_soc, the Stop SOC the next start would request, must be a number from 0 to 100 and not
+#                                   below the effective reserve (refused, never changed: the owner sees and sets the staged value)
+#     REVISION_UNREADABLE           input_number.ecco_plan_revision must be a whole number from 0 up (the plan's compare-and-set counter; unreadable = the records are not trustworthy)
+#   Charge Battery only: the grid-import HEADROOM check, DISABLED until the owner supplies a ceiling
+#     input_number.ecco_grid_import_ceiling_w has NO initial value. ONLY a readable 0 means NO CEILING CONFIGURED: the check then reports NOT_CONFIGURED, does NOT
+#     block, and says so in `reasons` ("NOTE IMPORT_NOT_CONFIGURED: ..."). A ceiling that reads unknown, unavailable or nothing (the helper not created yet, an input_number domain that failed to
+#     load after a restart) cannot be told from a configured one that has become unreadable, so it BLOCKS (IMPORT_CEILING_UNREADABLE): a configured ceiling is never switched off silently. A
+#     configured ceiling is a SAFETY ceiling, never a target: it is the most the grid may supply at the
+#     moment, it is never aimed at. With a ceiling from 1 to 100000 W the check needs the measured grid import (sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp, the
+#     dongle's CT reading, positive = importing) and the staged request (number.ecco_clock_dongle_free_power_max_charge_power), and refuses when
+#     request + max(import, 0) > ceiling (IMPORT_HEADROOM). It refuses a value that is not a number from 1 to 100000 (IMPORT_CEILING_INVALID: never "no ceiling"), an unreadable
+#     import (IMPORT_UNREADABLE) and an unreadable request (REQUEST_UNREADABLE). NO charger-loss factor and NO margin is applied: none is established (control-authority rung R5
+#     measures them), so a request that just fits can still breach by the charger's losses; the in-lease import guard (ecco_lease_guard_free_power_import.yaml) ends a lease on a measured breach.
+#
+# FAIL SAFE. Any input that is missing, unavailable, unknown or not a number (or not finite) blocks (the gate reads off) and is NAMED in `reasons`; the one deliberate exception is the
+# ceiling helper above, whose READABLE 0 means "no ceiling" by the owner's rule (a ceiling that cannot be read, or cannot be a ceiling, blocks). Every template is total: a garbage, missing or huge
+# input yields a block, never a template error. A consumer must test is_state('binary_sensor.ecco_charge_start_allowed', 'on') and never "not off" or "not unavailable": an entity
+# that does not exist yet, or is unavailable, is not on.
+#
+# THE GUARDED FREE POWER START (script.ecco_free_power_start_guarded) is the exact analogue of the guarded Dump start, which presses the dongle's start button only after its checks.
+# Differences, all stated: (1) it STAGES the request the way the scheduled start does when it is given values (optional fields power_w and duration_minutes; with none it starts
+# the request already staged on the dongle, as the card does), and it arms and presses; (2) its checks are the gate above plus the script's own (the effective grid charge
+# limit, no scheduled Free Power start running, whole steps), tested again just before the press; (3) it turns the Free Power write enable off at the end ONLY IF THIS RUN TURNED IT ON (one
+# that was already on belongs to someone else, the schedule or a card user, and is left as found; a refusal before the arm touches nothing; the firmware itself disarms the switch at a
+# press), and it tries ONCE: a manual start has no retry loop, the owner presses again.
+#   Order: the gate and the script's own checks (a closed gate refuses first, before anything is staged; a gate closed only by the request-dependent codes IMPORT_HEADROOM or
+#   REQUEST_UNREADABLE is judged again after an explicit request is staged), stage power then duration (number.set_value, only a value that differs from what is staged), arm (switch.turn_on) and wait up to 5 s for the
+#   dongle to confirm the arm and both values, read the gate AGAIN, press the start button once, wait for the dongle's answer, classify it, and end the write enable off if this run armed it.
+#   A REFUSAL AT THE PRESS-TIME CHECK AFTER AN EXPLICIT REQUEST was staged puts the values this run replaced back: it writes the staged power and duration it read before staging, once, waits up to 5 s
+#   for the dongle's readback and says in the result text and the notification whether they stand again ("The staged request was put back to ...") or, if the dongle did not confirm it or the
+#   staged value could not be read before the run, exactly what it held and what it holds now. A start with no explicit values changes nothing, so there is nothing to put back.
+#   Its services are exactly those of the scheduled start and the guarded Dump start: number.set_value on the two request numbers (to stage, and to put back), switch.turn_on and switch.turn_off on the Free
+#   Power write enable, button.press on the Free Power start button, input_text.set_value on input_text.ecco_plan_last_result, persistent_notification.create and .dismiss with one
+#   fixed id (ecco_free_power_start_blocked). It adds NO helper (the result text is the one the guarded Dump start uses: input_text.ecco_plan_last_result, written "REFUSED <CODE> - <text>"
+#   for a refusal, "FAILED <CODE> - <text>" after a press that did not start Free Power and "STARTED free_power ..." on success). It does NOT reuse the Free Power schedule's result text
+#   (the last-result helper of the Free Power schedule package): that text belongs to the schedule's own state machine (its status sensor, its retry loop, the R9 recovery and its end-of-run alert
+#   read its prefixes) and the start bypass detector reads "STARTED OK - <n>W for <m> min" in it as the PROOF of a SCHEDULED run: a manual start must neither overwrite a scheduled run's
+#   outcome nor forge that proof.
+#   Refusal codes: GATE_UNREADABLE, GATE_BLOCKED, SCHEDULED_START_RUNNING, LIMIT_UNREADABLE (the limit cannot be read), LIMIT_OUT_OF_RANGE (it reads outside 500 to 100000 W), POWER_INVALID,
+#   DURATION_INVALID (an unreadable staged value prints as unreadable) before anything is staged; GATE_CLOSED,
+#   SCHEDULED_START_RUNNING, NOT_CONFIRMED, LIMIT_LOWERED at the press-time check (nothing is pressed); FAILED codes after the press: FIRMWARE_REFUSED (the dongle's own gate refused the
+#   press: nothing written), START_FAILED (a start transaction began and Free Power did not become active: the firmware restores its saved snapshot itself) and NO_ANSWER (the dongle did not
+#   answer: the outcome is unconfirmed and is never retried).
+#
+# WHAT IT DOES NOT DO, AND ITS LIMITS (stated plainly; nothing here is a lock).
+#   - The start bypass detector (the package of post-export entry bpd1, pinned) knows only the scheduled run's STARTED OK and the guarded Dump start as ECCO's own records of a start. A start made
+#     by this script is therefore recorded by the detector as a start with no ECCO record, a BYPASS (the incident record and counter are written; a popup is raised only when an override is active or a
+#     plan reading is unreadable, as for any Charge Battery start). Teaching the detector about this script is an edit of a pinned package and is NOT made here, and the card should not be pointed at
+#     the script before that edit.
+#   - smr1 (ecco_schedule_manual_restore.yaml) puts the owner's request numbers back only after a SCHEDULED start. A start of this script that is given explicit values and is REFUSED at the
+#     press-time check puts the values it replaced back itself (above); one that STARTS replaces the owner's staged request on the dongle and nothing restores it; a start with no values
+#     changes nothing.
+#   - The schedule scripts and the card do not read the gate: nothing is wired to it except this script. The gate says whether a start WOULD pass; it stops nothing by itself.
+#   - The grid-import check judges one instant (the house load now plus the request); a load that rises later is the job of the in-lease guard, which is soft too (it presses the End
+#     button; it is not a firmware limit, and a dead dongle or a dead Home Assistant ends nothing).
+#   - Time-zone assumption: the poll text is the dongle's local time with no offset and is read as local time in Home Assistant's own zone, as in ecco_time_trust.yaml and R9; if the zones
+#     differ the text is hours away and the gate blocks (TELEMETRY_STALE, and TIME_LEASES from time trust), never allows.
+#   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the offline model of them is in the suite): that states['<entity id>'] and state_attr() behave as modelled, that a
+#     template using now() is re-rendered at the start of each minute, that a list rendered by an attribute template arrives as a list, that a script field that was not given reads as undefined
+#     (so default() applies), that button.press is accepted by a button entity that is available, and that the effective grid charge limit and the request numbers read as numbers.
+#
+# INSTALL. One file copy to /config/packages/ecco_start_gate.yaml, a configuration check, then reload three things, one at a time (Developer tools, YAML): the input_number helpers first (so
+# that the gate never reads a ceiling that does not exist yet), then the template entities, then the scripts. No restart. Never "reload all". It needs ecco_time_trust.yaml (the time sensors),
+# ecco_plan_helpers.yaml (the plan sensors and the last-result text) and the schedule packages (the scheduled start script it checks); without them the gate reads off and the script refuses
+# (fail closed). It changes no existing entity. Remove: delete the file and reload the same three. Nothing here is meant to be exposed to a voice assistant. The lease guards
+# (ecco_lease_guard_dump.yaml, ecco_lease_guard_free_power_time.yaml, ecco_lease_guard_free_power_import.yaml) are installed separately, one file each, and each needs the owner's separate authorisation.
+
+input_number:
+  # The owner's grid-import SAFETY ceiling. No `initial`: a fresh helper reads its minimum, 0, which means "no ceiling configured" (the check is off and says so). Set it to the supply
+  # limit (the main fuse or the supply agreement) to switch the Charge Battery headroom check and the in-lease import guard on.
+  ecco_grid_import_ceiling_w:
+    name: ECCO grid import ceiling (a safety ceiling, never a target; 0 = none configured)
+    icon: mdi:transmission-tower-import
+    min: 0
+    max: 100000
+    step: 10
+    mode: box
+    unit_of_measurement: W
+
+template:
+  - binary_sensor:
+      - name: ECCO Charge Start Allowed
+        unique_id: ecco_charge_start_allowed
+        icon: mdi:battery-charging-high
+        # on only while a Charge Battery (Free Power) start passes every check of the header. SOFT: the dongle's own Start button is not bound by it.
+        state: >-
+          {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+          {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+          {%- set ts = states('binary_sensor.ecco_time_trusted_for_ha_schedules') -%}
+          {%- set tel = states('binary_sensor.ecco_clock_dongle_telemetry_online') -%}
+          {%- set cfg = states('binary_sensor.ecco_clock_dongle_configuration_online') -%}
+          {%- set pt = states('sensor.ecco_clock_dongle_last_telemetry_update') -%}
+          {%- set pdt = strptime(pt, '%Y-%m-%d %H:%M:%S', none) if pt not in bad else none -%}
+          {%- set pskew = ((as_timestamp(now()) - as_timestamp(pdt)) | round(0)) if pdt is not none else none -%}
+          {%- set ns = namespace(c=[], b=[], n=[]) -%}
+          {%- for code, hit, text in [
+          ('TIME_LEASES', tl != 'on', 'binary_sensor.ecco_time_trusted_for_leases reads ' ~ tl ~ ' (it must read on): the dongle NTP time and the Home Assistant clock are not shown to agree, so the end of a lease cannot be relied on'),
+          ('TIME_SCHEDULES', ts != 'on', 'binary_sensor.ecco_time_trusted_for_ha_schedules reads ' ~ ts ~ ' (it must read on): the Home Assistant clock is not shown to be right'),
+          ('TELEMETRY_OFFLINE', tel != 'on', 'binary_sensor.ecco_clock_dongle_telemetry_online reads ' ~ tel ~ ' (it must read on): the inverter telemetry is not arriving'),
+          ('CONFIGURATION_OFFLINE', cfg != 'on', 'binary_sensor.ecco_clock_dongle_configuration_online reads ' ~ cfg ~ ' (it must read on): the inverter configuration readback is not arriving'),
+          ('TELEMETRY_STALE', pskew is none or (pskew | abs) > 300, 'sensor.ecco_clock_dongle_last_telemetry_update ' ~ ('cannot be read (' ~ pt ~ ')' if pt in bad else ('is not a time (' ~ pt ~ ')' if pdt is none else 'is ' ~ ((pskew | abs) | int(0)) ~ ' s from the Home Assistant clock (limit 300 s)')) ~ ': the inverter data are not shown to be fresh')
+          ] if hit -%}
+          {%- set ns.c = ns.c + [code] -%}
+          {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+          {%- endfor -%}
+          {%- for e, code, what in [
+          ('binary_sensor.ecco_clock_dongle_free_power_active', 'FREE_POWER_ACTIVE', 'a Free Power lease is running'),
+          ('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'FREE_POWER_OPERATION', 'a Free Power start or restore is in progress'),
+          ('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'FREE_POWER_SNAPSHOT', 'a saved Free Power snapshot is waiting to be restored'),
+          ('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'DUMP_ACTIVE', 'a Dump to Grid lease is running'),
+          ('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'DUMP_OPERATION', 'a Dump to Grid start or restore is in progress'),
+          ('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'DUMP_SNAPSHOT', 'a saved Dump to Grid snapshot is waiting to be restored'),
+          ('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'MANUAL_WRITE', 'a manual inverter write is in progress')
+          ] -%}
+          {%- set v = states(e) -%}
+          {%- if v != 'off' -%}
+          {%- set ns.c = ns.c + [code] -%}
+          {%- set ns.b = ns.b + [code ~ ': ' ~ (e ~ ' reads on: ' ~ what if v == 'on' else e ~ ' reads ' ~ v ~ ', so it is not known whether ' ~ what)] -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- set cr = states('input_number.ecco_grid_import_ceiling_w') -%}
+          {%- set cf = cr | float(none) -%}
+          {%- set c_gone = cr in bad -%}
+          {%- set c_unset = (not c_gone) and cf is number and cf == 0 -%}
+          {%- set c_ok = cf is number and cf == cf and cf >= 1 and cf <= 100000 -%}
+          {%- set graw = states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') -%}
+          {%- set gi = graw | float(none) -%}
+          {%- set gi_ok = gi is number and gi == gi and (gi | abs) < 1000000000 -%}
+          {%- set rqraw = states('number.ecco_clock_dongle_free_power_max_charge_power') -%}
+          {%- set rq = rqraw | float(none) -%}
+          {%- set rq_ok = rq is number and rq == rq and rq > 0 and rq < 1000000000 -%}
+          {%- set head = (cf - ([gi, 0] | max)) if (c_ok and gi_ok) else none -%}
+          {%- for code, hit, text in [
+          ('IMPORT_CEILING_UNREADABLE', c_gone, 'input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ ', so it is not known whether a grid-import ceiling is configured (a ceiling that cannot be read must not switch the check off; set the helper to 0 to say that none is wanted)'),
+          ('IMPORT_CEILING_INVALID', (not c_gone) and (not c_unset) and (not c_ok), 'input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ ', which is not a number from 1 to 100000 W (set it to 0 to switch the import check off)'),
+          ('IMPORT_UNREADABLE', c_ok and (not gi_ok), 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp reads ' ~ graw ~ ', so the headroom under the grid-import ceiling cannot be checked'),
+          ('REQUEST_UNREADABLE', c_ok and (not rq_ok), 'number.ecco_clock_dongle_free_power_max_charge_power reads ' ~ rqraw ~ ', so the staged charge request cannot be compared with the grid-import headroom'),
+          ('IMPORT_HEADROOM', c_ok and gi_ok and rq_ok and rq > head, 'the staged charge request (' ~ (rq | int(0)) ~ ' W) does not fit under the grid-import ceiling (' ~ (cf | int(0)) ~ ' W) with the house already importing ' ~ ((([gi, 0] | max) | int(0)) if gi_ok else 0) ~ ' W: the headroom is ' ~ (head | int(0)) ~ ' W')
+          ] if hit -%}
+          {%- set ns.c = ns.c + [code] -%}
+          {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+          {%- endfor -%}
+          {%- if c_unset -%}
+          {%- set ns.n = ns.n + ['NOTE IMPORT_NOT_CONFIGURED: no grid-import ceiling is configured (input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ '), so no import headroom is checked and none can block; set it to the supply limit to switch the check on'] -%}
+          {%- endif -%}
+          {{ (ns.c | length) == 0 }}
+        attributes:
+          reasons: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set ts = states('binary_sensor.ecco_time_trusted_for_ha_schedules') -%}
+            {%- set tel = states('binary_sensor.ecco_clock_dongle_telemetry_online') -%}
+            {%- set cfg = states('binary_sensor.ecco_clock_dongle_configuration_online') -%}
+            {%- set pt = states('sensor.ecco_clock_dongle_last_telemetry_update') -%}
+            {%- set pdt = strptime(pt, '%Y-%m-%d %H:%M:%S', none) if pt not in bad else none -%}
+            {%- set pskew = ((as_timestamp(now()) - as_timestamp(pdt)) | round(0)) if pdt is not none else none -%}
+            {%- set ns = namespace(c=[], b=[], n=[]) -%}
+            {%- for code, hit, text in [
+            ('TIME_LEASES', tl != 'on', 'binary_sensor.ecco_time_trusted_for_leases reads ' ~ tl ~ ' (it must read on): the dongle NTP time and the Home Assistant clock are not shown to agree, so the end of a lease cannot be relied on'),
+            ('TIME_SCHEDULES', ts != 'on', 'binary_sensor.ecco_time_trusted_for_ha_schedules reads ' ~ ts ~ ' (it must read on): the Home Assistant clock is not shown to be right'),
+            ('TELEMETRY_OFFLINE', tel != 'on', 'binary_sensor.ecco_clock_dongle_telemetry_online reads ' ~ tel ~ ' (it must read on): the inverter telemetry is not arriving'),
+            ('CONFIGURATION_OFFLINE', cfg != 'on', 'binary_sensor.ecco_clock_dongle_configuration_online reads ' ~ cfg ~ ' (it must read on): the inverter configuration readback is not arriving'),
+            ('TELEMETRY_STALE', pskew is none or (pskew | abs) > 300, 'sensor.ecco_clock_dongle_last_telemetry_update ' ~ ('cannot be read (' ~ pt ~ ')' if pt in bad else ('is not a time (' ~ pt ~ ')' if pdt is none else 'is ' ~ ((pskew | abs) | int(0)) ~ ' s from the Home Assistant clock (limit 300 s)')) ~ ': the inverter data are not shown to be fresh')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {%- for e, code, what in [
+            ('binary_sensor.ecco_clock_dongle_free_power_active', 'FREE_POWER_ACTIVE', 'a Free Power lease is running'),
+            ('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'FREE_POWER_OPERATION', 'a Free Power start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'FREE_POWER_SNAPSHOT', 'a saved Free Power snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'DUMP_ACTIVE', 'a Dump to Grid lease is running'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'DUMP_OPERATION', 'a Dump to Grid start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'DUMP_SNAPSHOT', 'a saved Dump to Grid snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'MANUAL_WRITE', 'a manual inverter write is in progress')
+            ] -%}
+            {%- set v = states(e) -%}
+            {%- if v != 'off' -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ (e ~ ' reads on: ' ~ what if v == 'on' else e ~ ' reads ' ~ v ~ ', so it is not known whether ' ~ what)] -%}
+            {%- endif -%}
+            {%- endfor -%}
+            {%- set cr = states('input_number.ecco_grid_import_ceiling_w') -%}
+            {%- set cf = cr | float(none) -%}
+            {%- set c_gone = cr in bad -%}
+            {%- set c_unset = (not c_gone) and cf is number and cf == 0 -%}
+            {%- set c_ok = cf is number and cf == cf and cf >= 1 and cf <= 100000 -%}
+            {%- set graw = states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') -%}
+            {%- set gi = graw | float(none) -%}
+            {%- set gi_ok = gi is number and gi == gi and (gi | abs) < 1000000000 -%}
+            {%- set rqraw = states('number.ecco_clock_dongle_free_power_max_charge_power') -%}
+            {%- set rq = rqraw | float(none) -%}
+            {%- set rq_ok = rq is number and rq == rq and rq > 0 and rq < 1000000000 -%}
+            {%- set head = (cf - ([gi, 0] | max)) if (c_ok and gi_ok) else none -%}
+            {%- for code, hit, text in [
+            ('IMPORT_CEILING_UNREADABLE', c_gone, 'input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ ', so it is not known whether a grid-import ceiling is configured (a ceiling that cannot be read must not switch the check off; set the helper to 0 to say that none is wanted)'),
+            ('IMPORT_CEILING_INVALID', (not c_gone) and (not c_unset) and (not c_ok), 'input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ ', which is not a number from 1 to 100000 W (set it to 0 to switch the import check off)'),
+            ('IMPORT_UNREADABLE', c_ok and (not gi_ok), 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp reads ' ~ graw ~ ', so the headroom under the grid-import ceiling cannot be checked'),
+            ('REQUEST_UNREADABLE', c_ok and (not rq_ok), 'number.ecco_clock_dongle_free_power_max_charge_power reads ' ~ rqraw ~ ', so the staged charge request cannot be compared with the grid-import headroom'),
+            ('IMPORT_HEADROOM', c_ok and gi_ok and rq_ok and rq > head, 'the staged charge request (' ~ (rq | int(0)) ~ ' W) does not fit under the grid-import ceiling (' ~ (cf | int(0)) ~ ' W) with the house already importing ' ~ ((([gi, 0] | max) | int(0)) if gi_ok else 0) ~ ' W: the headroom is ' ~ (head | int(0)) ~ ' W')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {%- if c_unset -%}
+            {%- set ns.n = ns.n + ['NOTE IMPORT_NOT_CONFIGURED: no grid-import ceiling is configured (input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ '), so no import headroom is checked and none can block; set it to the supply limit to switch the check on'] -%}
+            {%- endif -%}
+            {{ (ns.b + ns.n) if (ns.c | length) > 0 else (['ALLOWED: every check passed'] + ns.n) }}
+          blocked_by: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set ts = states('binary_sensor.ecco_time_trusted_for_ha_schedules') -%}
+            {%- set tel = states('binary_sensor.ecco_clock_dongle_telemetry_online') -%}
+            {%- set cfg = states('binary_sensor.ecco_clock_dongle_configuration_online') -%}
+            {%- set pt = states('sensor.ecco_clock_dongle_last_telemetry_update') -%}
+            {%- set pdt = strptime(pt, '%Y-%m-%d %H:%M:%S', none) if pt not in bad else none -%}
+            {%- set pskew = ((as_timestamp(now()) - as_timestamp(pdt)) | round(0)) if pdt is not none else none -%}
+            {%- set ns = namespace(c=[], b=[], n=[]) -%}
+            {%- for code, hit, text in [
+            ('TIME_LEASES', tl != 'on', 'binary_sensor.ecco_time_trusted_for_leases reads ' ~ tl ~ ' (it must read on): the dongle NTP time and the Home Assistant clock are not shown to agree, so the end of a lease cannot be relied on'),
+            ('TIME_SCHEDULES', ts != 'on', 'binary_sensor.ecco_time_trusted_for_ha_schedules reads ' ~ ts ~ ' (it must read on): the Home Assistant clock is not shown to be right'),
+            ('TELEMETRY_OFFLINE', tel != 'on', 'binary_sensor.ecco_clock_dongle_telemetry_online reads ' ~ tel ~ ' (it must read on): the inverter telemetry is not arriving'),
+            ('CONFIGURATION_OFFLINE', cfg != 'on', 'binary_sensor.ecco_clock_dongle_configuration_online reads ' ~ cfg ~ ' (it must read on): the inverter configuration readback is not arriving'),
+            ('TELEMETRY_STALE', pskew is none or (pskew | abs) > 300, 'sensor.ecco_clock_dongle_last_telemetry_update ' ~ ('cannot be read (' ~ pt ~ ')' if pt in bad else ('is not a time (' ~ pt ~ ')' if pdt is none else 'is ' ~ ((pskew | abs) | int(0)) ~ ' s from the Home Assistant clock (limit 300 s)')) ~ ': the inverter data are not shown to be fresh')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {%- for e, code, what in [
+            ('binary_sensor.ecco_clock_dongle_free_power_active', 'FREE_POWER_ACTIVE', 'a Free Power lease is running'),
+            ('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'FREE_POWER_OPERATION', 'a Free Power start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'FREE_POWER_SNAPSHOT', 'a saved Free Power snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'DUMP_ACTIVE', 'a Dump to Grid lease is running'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'DUMP_OPERATION', 'a Dump to Grid start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'DUMP_SNAPSHOT', 'a saved Dump to Grid snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'MANUAL_WRITE', 'a manual inverter write is in progress')
+            ] -%}
+            {%- set v = states(e) -%}
+            {%- if v != 'off' -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ (e ~ ' reads on: ' ~ what if v == 'on' else e ~ ' reads ' ~ v ~ ', so it is not known whether ' ~ what)] -%}
+            {%- endif -%}
+            {%- endfor -%}
+            {%- set cr = states('input_number.ecco_grid_import_ceiling_w') -%}
+            {%- set cf = cr | float(none) -%}
+            {%- set c_gone = cr in bad -%}
+            {%- set c_unset = (not c_gone) and cf is number and cf == 0 -%}
+            {%- set c_ok = cf is number and cf == cf and cf >= 1 and cf <= 100000 -%}
+            {%- set graw = states('sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp') -%}
+            {%- set gi = graw | float(none) -%}
+            {%- set gi_ok = gi is number and gi == gi and (gi | abs) < 1000000000 -%}
+            {%- set rqraw = states('number.ecco_clock_dongle_free_power_max_charge_power') -%}
+            {%- set rq = rqraw | float(none) -%}
+            {%- set rq_ok = rq is number and rq == rq and rq > 0 and rq < 1000000000 -%}
+            {%- set head = (cf - ([gi, 0] | max)) if (c_ok and gi_ok) else none -%}
+            {%- for code, hit, text in [
+            ('IMPORT_CEILING_UNREADABLE', c_gone, 'input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ ', so it is not known whether a grid-import ceiling is configured (a ceiling that cannot be read must not switch the check off; set the helper to 0 to say that none is wanted)'),
+            ('IMPORT_CEILING_INVALID', (not c_gone) and (not c_unset) and (not c_ok), 'input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ ', which is not a number from 1 to 100000 W (set it to 0 to switch the import check off)'),
+            ('IMPORT_UNREADABLE', c_ok and (not gi_ok), 'sensor.ecco_clock_dongle_ecco_grid_power_ct_clamp reads ' ~ graw ~ ', so the headroom under the grid-import ceiling cannot be checked'),
+            ('REQUEST_UNREADABLE', c_ok and (not rq_ok), 'number.ecco_clock_dongle_free_power_max_charge_power reads ' ~ rqraw ~ ', so the staged charge request cannot be compared with the grid-import headroom'),
+            ('IMPORT_HEADROOM', c_ok and gi_ok and rq_ok and rq > head, 'the staged charge request (' ~ (rq | int(0)) ~ ' W) does not fit under the grid-import ceiling (' ~ (cf | int(0)) ~ ' W) with the house already importing ' ~ ((([gi, 0] | max) | int(0)) if gi_ok else 0) ~ ' W: the headroom is ' ~ (head | int(0)) ~ ' W')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {%- if c_unset -%}
+            {%- set ns.n = ns.n + ['NOTE IMPORT_NOT_CONFIGURED: no grid-import ceiling is configured (input_number.ecco_grid_import_ceiling_w reads ' ~ cr ~ '), so no import headroom is checked and none can block; set it to the supply limit to switch the check on'] -%}
+            {%- endif -%}
+            {{ ns.c }}
+
+      - name: ECCO Export Start Allowed
+        unique_id: ecco_export_start_allowed
+        icon: mdi:transmission-tower-export
+        # on only while an Export to Grid (Dump to Grid) start passes every check of the header. SOFT: the dongle's own Start button is not bound by it.
+        state: >-
+          {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+          {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+          {%- set ts = states('binary_sensor.ecco_time_trusted_for_ha_schedules') -%}
+          {%- set tel = states('binary_sensor.ecco_clock_dongle_telemetry_online') -%}
+          {%- set cfg = states('binary_sensor.ecco_clock_dongle_configuration_online') -%}
+          {%- set pt = states('sensor.ecco_clock_dongle_last_telemetry_update') -%}
+          {%- set pdt = strptime(pt, '%Y-%m-%d %H:%M:%S', none) if pt not in bad else none -%}
+          {%- set pskew = ((as_timestamp(now()) - as_timestamp(pdt)) | round(0)) if pdt is not none else none -%}
+          {%- set ns = namespace(c=[], b=[], n=[]) -%}
+          {%- for code, hit, text in [
+          ('TIME_LEASES', tl != 'on', 'binary_sensor.ecco_time_trusted_for_leases reads ' ~ tl ~ ' (it must read on): the dongle NTP time and the Home Assistant clock are not shown to agree, so the end of a lease cannot be relied on'),
+          ('TIME_SCHEDULES', ts != 'on', 'binary_sensor.ecco_time_trusted_for_ha_schedules reads ' ~ ts ~ ' (it must read on): the Home Assistant clock is not shown to be right'),
+          ('TELEMETRY_OFFLINE', tel != 'on', 'binary_sensor.ecco_clock_dongle_telemetry_online reads ' ~ tel ~ ' (it must read on): the inverter telemetry is not arriving'),
+          ('CONFIGURATION_OFFLINE', cfg != 'on', 'binary_sensor.ecco_clock_dongle_configuration_online reads ' ~ cfg ~ ' (it must read on): the inverter configuration readback is not arriving'),
+          ('TELEMETRY_STALE', pskew is none or (pskew | abs) > 300, 'sensor.ecco_clock_dongle_last_telemetry_update ' ~ ('cannot be read (' ~ pt ~ ')' if pt in bad else ('is not a time (' ~ pt ~ ')' if pdt is none else 'is ' ~ ((pskew | abs) | int(0)) ~ ' s from the Home Assistant clock (limit 300 s)')) ~ ': the inverter data are not shown to be fresh')
+          ] if hit -%}
+          {%- set ns.c = ns.c + [code] -%}
+          {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+          {%- endfor -%}
+          {%- for e, code, what in [
+          ('binary_sensor.ecco_clock_dongle_free_power_active', 'FREE_POWER_ACTIVE', 'a Free Power lease is running'),
+          ('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'FREE_POWER_OPERATION', 'a Free Power start or restore is in progress'),
+          ('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'FREE_POWER_SNAPSHOT', 'a saved Free Power snapshot is waiting to be restored'),
+          ('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'DUMP_ACTIVE', 'a Dump to Grid lease is running'),
+          ('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'DUMP_OPERATION', 'a Dump to Grid start or restore is in progress'),
+          ('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'DUMP_SNAPSHOT', 'a saved Dump to Grid snapshot is waiting to be restored'),
+          ('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'MANUAL_WRITE', 'a manual inverter write is in progress')
+          ] -%}
+          {%- set v = states(e) -%}
+          {%- if v != 'off' -%}
+          {%- set ns.c = ns.c + [code] -%}
+          {%- set ns.b = ns.b + [code ~ ': ' ~ (e ~ ' reads on: ' ~ what if v == 'on' else e ~ ' reads ' ~ v ~ ', so it is not known whether ' ~ what)] -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- set hold = states('sensor.ecco_plan_export_hold') -%}
+          {%- set held_by = state_attr('sensor.ecco_plan_export_hold', 'held_by') | default('unknown', true) -%}
+          {%- set rraw = states('sensor.ecco_plan_effective_reserve') -%}
+          {%- set r = rraw | float(-1) -%}
+          {%- set reserve = r if (r >= 0 and r <= 100) else (-1 if r < 0 else -2) -%}
+          {%- set sraw = states('number.ecco_clock_dongle_dump_to_grid_stop_soc') -%}
+          {%- set s = sraw | float(-1) -%}
+          {%- set stop = s if (s >= 0 and s <= 100) else -1 -%}
+          {%- set vraw = states('input_number.ecco_plan_revision') -%}
+          {%- set rv = vraw | float(none) -%}
+          {%- set rev_ok = rv is number and rv == rv and rv >= 0 and rv < 1000000000 and (rv % 1) == 0 -%}
+          {%- for code, hit, text in [
+          ('OVERRIDE_ACTIVE', hold == 'held', 'sensor.ecco_plan_export_hold reads held (' ~ held_by ~ '): a Hold battery, Skip tonight or Prepare for power cut is active'),
+          ('OVERRIDE_UNREADABLE', hold not in ['held', 'clear'], 'sensor.ecco_plan_export_hold reads ' ~ hold ~ ' (it must read clear): the override records cannot be read'),
+          ('RESERVE_INVALID', reserve == -2, 'sensor.ecco_plan_effective_reserve reads ' ~ rraw ~ ', which is not a number from 0 to 100'),
+          ('RESERVE_UNKNOWN', reserve == -1, 'sensor.ecco_plan_effective_reserve reads ' ~ rraw ~ ', so the effective reserve cannot be read'),
+          ('STOP_SOC_UNREADABLE', stop < 0, 'number.ecco_clock_dongle_dump_to_grid_stop_soc reads ' ~ sraw ~ ', so the staged Stop SOC cannot be read as a number from 0 to 100'),
+          ('STOP_SOC_BELOW_RESERVE', stop >= 0 and reserve >= 0 and stop < reserve, 'the staged Stop SOC (' ~ (stop | int(0)) ~ ' %) is below the effective reserve (' ~ (reserve | int(0)) ~ ' %): raise the Stop SOC to at least the reserve'),
+          ('REVISION_UNREADABLE', not rev_ok, 'input_number.ecco_plan_revision reads ' ~ vraw ~ ', so the plan revision cannot be read as a whole number')
+          ] if hit -%}
+          {%- set ns.c = ns.c + [code] -%}
+          {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+          {%- endfor -%}
+          {{ (ns.c | length) == 0 }}
+        attributes:
+          reasons: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set ts = states('binary_sensor.ecco_time_trusted_for_ha_schedules') -%}
+            {%- set tel = states('binary_sensor.ecco_clock_dongle_telemetry_online') -%}
+            {%- set cfg = states('binary_sensor.ecco_clock_dongle_configuration_online') -%}
+            {%- set pt = states('sensor.ecco_clock_dongle_last_telemetry_update') -%}
+            {%- set pdt = strptime(pt, '%Y-%m-%d %H:%M:%S', none) if pt not in bad else none -%}
+            {%- set pskew = ((as_timestamp(now()) - as_timestamp(pdt)) | round(0)) if pdt is not none else none -%}
+            {%- set ns = namespace(c=[], b=[], n=[]) -%}
+            {%- for code, hit, text in [
+            ('TIME_LEASES', tl != 'on', 'binary_sensor.ecco_time_trusted_for_leases reads ' ~ tl ~ ' (it must read on): the dongle NTP time and the Home Assistant clock are not shown to agree, so the end of a lease cannot be relied on'),
+            ('TIME_SCHEDULES', ts != 'on', 'binary_sensor.ecco_time_trusted_for_ha_schedules reads ' ~ ts ~ ' (it must read on): the Home Assistant clock is not shown to be right'),
+            ('TELEMETRY_OFFLINE', tel != 'on', 'binary_sensor.ecco_clock_dongle_telemetry_online reads ' ~ tel ~ ' (it must read on): the inverter telemetry is not arriving'),
+            ('CONFIGURATION_OFFLINE', cfg != 'on', 'binary_sensor.ecco_clock_dongle_configuration_online reads ' ~ cfg ~ ' (it must read on): the inverter configuration readback is not arriving'),
+            ('TELEMETRY_STALE', pskew is none or (pskew | abs) > 300, 'sensor.ecco_clock_dongle_last_telemetry_update ' ~ ('cannot be read (' ~ pt ~ ')' if pt in bad else ('is not a time (' ~ pt ~ ')' if pdt is none else 'is ' ~ ((pskew | abs) | int(0)) ~ ' s from the Home Assistant clock (limit 300 s)')) ~ ': the inverter data are not shown to be fresh')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {%- for e, code, what in [
+            ('binary_sensor.ecco_clock_dongle_free_power_active', 'FREE_POWER_ACTIVE', 'a Free Power lease is running'),
+            ('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'FREE_POWER_OPERATION', 'a Free Power start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'FREE_POWER_SNAPSHOT', 'a saved Free Power snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'DUMP_ACTIVE', 'a Dump to Grid lease is running'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'DUMP_OPERATION', 'a Dump to Grid start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'DUMP_SNAPSHOT', 'a saved Dump to Grid snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'MANUAL_WRITE', 'a manual inverter write is in progress')
+            ] -%}
+            {%- set v = states(e) -%}
+            {%- if v != 'off' -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ (e ~ ' reads on: ' ~ what if v == 'on' else e ~ ' reads ' ~ v ~ ', so it is not known whether ' ~ what)] -%}
+            {%- endif -%}
+            {%- endfor -%}
+            {%- set hold = states('sensor.ecco_plan_export_hold') -%}
+            {%- set held_by = state_attr('sensor.ecco_plan_export_hold', 'held_by') | default('unknown', true) -%}
+            {%- set rraw = states('sensor.ecco_plan_effective_reserve') -%}
+            {%- set r = rraw | float(-1) -%}
+            {%- set reserve = r if (r >= 0 and r <= 100) else (-1 if r < 0 else -2) -%}
+            {%- set sraw = states('number.ecco_clock_dongle_dump_to_grid_stop_soc') -%}
+            {%- set s = sraw | float(-1) -%}
+            {%- set stop = s if (s >= 0 and s <= 100) else -1 -%}
+            {%- set vraw = states('input_number.ecco_plan_revision') -%}
+            {%- set rv = vraw | float(none) -%}
+            {%- set rev_ok = rv is number and rv == rv and rv >= 0 and rv < 1000000000 and (rv % 1) == 0 -%}
+            {%- for code, hit, text in [
+            ('OVERRIDE_ACTIVE', hold == 'held', 'sensor.ecco_plan_export_hold reads held (' ~ held_by ~ '): a Hold battery, Skip tonight or Prepare for power cut is active'),
+            ('OVERRIDE_UNREADABLE', hold not in ['held', 'clear'], 'sensor.ecco_plan_export_hold reads ' ~ hold ~ ' (it must read clear): the override records cannot be read'),
+            ('RESERVE_INVALID', reserve == -2, 'sensor.ecco_plan_effective_reserve reads ' ~ rraw ~ ', which is not a number from 0 to 100'),
+            ('RESERVE_UNKNOWN', reserve == -1, 'sensor.ecco_plan_effective_reserve reads ' ~ rraw ~ ', so the effective reserve cannot be read'),
+            ('STOP_SOC_UNREADABLE', stop < 0, 'number.ecco_clock_dongle_dump_to_grid_stop_soc reads ' ~ sraw ~ ', so the staged Stop SOC cannot be read as a number from 0 to 100'),
+            ('STOP_SOC_BELOW_RESERVE', stop >= 0 and reserve >= 0 and stop < reserve, 'the staged Stop SOC (' ~ (stop | int(0)) ~ ' %) is below the effective reserve (' ~ (reserve | int(0)) ~ ' %): raise the Stop SOC to at least the reserve'),
+            ('REVISION_UNREADABLE', not rev_ok, 'input_number.ecco_plan_revision reads ' ~ vraw ~ ', so the plan revision cannot be read as a whole number')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {{ (ns.b + ns.n) if (ns.c | length) > 0 else (['ALLOWED: every check passed'] + ns.n) }}
+          blocked_by: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set ts = states('binary_sensor.ecco_time_trusted_for_ha_schedules') -%}
+            {%- set tel = states('binary_sensor.ecco_clock_dongle_telemetry_online') -%}
+            {%- set cfg = states('binary_sensor.ecco_clock_dongle_configuration_online') -%}
+            {%- set pt = states('sensor.ecco_clock_dongle_last_telemetry_update') -%}
+            {%- set pdt = strptime(pt, '%Y-%m-%d %H:%M:%S', none) if pt not in bad else none -%}
+            {%- set pskew = ((as_timestamp(now()) - as_timestamp(pdt)) | round(0)) if pdt is not none else none -%}
+            {%- set ns = namespace(c=[], b=[], n=[]) -%}
+            {%- for code, hit, text in [
+            ('TIME_LEASES', tl != 'on', 'binary_sensor.ecco_time_trusted_for_leases reads ' ~ tl ~ ' (it must read on): the dongle NTP time and the Home Assistant clock are not shown to agree, so the end of a lease cannot be relied on'),
+            ('TIME_SCHEDULES', ts != 'on', 'binary_sensor.ecco_time_trusted_for_ha_schedules reads ' ~ ts ~ ' (it must read on): the Home Assistant clock is not shown to be right'),
+            ('TELEMETRY_OFFLINE', tel != 'on', 'binary_sensor.ecco_clock_dongle_telemetry_online reads ' ~ tel ~ ' (it must read on): the inverter telemetry is not arriving'),
+            ('CONFIGURATION_OFFLINE', cfg != 'on', 'binary_sensor.ecco_clock_dongle_configuration_online reads ' ~ cfg ~ ' (it must read on): the inverter configuration readback is not arriving'),
+            ('TELEMETRY_STALE', pskew is none or (pskew | abs) > 300, 'sensor.ecco_clock_dongle_last_telemetry_update ' ~ ('cannot be read (' ~ pt ~ ')' if pt in bad else ('is not a time (' ~ pt ~ ')' if pdt is none else 'is ' ~ ((pskew | abs) | int(0)) ~ ' s from the Home Assistant clock (limit 300 s)')) ~ ': the inverter data are not shown to be fresh')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {%- for e, code, what in [
+            ('binary_sensor.ecco_clock_dongle_free_power_active', 'FREE_POWER_ACTIVE', 'a Free Power lease is running'),
+            ('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'FREE_POWER_OPERATION', 'a Free Power start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid', 'FREE_POWER_SNAPSHOT', 'a saved Free Power snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'DUMP_ACTIVE', 'a Dump to Grid lease is running'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'DUMP_OPERATION', 'a Dump to Grid start or restore is in progress'),
+            ('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid', 'DUMP_SNAPSHOT', 'a saved Dump to Grid snapshot is waiting to be restored'),
+            ('binary_sensor.ecco_clock_dongle_manual_write_in_progress', 'MANUAL_WRITE', 'a manual inverter write is in progress')
+            ] -%}
+            {%- set v = states(e) -%}
+            {%- if v != 'off' -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ (e ~ ' reads on: ' ~ what if v == 'on' else e ~ ' reads ' ~ v ~ ', so it is not known whether ' ~ what)] -%}
+            {%- endif -%}
+            {%- endfor -%}
+            {%- set hold = states('sensor.ecco_plan_export_hold') -%}
+            {%- set held_by = state_attr('sensor.ecco_plan_export_hold', 'held_by') | default('unknown', true) -%}
+            {%- set rraw = states('sensor.ecco_plan_effective_reserve') -%}
+            {%- set r = rraw | float(-1) -%}
+            {%- set reserve = r if (r >= 0 and r <= 100) else (-1 if r < 0 else -2) -%}
+            {%- set sraw = states('number.ecco_clock_dongle_dump_to_grid_stop_soc') -%}
+            {%- set s = sraw | float(-1) -%}
+            {%- set stop = s if (s >= 0 and s <= 100) else -1 -%}
+            {%- set vraw = states('input_number.ecco_plan_revision') -%}
+            {%- set rv = vraw | float(none) -%}
+            {%- set rev_ok = rv is number and rv == rv and rv >= 0 and rv < 1000000000 and (rv % 1) == 0 -%}
+            {%- for code, hit, text in [
+            ('OVERRIDE_ACTIVE', hold == 'held', 'sensor.ecco_plan_export_hold reads held (' ~ held_by ~ '): a Hold battery, Skip tonight or Prepare for power cut is active'),
+            ('OVERRIDE_UNREADABLE', hold not in ['held', 'clear'], 'sensor.ecco_plan_export_hold reads ' ~ hold ~ ' (it must read clear): the override records cannot be read'),
+            ('RESERVE_INVALID', reserve == -2, 'sensor.ecco_plan_effective_reserve reads ' ~ rraw ~ ', which is not a number from 0 to 100'),
+            ('RESERVE_UNKNOWN', reserve == -1, 'sensor.ecco_plan_effective_reserve reads ' ~ rraw ~ ', so the effective reserve cannot be read'),
+            ('STOP_SOC_UNREADABLE', stop < 0, 'number.ecco_clock_dongle_dump_to_grid_stop_soc reads ' ~ sraw ~ ', so the staged Stop SOC cannot be read as a number from 0 to 100'),
+            ('STOP_SOC_BELOW_RESERVE', stop >= 0 and reserve >= 0 and stop < reserve, 'the staged Stop SOC (' ~ (stop | int(0)) ~ ' %) is below the effective reserve (' ~ (reserve | int(0)) ~ ' %): raise the Stop SOC to at least the reserve'),
+            ('REVISION_UNREADABLE', not rev_ok, 'input_number.ecco_plan_revision reads ' ~ vraw ~ ', so the plan revision cannot be read as a whole number')
+            ] if hit -%}
+            {%- set ns.c = ns.c + [code] -%}
+            {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
+            {%- endfor -%}
+            {{ ns.c }}
+
+script:
+  ecco_free_power_start_guarded:
+    alias: "ECCO - Start Free Power (Charge Battery), guarded by the start gate"
+    description: >-
+      Presses the Free Power start button only while binary_sensor.ecco_charge_start_allowed reads on (and again, just before the press). With power_w or
+      duration_minutes it first stages that request, as the scheduled start does; with neither it starts the request already staged on the dongle. It arms
+      the Free Power write enable and presses the start button once; it turns the write enable off again only if this run turned it on. A refusal presses
+      nothing, writes the plan last-result text and raises ONE persistent notification; a refusal after an explicit request was staged puts the staged values
+      this run replaced back, once, and says whether the dongle confirmed it. The firmware still owns every start interlock.
+    mode: single
+    fields:
+      power_w:
+        description: "Optional: the charge request in watts to stage (a multiple of 100 from 500 to the effective grid charge limit). Omit it to start the request already staged on the dongle."
+      duration_minutes:
+        description: "Optional: the duration in whole minutes to stage (1 to 240). Omit it to start the duration already staged on the dongle."
+    sequence:
+      - variables:
+          gate_state: "{{ states('binary_sensor.ecco_charge_start_allowed') }}"
+          gate_codes: "{{ state_attr('binary_sensor.ecco_charge_start_allowed', 'blocked_by') }}"
+          gate_text: "{{ state_attr('binary_sensor.ecco_charge_start_allowed', 'reasons') }}"
+          scheduled_state: "{{ states('script.ecco_free_power_start_scheduled') }}"
+          # The write enable as this run finds it. A write enable that is already on belongs to someone else (the schedule, a card user): this run turns it off at the end only if it turned it on.
+          arm_before: "{{ states('switch.ecco_clock_dongle_free_power_write_enable') }}"
+          arm_mine: "{{ arm_before != 'on' }}"
+          # A value that was not given reads as undefined; an empty one counts as not given.
+          power_given: "{{ (power_w | default('') | string | trim) != '' }}"
+          duration_given: "{{ (duration_minutes | default('') | string | trim) != '' }}"
+          # The request numbers on the dongle, the effective grid charge limit and a request that is given: each a number from 0 up, or -1 (cannot be read, not a number, nan, infinite or
+          # negative). Nothing below compares or prints a bad number: the offline interpreter keeps nan and infinity as text, so every comparison with one would raise.
+          staged_power: >-
+            {%- set x = states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1) -%}
+            {{ x if (x >= 0 and x <= 1000000) else -1 }}
+          staged_duration: >-
+            {%- set x = states('number.ecco_clock_dongle_free_power_duration') | float(-1) -%}
+            {{ x if (x >= 0 and x <= 1000000) else -1 }}
+          limit_raw: "{{ states('sensor.ecco_config_maximum_grid_charge_power') }}"
+          limit: >-
+            {%- set x = states('sensor.ecco_config_maximum_grid_charge_power') | float(-1) -%}
+            {{ x if (x >= 0 and x <= 1000000) else -1 }}
+          req_power: >-
+            {%- set x = (power_w | default('') | string | trim) | float(-1) -%}
+            {{ (x if (x >= 0 and x <= 1000000) else -1) if power_given else staged_power }}
+          req_duration: >-
+            {%- set x = (duration_minutes | default('') | string | trim) | float(-1) -%}
+            {{ (x if (x >= 0 and x <= 1000000) else -1) if duration_given else staged_duration }}
+          # What a refusal prints for the request: the text that was given, or the staged number, or "unreadable" (never the -1 that stands for it).
+          power_shown: >-
+            {%- if power_given -%}{{ power_w | string | trim }} W
+            {%- elif staged_power >= 0 -%}{{ staged_power | int(0) }} W
+            {%- else -%}unreadable
+            {%- endif -%}
+          duration_shown: >-
+            {%- if duration_given -%}{{ duration_minutes | string | trim }} min
+            {%- elif staged_duration >= 0 -%}{{ staged_duration | int(0) }} min
+            {%- else -%}unreadable
+            {%- endif -%}
+          # What this run is about to replace on the dongle (a request that equals the staged one writes nothing).
+          power_changed: "{{ req_power != staged_power }}"
+          duration_changed: "{{ req_duration != staged_duration }}"
+          # The gate closed ONLY by a code that depends on the request is judged again after an explicit request is staged: the gate reads the staged request.
+          gate_deferrable: >-
+            {{ gate_state == 'off' and power_given and req_power != staged_power and gate_codes is iterable and gate_codes is not string and (gate_codes | length) > 0
+               and (gate_codes | reject('in', ['IMPORT_HEADROOM', 'REQUEST_UNREADABLE']) | list | length) == 0 }}
+          gate_detail: >-
+            {{ (gate_text | join(' ')) if (gate_text is iterable and gate_text is not string) else 'the reasons cannot be read' }}
+          gate_code_list: >-
+            {{ (gate_codes | join(', ')) if (gate_codes is iterable and gate_codes is not string) else 'unreadable' }}
+          refusal: >-
+            {%- if gate_state not in ['on', 'off'] -%}GATE_UNREADABLE|The start gate (binary_sensor.ecco_charge_start_allowed) cannot be read ({{ gate_state }}), so Charge Battery was not started (it fails closed).
+            {%- elif gate_state == 'off' and not gate_deferrable -%}GATE_BLOCKED|The start gate is closed ({{ gate_code_list }}), so Charge Battery was not started. {{ gate_detail }}
+            {%- elif scheduled_state != 'off' -%}SCHEDULED_START_RUNNING|A scheduled Free Power start is running or cannot be read ({{ scheduled_state }}), so Charge Battery was not started; wait for it to finish.
+            {%- elif limit < 0 -%}LIMIT_UNREADABLE|The effective grid charge limit (sensor.ecco_config_maximum_grid_charge_power) cannot be read (it reads {{ limit_raw }}), so Charge Battery was not started (it fails closed).
+            {%- elif not (limit >= 500 and limit <= 100000) -%}LIMIT_OUT_OF_RANGE|The effective grid charge limit reads {{ limit | int(0) }} W, outside the supported range of 500 W to 100000 W, so Charge Battery was not started (it fails closed).
+            {%- elif not (req_power >= 500 and req_power <= limit and (req_power % 100) == 0) -%}POWER_INVALID|The charge request ({{ power_shown }}) must be a multiple of 100 W from 500 W up to the effective grid charge limit ({{ limit | int(0) }} W), so Charge Battery was not started.
+            {%- elif not (req_duration >= 1 and req_duration <= 240 and (req_duration % 1) == 0) -%}DURATION_INVALID|The duration ({{ duration_shown }}) must be a whole number of minutes from 1 to 240, so Charge Battery was not started.
+            {%- endif -%}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ refusal | trim != '' }}"
+            sequence:
+              # A refusal before anything is staged or armed touches nothing on the dongle: no number, no switch.
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_plan_last_result
+                data:
+                  value: "{{ ('REFUSED ' ~ refusal.split('|')[0] ~ ' - ' ~ refusal.split('|')[1])[:250] }}"
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_free_power_start_blocked
+                  title: "ECCO: Charge Battery (Free Power) was not started"
+                  message: "{{ refusal.split('|')[1] }} (reason {{ refusal.split('|')[0] }})"
+        default:
+          # Stage the request the way the scheduled start does: the power, then the duration, only a value that differs from what is staged.
+          - if:
+              - condition: template
+                value_template: "{{ req_power != staged_power }}"
+            then:
+              - action: number.set_value
+                continue_on_error: true
+                target:
+                  entity_id: number.ecco_clock_dongle_free_power_max_charge_power
+                data:
+                  value: "{{ req_power | int(0) }}"
+          - if:
+              - condition: template
+                value_template: "{{ req_duration != staged_duration }}"
+            then:
+              - action: number.set_value
+                continue_on_error: true
+                target:
+                  entity_id: number.ecco_clock_dongle_free_power_duration
+                data:
+                  value: "{{ req_duration | int(0) }}"
+          - action: switch.turn_on
+            continue_on_error: true
+            target:
+              entity_id: switch.ecco_clock_dongle_free_power_write_enable
+          # Press only once the dongle has confirmed the arm and both staged values.
+          - wait_template: >-
+              {{ is_state('switch.ecco_clock_dongle_free_power_write_enable', 'on')
+                 and (states('number.ecco_clock_dongle_free_power_duration') | float(-1)) == (req_duration | float(-2))
+                 and (states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1)) == (req_power | float(-2)) }}
+            timeout: "00:00:05"
+            continue_on_timeout: true
+          - delay:
+              seconds: 1
+          # Press-time check: the gate is read AGAIN (this run staged and waited since it read it, and an explicit request is only now what the gate reads), then the script's own
+          # conditions. press_block is empty (press) or "CODE|text" (nothing is pressed).
+          - variables:
+              press_block: >-
+                {%- set g = states('binary_sensor.ecco_charge_start_allowed') -%}
+                {%- set lim_raw = states('sensor.ecco_config_maximum_grid_charge_power') -%}
+                {%- set lim = lim_raw | float(-1) -%}
+                {%- set lim = lim if (lim >= 0 and lim <= 1000000) else -1 -%}
+                {%- if g != 'on' -%}GATE_CLOSED|The start gate reads {{ g }} just before the press ({{ state_attr('binary_sensor.ecco_charge_start_allowed', 'blocked_by') }}), so Charge Battery was not started and nothing was pressed.
+                {%- elif states('script.ecco_free_power_start_scheduled') != 'off' -%}SCHEDULED_START_RUNNING|A scheduled Free Power start began while this start was being staged, so nothing was pressed.
+                {%- elif not (is_state('switch.ecco_clock_dongle_free_power_write_enable', 'on') and (states('number.ecco_clock_dongle_free_power_duration') | float(-1)) == (req_duration | float(-2)) and (states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1)) == (req_power | float(-2))) -%}NOT_CONFIRMED|The dongle did not confirm the arm and the staged request within 5 seconds, so nothing was pressed.
+                {%- elif lim < 0 -%}LIMIT_LOWERED|The effective grid charge limit can no longer be read (it reads {{ lim_raw }}) after this start was staged, so nothing was pressed.
+                {%- elif lim < req_power -%}LIMIT_LOWERED|The effective grid charge limit fell to {{ lim | int(0) }} W, below the request ({{ req_power | int(0) }} W), while this start was being staged, so nothing was pressed.
+                {%- endif -%}
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ (press_block | string | trim) != '' }}"
+                sequence:
+                  # Put back what this run replaced on the dongle, ONCE, and read it back: the owner's staged request must not be left changed by a start that did not happen. A value that could
+                  # not be read before this run cannot be put back, and that is said.
+                  - if:
+                      - condition: template
+                        value_template: "{{ power_changed and staged_power >= 0 }}"
+                    then:
+                      - action: number.set_value
+                        continue_on_error: true
+                        target:
+                          entity_id: number.ecco_clock_dongle_free_power_max_charge_power
+                        data:
+                          value: "{{ staged_power | int(0) }}"
+                  - if:
+                      - condition: template
+                        value_template: "{{ duration_changed and staged_duration >= 0 }}"
+                    then:
+                      - action: number.set_value
+                        continue_on_error: true
+                        target:
+                          entity_id: number.ecco_clock_dongle_free_power_duration
+                        data:
+                          value: "{{ staged_duration | int(0) }}"
+                  - wait_template: >-
+                      {{ ((not power_changed) or (staged_power >= 0 and (states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1)) == staged_power))
+                         and ((not duration_changed) or (staged_duration >= 0 and (states('number.ecco_clock_dongle_free_power_duration') | float(-1)) == staged_duration)) }}
+                    timeout: "00:00:05"
+                    continue_on_timeout: true
+                  - variables:
+                      put_back: >-
+                        {%- set p_ok = (not power_changed) or (staged_power >= 0 and (states('number.ecco_clock_dongle_free_power_max_charge_power') | float(-1)) == staged_power) -%}
+                        {%- set d_ok = (not duration_changed) or (staged_duration >= 0 and (states('number.ecco_clock_dongle_free_power_duration') | float(-1)) == staged_duration) -%}
+                        {%- if not (power_changed or duration_changed) -%}
+                        {%- elif p_ok and d_ok -%}The staged request was put back to {{ staged_power | int(0) }} W for {{ staged_duration | int(0) }} min.
+                        {%- else -%}The staged request could NOT be put back and confirmed: it was {{ (staged_power | int(0) ~ ' W') if staged_power >= 0 else 'unreadable' }} for {{ (staged_duration | int(0) ~ ' min') if staged_duration >= 0 else 'unreadable' }}, the dongle now reads {{ states('number.ecco_clock_dongle_free_power_max_charge_power') }} W for {{ states('number.ecco_clock_dongle_free_power_duration') }} min.
+                        {%- endif -%}
+                      result_text: >-
+                        {%- set base = 'REFUSED ' ~ press_block.split('|')[0] ~ ' - ' ~ press_block.split('|')[1] -%}
+                        {%- if put_back == '' -%}{{ base[:250] }}
+                        {%- else -%}{{ base[:(248 - (put_back | length))] ~ ' ' ~ put_back }}
+                        {%- endif -%}
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_plan_last_result
+                    data:
+                      value: "{{ result_text }}"
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ecco_free_power_start_blocked
+                      title: "ECCO: Charge Battery (Free Power) was not started"
+                      message: "{{ press_block.split('|')[1] }}{{ (' ' ~ put_back) if put_back != '' else '' }} (reason {{ press_block.split('|')[0] }})"
+            default:
+              - action: button.press
+                continue_on_error: true
+                target:
+                  entity_id: button.ecco_clock_dongle_start_free_power_charge_now
+              # The firmware publishes its status and then disarms the switch in BOTH branches of its gate. The switch was seen ON just before this press, so seeing it OFF
+              # now is this press's answer, and the status already holds its reason.
+              - wait_template: >-
+                  {{ is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'on')
+                     or is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+                     or is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off') }}
+                timeout: "00:00:15"
+                continue_on_timeout: true
+              - delay:
+                  seconds: 2
+              - variables:
+                  answered: "{{ is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off') }}"
+                  began: >-
+                    {{ is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'on')
+                       or is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+                       or (is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off')
+                           and not states('sensor.ecco_clock_dongle_free_power_status').startswith('REJECTED')) }}
+                  status_now: "{{ states('sensor.ecco_clock_dongle_free_power_status')[:120] }}"
+              - choose:
+                  # The gate passed: a start transaction began. Wait for its own verified outcome. Never retried: on failure the firmware restores its saved snapshot itself.
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ began }}"
+                    sequence:
+                      - wait_template: >-
+                          {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+                             or is_state('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress', 'off') }}
+                        timeout: "00:02:00"
+                        continue_on_timeout: true
+                      - if:
+                          - condition: state
+                            entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+                            state: "on"
+                        then:
+                          - action: input_text.set_value
+                            target:
+                              entity_id: input_text.ecco_plan_last_result
+                            data:
+                              value: "{{ ('STARTED free_power at ' ~ (req_power | int(0)) ~ ' W for ' ~ (req_duration | int(0)) ~ ' min (guarded start).')[:250] }}"
+                          - action: persistent_notification.dismiss
+                            data:
+                              notification_id: ecco_free_power_start_blocked
+                        else:
+                          - action: input_text.set_value
+                            target:
+                              entity_id: input_text.ecco_plan_last_result
+                            data:
+                              value: "{{ ('FAILED START_FAILED - a start transaction began but Free Power did not become active (' ~ states('sensor.ecco_clock_dongle_free_power_status')[:120] ~ '); the firmware restores its saved snapshot itself. Check Charge Battery before pressing again.')[:250] }}"
+                          - action: persistent_notification.create
+                            data:
+                              notification_id: ecco_free_power_start_blocked
+                              title: "ECCO: Charge Battery (Free Power) did not start"
+                              message: "A start transaction began but Free Power did not become active ({{ states('sensor.ecco_clock_dongle_free_power_status')[:120] }}). The firmware restores its saved snapshot itself; check Charge Battery and its recovery state before pressing Start again. (reason START_FAILED)"
+                  # Refused at the dongle's own gate (nothing written): the owner decides.
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ answered and not began }}"
+                    sequence:
+                      - action: input_text.set_value
+                        target:
+                          entity_id: input_text.ecco_plan_last_result
+                        data:
+                          value: "{{ ('FAILED FIRMWARE_REFUSED - the dongle gate refused the press (' ~ status_now ~ '); nothing was written. Press Start again when the reason is cleared.')[:250] }}"
+                      - action: persistent_notification.create
+                        data:
+                          notification_id: ecco_free_power_start_blocked
+                          title: "ECCO: Charge Battery (Free Power) was refused by the dongle"
+                          message: "The dongle gate refused the press: {{ status_now }}. Nothing was written. Press Start again when the reason is cleared. (reason FIRMWARE_REFUSED)"
+                default:
+                  # No answer to this press (the switch still reads ON): disarm it if this run armed it, and look, never retry. A write enable that was on before this run is left on and the text says so.
+                  - if:
+                      - condition: template
+                        value_template: "{{ arm_mine }}"
+                    then:
+                      - action: switch.turn_off
+                        continue_on_error: true
+                        target:
+                          entity_id: switch.ecco_clock_dongle_free_power_write_enable
+                      - wait_template: "{{ is_state('switch.ecco_clock_dongle_free_power_write_enable', 'off') }}"
+                        timeout: "00:00:10"
+                        continue_on_timeout: true
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.ecco_plan_last_result
+                    data:
+                      value: "{{ ('FAILED NO_ANSWER - no answer from the dongle to the press; the outcome is unconfirmed and is not retried (' ~ status_now ~ ').' ~ ('' if arm_mine else ' The write enable was already on before this start and is left on.') ~ ' Check Charge Battery before pressing again.')[:250] }}"
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ecco_free_power_start_blocked
+                      title: "ECCO: Charge Battery (Free Power) start unconfirmed"
+                      message: "There was no answer from the dongle to the press, so it is not known whether Free Power started ({{ status_now }}). It is not retried.{{ '' if arm_mine else ' The write enable was already on before this start and is left on.' }} Check Charge Battery before pressing Start again. (reason NO_ANSWER)"
+          # The write enable ends off only if THIS run turned it on (the safe state: it only permits a START). One that was already on belongs to someone else and is left as found.
+          - if:
+              - condition: template
+                value_template: "{{ arm_mine }}"
+            then:
+              - action: switch.turn_off
+                continue_on_error: true
+                target:
+                  entity_id: switch.ecco_clock_dongle_free_power_write_enable

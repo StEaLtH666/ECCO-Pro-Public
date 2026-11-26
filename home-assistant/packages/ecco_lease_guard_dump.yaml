@@ -1,0 +1,123 @@
+# ECCO Pro - LEASE GUARD (Dump to Grid): end a Dump to Grid lease when a hold starts or the reserve rises above the Stop SOC the lease latched
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Start gate and lease guards").
+#
+# WHY. A start gate (ecco_start_gate.yaml) decides only at the START. Today nothing ends a Dump to Grid lease when a Hold battery, Skip tonight or Prepare for power cut turns on, or when the
+# effective reserve rises above the Stop SOC the dongle latched at its start. Item N2 of the architecture reconciliation asks for in-lease END guards. This package is ONE guard, ONE automation,
+# and it only ever presses an existing END button. It is one of three lease guards, each its own package file (the other two end a Free Power lease: ecco_lease_guard_free_power_time.yaml and
+# ecco_lease_guard_free_power_import.yaml).
+#
+# THIS GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION. The three guards are authorised and installed one at a time; they read nothing from one another (each stands alone: the suite
+# proves that this file alone ends its lease), and they are separate from the start gate, which can be installed without any of them.
+#
+# WHAT IT DOES
+#   ecco_lease_guard_dump_end  While a Dump to Grid lease is active, it presses END DUMP TO GRID - RESTORE NOW when
+#       - a Hold battery, Skip tonight or Prepare for power cut turns on: sensor.ecco_plan_export_hold changes to held (that sensor reads held for all three). That sensor is the plan's own: it
+#         reads `unknown` as a VALUE (nothing is active and a record cannot be read), so a change from unknown to held counts; a change from unavailable, or from nothing, does not; or
+#       - the effective reserve rises above the Stop SOC the lease latched at its start: sensor.ecco_plan_effective_reserve changes, or the lease turns active, and the number is above
+#         sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc (the dongle's active Stop SOC: published only while a lease is active, unknown otherwise). That sensor updates every 5 s,
+#         so when the lease has only just turned active the guard waits up to 15 s for it before it judges the reserve (a hold is judged at once).
+#     The dongle enforces only that latched Stop SOC (every 15 s, firmware): a reserve that rises during the lease is not enforced by anything else.
+#     It then raises one persistent notification with a fixed id (ecco_lease_guard_dump_ended) that says what was ended and why, and pauses for a minute (mode single: a trigger in that minute is
+#     dropped silently), so one violation is one press.
+#
+# THE DUMP END IS NOT AN OPERATOR RETRY (unlike the Free Power End: see ecco_lease_guard_free_power_time.yaml). In the firmware the End button runs request_dump_end, which only records the restore
+# request (restore_requested) and runs the shared restore worker, exactly as the dongle's own watchdog does every 15 s while a restore is due. The worker still refuses while the durable operator
+# lockout stands (only Force Restore Original bypasses it: dump_force_restore_bypass is set nowhere else), and the press neither clears the lockout nor resets the retry backoff. So a press on a lease
+# that is already ending, owed or locked out changes nothing the dongle would not have done itself, and this guard needs no precondition beyond a lease that is active. The suite pins those firmware
+# lines, so a firmware change that makes the Dump End an operator retry fails it. The dongle records the end reason of this press as its manual End button (it cannot tell a guard from the card).
+#
+# HARD RULES (each is a static check in home-assistant/tests/test_ecco_start_gate.py).
+#   - The ONLY service calls are button.press on the existing END DUMP TO GRID - RESTORE NOW button and persistent_notification.create. The guard never presses a START button, never arms or
+#     writes anything, never writes a register or a helper, and adds no helper and no template entity.
+#   - END is always allowed: it asks the dongle to restore the snapshot it saved before the lease (the exact values, never a computed one); it is the same press the card's End & Restore Now makes.
+#   - A guard acts only on a POSITIVE reading: a hold that reads held, a reserve and a latched Stop SOC that are both numbers. A value that is missing, unavailable or unknown never ends a lease.
+#   - A restart, a template reload, a reconnect of the dongle and a boot never end a lease by themselves: every trigger must be a change FROM a reading (not from unavailable or unknown, and not
+#     from nothing; the one exception is the hold sensor's own unknown, above), nothing runs at the Home Assistant start, and a count in progress dies with a restart. A violation that already
+#     stands when Home Assistant starts is NOT acted on until the next change; a lease that runs through a restart with a standing violation keeps running.
+#
+# WHAT IT DOES NOT DO, AND ITS LIMITS (stated plainly; nothing here is a lock; a firmware guard is the only hard one).
+#   - The guard is SOFT: it runs in Home Assistant. A Home Assistant that is down, a dongle that is dead or in safe mode, or a press that the dongle does not act on ends nothing. It does not retry:
+#     one press per violation, then the next change. The dongle's own watchdogs (the Stop SOC every 15 s, the lease's end time, the restore retries) are unchanged and still run.
+#   - The guard also judges a lease at the moment it turns active, so a start from the dongle's own button under a hold or with a Stop SOC below the reserve is ended within seconds, with the
+#     notification saying why. A hold of any kind, Skip tonight included, ends a running export: the owner accepts that when authorising this guard.
+#   - A standing violation at Home Assistant's start is not acted on (above), and a trigger that arrives while the guard is busy (its wait, or the minute after a press) is dropped.
+#   - The notification lives in Home Assistant's memory only; a restart clears it.
+#   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the offline model of them is in the suite): that a state trigger fires with trigger.from_state set to the previous
+#     state object (none for an entity that did not exist) and trigger.id set, that `to: ~` fires on a change of the state and never on an attribute alone (as the schedule restore package assumes),
+#     that wait_template with continue_on_timeout continues at once when its template is already true, and that `mode: single` with max_exceeded silent drops a trigger while a run is busy.
+#
+# INSTALL. One file copy to /config/packages/ecco_lease_guard_dump.yaml, a configuration check, then reload the AUTOMATIONS (Developer tools, YAML, Automations): no restart, no helper to create,
+# never "reload all". It reads the plan sensors (ecco_plan_helpers.yaml); without a source the guard stays inert (it never acts on a missing reading). Remove: delete the file and reload the
+# automations. Nothing here is meant to be exposed to a voice assistant.
+
+automation:
+  - id: ecco_lease_guard_dump_end
+    alias: "ECCO - Lease guard: end a Dump to Grid lease when a hold starts or the reserve rises above its Stop SOC"
+    description: >-
+      Presses END DUMP TO GRID - RESTORE NOW (nothing else, ever) while a Dump to Grid lease is active and a Hold battery, Skip tonight or Prepare for power cut turns on, or the
+      effective reserve is above the Stop SOC the lease latched at its start. Acts only on a change from a reading, never at a restart, a reload or a reconnect. Raises one persistent
+      notification that says what was ended and why. It starts, arms and writes nothing.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: sensor.ecco_plan_export_hold
+        to: "held"
+        id: hold
+      - trigger: state
+        entity_id: sensor.ecco_plan_effective_reserve
+        to: ~
+        id: reserve
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+        to: "on"
+        id: lease_started
+    conditions:
+      # A change FROM A READING. A Home Assistant start, a template reload, a reconnect of the dongle (unavailable or unknown to a value) and an entity that did not exist before are never a reason.
+      # The one exception: the plan's hold sensor reads unknown as a VALUE (a record it cannot read), so for the hold trigger only unavailable and nothing are refused as the old state.
+      - condition: template
+        value_template: >-
+          {{ trigger.from_state is not none
+             and trigger.from_state.state not in (['unavailable'] if trigger.id == 'hold' else ['unavailable', 'unknown']) }}
+      - condition: state
+        entity_id: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+        state: "on"
+    actions:
+      # The dongle's active Stop SOC is published every 5 s: when the lease has only just turned active wait (at most 15 s) for it. A hold, or a lease that ends, stops the wait at once.
+      - wait_template: >-
+          {{ not is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')
+             or is_state('sensor.ecco_plan_export_hold', 'held')
+             or (states('sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc') | float(-1)) >= 0 }}
+        timeout: "00:00:15"
+        continue_on_timeout: true
+      - variables:
+          lease: "{{ is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') }}"
+          hold: "{{ states('sensor.ecco_plan_export_hold') }}"
+          # The reserve and the latched Stop SOC must each be a finite number from 0 to 100, tested as a positive range (a comparison with nan is always false): -1 = cannot be read, -2 = not such a number.
+          reserve: >-
+            {%- set r = states('sensor.ecco_plan_effective_reserve') | float(-1) -%}
+            {{ r if (r >= 0 and r <= 100) else (-1 if r < 0 else -2) }}
+          latched: >-
+            {%- set s = states('sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc') | float(-1) -%}
+            {{ s if (s >= 0 and s <= 100) else -1 }}
+          held_now: "{{ hold == 'held' }}"
+          above: "{{ reserve >= 0 and latched >= 0 and reserve > latched }}"
+      - condition: template
+        value_template: "{{ lease and (held_now or above) }}"
+      - action: button.press
+        target:
+          entity_id: button.ecco_clock_dongle_end_dump_to_grid_restore_now
+      - action: persistent_notification.create
+        data:
+          notification_id: ecco_lease_guard_dump_ended
+          title: "ECCO: a Dump to Grid lease was ended by the lease guard"
+          message: >-
+            The lease guard pressed END DUMP TO GRID - RESTORE NOW because
+            {% if held_now %}a Hold battery, Skip tonight or Prepare for power cut turned on (sensor.ecco_plan_export_hold reads held: {{ state_attr('sensor.ecco_plan_export_hold', 'held_by') | default('unknown', true) }}).
+            {%- else %}the effective reserve ({{ reserve | int(0) }} %) is above the Stop SOC this lease latched at its start ({{ latched | int(0) }} %).
+            {%- endif %}
+            This is the same press as the card's End & Restore Now (the dongle records its reason as a manual End): it only asks the dongle to restore the settings it saved before the lease, and, unlike the
+            Free Power End, it is not an operator retry (it clears no lockout and resets no backoff). Check the Export to Grid status on the card. The guard only presses the End button: it starts and writes
+            nothing, and it is soft (it runs in Home Assistant).
+      - delay: "00:01:00"

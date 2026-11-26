@@ -1,0 +1,155 @@
+# ECCO Pro - LEASE GUARD (Free Power, time trust): end a Free Power lease when the time it ends on has not been trusted for 5 minutes
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Start gate and lease guards").
+#
+# WHY. A start gate (ecco_start_gate.yaml) decides only at the START. The dongle ends a Free Power lease on its own NTP time; if that time and Home Assistant's clock are no longer shown to agree, the
+# end can no longer be relied on, and nothing ends the lease. Item N2 of the architecture reconciliation asks for in-lease END guards. This package is ONE guard, ONE automation, and it only ever
+# presses an existing END button. It is one of three lease guards, each its own package file (the others: ecco_lease_guard_dump.yaml and ecco_lease_guard_free_power_import.yaml). The Free Power
+# side is two guards, not one, because each counts its own delay (5 minutes here, 30 seconds in the import guard) and a run that is counting drops every trigger that arrives meanwhile
+# (mode single): one automation would let a long time count hide a breach of the supply limit for minutes.
+#
+# THIS GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION. The three guards are authorised and installed one at a time; they read nothing from one another (each stands alone: the suite
+# proves that this file alone ends its lease), and they are separate from the start gate, which can be installed without any of them. This file reads the time trust package
+# (ecco_time_trust.yaml): it is one of the two packages on that package's READERS allow-list, the start gate being the other.
+#
+# WHAT IT DOES
+#   ecco_lease_guard_free_power_time  While a Free Power lease is active and binary_sensor.ecco_time_trusted_for_leases does not read on for 5 MINUTES, it presses END FREE POWER - RESTORE NOW,
+#       but only for a lease it has verified to be running normally (below). The count starts when the sensor changes from on to off, or when a lease turns active while it READS off (a sensor
+#       that is unavailable, unknown or missing, for instance because the time trust package is not installed, is not a reading and never starts a count). 5 minutes is more than the LIVE
+#       condition of the time trust package costs after a reconnect (about a minute, two at worst) and more than its 3 minutes 30 seconds stall debounce, so a reconnect or a restart alone
+#       never ends a lease.
+#   Then it raises one persistent notification with a fixed id (ecco_lease_guard_free_power_ended, shared with the import guard) that says what was ended and why, or, when it declined to press, one
+#   with another fixed id (ecco_lease_guard_free_power_declined, shared) that says why it pressed nothing; and it pauses for a minute (mode single: a trigger in that minute is dropped silently),
+#   so one violation is one press.
+#
+# THIS PRESS IS THE OPERATOR'S END. END FREE POWER - RESTORE NOW is the one button the firmware reads as an operator's explicit retry. In the firmware, pressed while a lease has a saved snapshot
+# it sets free_power_restore_requested and the one-shot free_power_operator_retry_pending, which restore_free_power_snapshot consumes as an explicit operator request: that clears the durable
+# operator-decision lockout (the lockout trips at two verify mismatches so that a reboot cannot silently re-authorise more unattended writes against a condition no human has seen), zeroes the
+# comms attempts, the verify-mismatch count and the next-attempt time, and so skips the retry backoff. A press while a restore is owed, blocked or locked out would therefore hand a guard the
+# operator's authority to retry. So the guard presses ONLY for a VERIFIED RUNNING lease, judged after its wait, just before the press (the verdict below, the same text in both Free Power guards):
+#       - the lease flag reads on (the condition just before the verdict) and binary_sensor.ecco_clock_dongle_free_power_operation_in_progress reads off (unavailable or unknown is not off);
+#       - sensor.ecco_clock_dongle_free_power_status starts with ACTIVE - VERIFIED OK, the text the firmware publishes after a verified activation (an allow-list: END REQUESTED, END DEFERRED,
+#         END BLOCKED, RESTORE*, RECOVERY*, OPERATOR DECISION*, ACTIVATION VERIFY*, FORCE*, ACCEPT*, REJECTED*, STARTING, SNAPSHOT*, START FAILED, Inactive and every other text refuse);
+#       - sensor.ecco_clock_dongle_free_power_ends_at reads a time in the firmware's exact form YYYY-MM-DD HH:MM:SS that is after Home Assistant's clock (the end is not already due: the dongle's
+#         own watchdog owns a lease that is past it; read as local time in Home Assistant's zone, as the start gate reads the poll text); a lease past its end, or an end that cannot be read,
+#         is left to the dongle;
+#       - END FREE POWER - RESTORE NOW has not been pressed since the lease turned active (AT MOST ONE PRESS PER LEASE, shared by both Free Power guards and by the operator): the button
+#         entity's own state is the time of its last press, and the lease began when binary_sensor.ecco_clock_dongle_free_power_active last changed. Home Assistant resets that change time at
+#         a restart and at a reconnect of the dongle, so a lease that was re-announced counts as beginning then; the status check is the line of defence behind the marker.
+#   When any of this is not true the guard presses nothing and says why in the declined notification; the lease is then the dongle's, or the operator's to end. The Dump guard needs none of this.
+#
+# HARD RULES (each is a static check in home-assistant/tests/test_ecco_start_gate.py).
+#   - The ONLY service calls are button.press on the existing END FREE POWER - RESTORE NOW button and persistent_notification.create. The guard never presses a START button, never arms or
+#     writes anything, never writes a register or a helper, and adds no helper and no template entity. It reads facts and presses nothing else.
+#   - END is never gated for a human: the card's End & Restore Now is untouched. The guard's own press is gated (above) because it is the operator's End.
+#   - A guard acts only on a POSITIVE reading: a time-trust sensor that was on and now reads off (or reads off when a lease starts). A value that is missing, unavailable or unknown never ends a lease.
+#   - A restart, a template reload, a reconnect of the dongle and a boot never end a lease by themselves: every trigger must be a change FROM a reading (not from unavailable or unknown, and not
+#     from nothing), nothing runs at the Home Assistant start, and a count in progress dies with a restart. A violation that already stands when Home Assistant starts is NOT acted on until the
+#     next change; a lease that runs through a restart with a standing violation keeps running.
+#
+# WHAT IT DOES NOT DO, AND ITS LIMITS (stated plainly; nothing here is a lock; a firmware guard is the only hard one).
+#   - The guard is SOFT: it runs in Home Assistant. A Home Assistant that is down, a dongle that is dead or in safe mode, or a press that the dongle does not act on ends nothing. It does not retry:
+#     one press per lease, then nothing. The dongle's own watchdogs (the lease's end time, the restore retries) are unchanged and still run. An automatic END with no operator authority is a firmware
+#     option (a separate flash), not something a Home Assistant guard can offer.
+#   - Charge Battery (Free Power) has no target-reached guard here: the lease runs to its end time or to the operator's End (Free Power forces every slot to 100 %). Ending at a target is a later step.
+#   - A Free Power lease that turns active while the leases sensor already reads off is counted from the lease start; a lease started from the dongle's own button while a hold is active is
+#     NOT ended by the Free Power guards (Charge Battery is not gated by a hold).
+#   - The ends-at sensor is published every 10 s: a lease that is only seconds old may read no end yet; the verdict is taken after the 5 minute wait, so that does not matter here.
+#   - A trigger that arrives while the guard is busy (its wait, or the minute after a press) is dropped. The notifications live in Home Assistant's memory only; a restart clears them.
+#   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the offline model of them is in the suite): that a state trigger fires with trigger.from_state set to the previous
+#     state object (none for an entity that did not exist), that wait_template with continue_on_timeout continues at once when its template is already true, that `mode: single` with max_exceeded
+#     silent drops a trigger while a run is busy, that a button entity's state is the time of its last press (ISO 8601, restored across a restart), that states['<entity id>'].last_changed
+#     is the time the state last changed, and that as_timestamp of a time with no offset reads it as local time in Home Assistant's own zone.
+#
+# INSTALL. One file copy to /config/packages/ecco_lease_guard_free_power_time.yaml, a configuration check, then reload the AUTOMATIONS (Developer tools, YAML, Automations): no restart, no helper to
+# create, never "reload all". It reads the time trust sensor (ecco_time_trust.yaml); without it the guard stays inert (it never acts on a missing reading). Remove: delete the file and reload the
+# automations. Nothing here is meant to be exposed to a voice assistant.
+
+automation:
+  - id: ecco_lease_guard_free_power_time
+    alias: "ECCO - Lease guard: end a Free Power lease when the time it ends on is not trusted for 5 minutes"
+    description: >-
+      Presses END FREE POWER - RESTORE NOW (nothing else, ever) when a Free Power lease is active and binary_sensor.ecco_time_trusted_for_leases has not read on for 5 minutes, counted from the
+      change from on to off or from the lease turning active while it reads off, and only for a lease it has verified to be running normally (this press is the operator's End: it is never
+      made while a restore is owed, blocked or in progress, and at most once per lease). Otherwise it presses nothing and says why. Acts only on a change from a reading, never at a restart,
+      a reload or a reconnect. It starts, arms and writes nothing.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.ecco_time_trusted_for_leases
+        to: "off"
+        id: trust_lost
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+        to: "on"
+        id: lease_started
+    conditions:
+      # A change FROM A READING (on or off), never from unavailable or unknown or from nothing.
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.from_state.state in ['on', 'off'] }}"
+      - condition: state
+        entity_id: binary_sensor.ecco_clock_dongle_free_power_active
+        state: "on"
+      # The sensor must READ off now (a trust loss, or a lease that starts while it is off): unavailable, unknown or missing is not a reading, so a missing time trust package ends nothing.
+      - condition: template
+        value_template: "{{ is_state('binary_sensor.ecco_time_trusted_for_leases', 'off') }}"
+    actions:
+      # The 5 minute debounce: end the wait at once when the lease ends or the time is trusted again.
+      - wait_template: >-
+          {{ not is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+             or is_state('binary_sensor.ecco_time_trusted_for_leases', 'on') }}
+        timeout: "00:05:00"
+        continue_on_timeout: true
+      - condition: template
+        value_template: >-
+          {{ is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')
+             and not is_state('binary_sensor.ecco_time_trusted_for_leases', 'on') }}
+      # THE VERDICT (the same text in both Free Power guards; a static check of the suite compares them). "" = a lease verified running normally, in which END has not been pressed yet:
+      # the press is allowed. Anything else is the reason the guard may not press (the first that applies). Judged now, after the wait, never at the trigger.
+      - variables:
+          verdict: >-
+            {%- set st = states('sensor.ecco_clock_dongle_free_power_status') -%}
+            {%- set op = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ea = states('sensor.ecco_clock_dongle_free_power_ends_at') -%}
+            {%- set eat = strptime(ea, '%Y-%m-%d %H:%M:%S', none) -%}
+            {%- set act = states['binary_sensor.ecco_clock_dongle_free_power_active'] -%}
+            {%- set since = as_timestamp(act.last_changed, none) if act is not none else none -%}
+            {%- set bt = states('button.ecco_clock_dongle_end_free_power_restore_now') -%}
+            {%- set pressed = as_timestamp(bt, none) -%}
+            {%- if op != 'off' -%}a start or restore is in progress, or it cannot be read (the operation flag reads {{ op }})
+            {%- elif not st.startswith('ACTIVE - VERIFIED OK') -%}the dongle's status is not the verified running one (it reads: {{ st[:100] }})
+            {%- elif eat is none or as_timestamp(eat) <= as_timestamp(now()) -%}the lease's end time is not a time in the future (the ends-at sensor reads: {{ ea[:40] }})
+            {%- elif bt != 'unknown' and pressed is none -%}the End button's last press cannot be read (it reads: {{ bt[:40] }})
+            {%- elif pressed is not none and pressed >= since -%}END FREE POWER - RESTORE NOW was already pressed during this lease
+            {%- endif -%}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ verdict == '' }}"
+            sequence:
+              - action: button.press
+                target:
+                  entity_id: button.ecco_clock_dongle_end_free_power_restore_now
+              - action: persistent_notification.create
+                data:
+                  notification_id: ecco_lease_guard_free_power_ended
+                  title: "ECCO: a Free Power lease was ended by the lease guard (time not trusted)"
+                  message: >-
+                    The lease guard pressed END FREE POWER - RESTORE NOW because binary_sensor.ecco_time_trusted_for_leases has not read on for 5 minutes (it reads
+                    {{ states('binary_sensor.ecco_time_trusted_for_leases') }}) while a Free Power lease was active: the lease ends on the dongle's own NTP time, and that time and Home Assistant's clock
+                    are not shown to agree. THIS PRESS IS THE OPERATOR'S END, the same press as the card's End & Restore Now, which the firmware reads as an operator's explicit retry (pressed while a restore
+                    is owed or blocked it would clear the dongle's operator-decision lockout and its retry backoff); the guard pressed it only because it had verified that the lease was running normally
+                    (status ACTIVE - VERIFIED OK, no start or restore in progress, an end time in the future) and that END had not been pressed in this lease, and it presses at most once per lease. The
+                    dongle now restores the settings it saved before the lease; check the Charge Battery status on the card. The guard only presses the End button: it starts and writes nothing, and it is
+                    soft (it runs in Home Assistant).
+        default:
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_lease_guard_free_power_declined
+              title: "ECCO: the lease guard did NOT end a Free Power lease (it is not a verified running lease)"
+              message: >-
+                The lease guard's condition holds (binary_sensor.ecco_time_trusted_for_leases has not read on for 5 minutes) but it pressed nothing: {{ verdict }}. END FREE POWER - RESTORE NOW is the
+                operator's End: in the firmware the press that retries a restore and clears the operator-decision lockout, so a guard presses it only for a lease it has verified running normally, in
+                which END has not been pressed yet. Look at the Charge Battery status on the card: a lease that is ending, owed or blocked is the dongle's or the operator's to deal with.
+      - delay: "00:01:00"
