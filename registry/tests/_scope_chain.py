@@ -1511,7 +1511,7 @@ EPC4 = Entry(
         _epc4.DIST_REL: "8aa9e1365768cc0999c5c50fce8da9f25d911782785c456365f2539fdd6200f9",
     },
     # _pex.fingerprint(EPC4): hashes its parent ecf1's fingerprint and every declaration above
-    fingerprint="70d283cb01221b0d0696ad7c4e8db3f0cc5a0eaf84c21f0dfb83f4df66ad27cd",
+    fingerprint="8bc6a91946c97a87d6c340c4ccfc3248b749355eb292479ce69b2379374eb44c",
     note="the Energy Actions card bundle rebuilt from the plan-core sources after the Gentle model work (987 hunks: 12 in the controller "
          "model's constants, which the card never calls, and 975 minifier renames); the model stays read only: ZERO firmware, Home "
          "Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
