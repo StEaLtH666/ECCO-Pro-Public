@@ -356,10 +356,32 @@ def local_end_ts(text, zone: ZoneInfo | None = None):
     return found.pop() if len(found) == 1 else None
 
 
-def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | None = None, held_by: str = "unknown", now_ts: float | None = None, zone: ZoneInfo | None = None) -> dict:
+def lease_end_reading(l_end_text, now_ts: float, l_start_ts, zone: ZoneInfo | None = None):
+    """The epoch of the running lease's end text, or None: not readable as ONE instant (see local_end_ts), or an end that lies before now or before the lease start (it cannot be right)."""
+    if l_end_text in (None, "unknown", "unavailable", "none", ""):
+        return None
+    ts = local_end_ts(l_end_text, zone)
+    if ts is not None and not (ts > now_ts and (l_start_ts is None or ts > l_start_ts)):
+        return None
+    return ts
+
+
+def lease_origin(*, running: bool, w_start, w_end, l_start_ts, run_ts, l_end_ts) -> bool:
+    """Did the Export SCHEDULE start the running lease? Inferred, not recorded: the scheduled start script last ran at most ORIGIN_RUN_WINDOW_S before the lease flag turned on (and at most
+    ORIGIN_RUN_TOLERANCE_S after it), the lease turned on no earlier than ORIGIN_WINDOW_START_TOLERANCE_S before the window start, and it ends no later than ORIGIN_WINDOW_END_TOLERANCE_S after the
+    window end."""
+    since_run = (l_start_ts - run_ts) if (l_start_ts is not None and run_ts is not None) else None
+    return bool(running and w_end is not None and since_run is not None and -ORIGIN_RUN_TOLERANCE_S <= since_run <= ORIGIN_RUN_WINDOW_S and l_start_ts >= w_start - ORIGIN_WINDOW_START_TOLERANCE_S
+                and l_end_ts is not None and l_end_ts <= w_end + ORIGIN_WINDOW_END_TOLERANCE_S)
+
+
+def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | None = None, held_by: str = "unknown", now_ts: float | None = None, zone: ZoneInfo | None = None,
+              lease: dict | None = None) -> dict:
     """What the proposal must be for these raw readings (strings or None for a missing entity). `poll_skew_s` is Home Assistant's clock minus the poll text, in seconds (None: the
-    text cannot be read as a time). `capacity_attrs` = (capacity_kwh, capacity_basis) of the battery runtime sensor. `now_ts` is Home Assistant's clock (needed only while the Export
-    schedule's window is open). Returns the state, the blocking codes in their fixed order, the notes' codes and every number (None unless the state is VALID or UNVERIFIED)."""
+    text cannot be read as a time). `capacity_attrs` = (capacity_kwh, capacity_basis) of the battery runtime sensor. `now_ts` is Home Assistant's clock (needed while the Export
+    schedule's window is open and while a lease runs). `lease` = {"end_text", "start_ts", "run_ts"} (the raw end text of the lease, the epoch its flag last changed, the epoch the scheduled
+    start script last ran; each may be None): what tells a lease the SCHEDULE started, whose end bounds the proposal; None says nothing is known of it (a running lease is then bounded by the
+    window alone). Returns the state, the blocking codes in their fixed order, the notes' codes and every number (None unless the state is VALID or UNVERIFIED)."""
     codes: list[str] = []
     soc = num(raw.get(SOC), 0, 100)
     load = num(raw.get(LOAD), 0, PHYSICAL_MAX_W)
@@ -392,15 +414,25 @@ def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | N
     w_start = schedule_start_ts(raw.get(SCH_START), zone)
     w_end = (w_start + win * 60) if (w_start is not None and win is not None) else None
     in_win = w_end is not None and now_ts is not None and w_start <= now_ts < w_end
-    wcap = math.floor((w_end - now_ts + WINDOW_END_ROUNDING_S) / 60) if in_win else None
+    wcap_w = math.floor((w_end - now_ts + WINDOW_END_ROUNDING_S) / 60) if in_win else None
+    # a RUNNING lease: the same count at every render, to the end of the window it runs in (never below 0: after the window end it gets no time, however the next window starts), and for a lease
+    # the SCHEDULE started to the smaller of that and the lease's own latched end (the window captured at its start: a helper edited while it runs cannot move it)
+    running = raw.get(LEASE) == "on"
+    l_end_ts, origin, run_end = None, False, w_end
+    if running and lease is not None and now_ts is not None and w_end is not None:
+        l_end_ts = lease_end_reading(lease.get("end_text"), now_ts, lease.get("start_ts"), zone)
+        origin = lease_origin(running=True, w_start=w_start, w_end=w_end, l_start_ts=lease.get("start_ts"), run_ts=lease.get("run_ts"), l_end_ts=l_end_ts)
+        if origin:
+            run_end = min(w_end, l_end_ts)
+    wcap_r = max(0, math.floor((run_end - now_ts + WINDOW_END_ROUNDING_S) / 60)) if (running and run_end is not None and now_ts is not None) else None
+    wcap = wcap_r if wcap_r is not None else wcap_w
     pceil = num(raw.get(PCEIL), 500, PHYSICAL_MAX_W)
     prov = num(raw.get(PROV), 500, PHYSICAL_MAX_W)
     mx = num(raw.get(MX), 0, PHYSICAL_MAX_W)
     lim = raw.get(LIM) if raw.get(LIM) is not None else "unknown"
     tel = raw.get(TEL) if raw.get(TEL) is not None else "unknown"
     fresh = poll_skew_s is not None and abs(round(poll_skew_s)) <= MAX_TELEMETRY_AGE_S
-    running = raw.get(LEASE) == "on"
-    l_stop_v = num(raw.get(L_STOP), 0, 100)                      # the Stop SOC a RUNNING lease latched: a member of the floor, only while the lease runs
+    l_stop_v = num(raw.get(L_STOP), 0, 100)                     # the Stop SOC a RUNNING lease latched: a member of the floor, only while the lease runs
 
     floor = None
     if stop_s is not None and reserve >= 0:
@@ -489,7 +521,7 @@ def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | N
         "duration": dur if numeric else None, "raw_power": raw_p if numeric else None, "dur_raw": dur_raw if numeric else None,
         "loop_power": lp if numeric else None, "loop_duration": ldur if numeric else None,
         "limited_by": ("PROVEN_LEVEL" if state == "UNVERIFIED" else ("POWER_CEILING" if (numeric and raw_p > pceil) else "")) if numeric else "",
-        "window_end": w_end, "window_cap": wcap,
+        "window_end": w_end, "window_cap": wcap, "run_end": run_end if (running and origin) else None, "run_origin": origin, "run_end_ts": l_end_ts,
         "parsed": {"soc": soc, "load": load, "pv": pv, "grid": grid, "cap": cap, "reserve": reserve, "stop_s": stop_s, "tgt": tgt, "win": win, "pceil": pceil,
                    "prov": prov, "mx": mx, "hold": hold, "w_start": w_start, "w_end": w_end},
     }
@@ -514,16 +546,12 @@ def reference_lease(prop: dict, *, lease: str, l_stop_raw, l_exp_raw, l_cmd_raw,
     numeric = prop["state"] in ("VALID", "UNVERIFIED")
     floor, net, p, lp = prop["floor"], prop["net"], prop["power"], prop["loop_power"]
     l_stop, l_exp, l_cmd = num(l_stop_raw, 0, 100), num(l_exp_raw, 0, PHYSICAL_MAX_W), num(l_cmd_raw, 0, PHYSICAL_MAX_W)
-    l_end_ts = local_end_ts(l_end_text, zone) if l_end_text not in (None, "unknown", "unavailable", "none", "") else None
-    if l_end_ts is not None and not (l_end_ts > now_ts and (l_start_ts is None or l_end_ts > l_start_ts)):
-        l_end_ts = None                                          # an end that lies before now or before the lease start cannot be right
+    l_end_ts = lease_end_reading(l_end_text, now_ts, l_start_ts, zone)      # an end that lies before now or before the lease start cannot be right
     lp_end = (now_ts + prop["loop_duration"] * 60) if (numeric and prop["loop_duration"] is not None) else None
     age = (now_ts - l_start_ts) if l_start_ts is not None else None
     on = lease == "on"
-    since_run = (l_start_ts - run_ts) if (l_start_ts is not None and run_ts is not None) else None
     w_start, w_end = parsed["w_start"], parsed["w_end"]
-    origin = bool(on and w_end is not None and since_run is not None and -ORIGIN_RUN_TOLERANCE_S <= since_run <= ORIGIN_RUN_WINDOW_S and l_start_ts >= w_start - ORIGIN_WINDOW_START_TOLERANCE_S
-                  and l_end_ts is not None and l_end_ts <= w_end + ORIGIN_WINDOW_END_TOLERANCE_S)
+    origin = lease_origin(running=on, w_start=w_start, w_end=w_end, l_start_ts=l_start_ts, run_ts=run_ts, l_end_ts=l_end_ts)
     cmp_ok = numeric and origin                                  # a difference against the schedule's numbers only for a lease the schedule started
     d_stop = (floor - l_stop) if (cmp_ok and l_stop is not None) else None
     d_exp = (net - l_exp) if (cmp_ok and l_exp is not None) else None

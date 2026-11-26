@@ -23,11 +23,14 @@ INDEPENDENT reference of the rules written from the specification. Nothing was i
                   number while it is not VALID or UNVERIFIED
   [4] shadow      while a lease runs: the comparison and the re-target for a lease the schedule started (the 30 minute rules, the deadbands, the memory of the previous would-change and its age
                   across a template reload and a restart, the four spellings of `this`, a clock that moved, a previous would-change in the future), a lease the schedule did not start, the
-                  window-limited, late-start, 60 minute manual and full-window leases, END NOW, an end time in a skipped or a repeated hour, the churn of the published states; against the reference
+                  window-limited, late-start, 60 minute manual and full-window leases, END NOW, an end time in a skipped or a repeated hour, the churn of the published states; the TAIL OF
+                  THE WINDOW (a run pressed in the first 20 s of its window rendered at every second to its own end, a lease that ends 100 s after the window end) and the schedule's helpers edited while
+                  a lease runs: a running lease gets no time past its window and a lease the schedule started none past its own end plus the schedule's 20 s, at every render; against the reference
   [5] lookups     the model not updating, the model unreadable: every lookup withholds everything; every attribute reads its own key
   [6] plan        the REAL plan helper package feeding the coordinator (a Hold battery, Skip tonight, Prepare for power cut, a reserve that rises), also during a lease
   [7] vocabulary  no service call was ever made by any world above
-  [8] mutation    in-memory mutants of the package (every comparison, clamp, ordering, default, availability guard and the forecast ban, the window, the origin, the memory, END NOW), each caught
+  [8] mutation    in-memory mutants of the package (every comparison, clamp, ordering, default, availability guard and the forecast ban, the window, the bound of a running lease, the origin, the memory, END NOW),
+                  each caught
   [9] documents   the manifest, the README and the CHANGELOG say the same
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
@@ -120,9 +123,10 @@ CONSTANT_PINS = (("MAX_TELEMETRY_AGE_S = 90", "<= 90"), ("DONGLE_STOP_SOC_MIN = 
                  ("DISCHARGE_EFFICIENCY = 0.90", "* cap * 0.90"), ("SOC_MARGIN_POINTS = 1", "soc - floor - 1"), ("MIN_COMMAND_W = 500", "[p, 500] | max"),
                  ("MIN_COMMAND_W = 500", "[lp, 500] | max"), ("MIN_COMMAND_W = 500", "(surplus + 500) > nstart"),
                  ("EXPORT_HEADROOM", "[100, 0.03 * mx]"), ("MIN_TARGET_W = 500", "net < 500"), ("MIN_DURATION_MIN = 10", "dur < 10"),
-                 ("INFEASIBLE_LOW_DEADBAND_W = 150", "raw_p < -150"), ("WINDOW_END_ROUNDING_S = 20", "(w_end - now_ts + 20) / 60"),
+                 ("INFEASIBLE_LOW_DEADBAND_W = 150", "raw_p < -150"), ("WINDOW_END_ROUNDING_S = 20", "(w_end - now_ts + 20) / 60"), ("WINDOW_END_ROUNDING_S = 20", "(run_end - now_ts + 20) / 60"),
                  ("RETARGET_MIN_AGE_S = 1800", "age < 1800"), ("RETARGET_MIN_GAP_S = 1800", "(now_ts - prev_entry) < 1800"), ("RETARGET_MIN_GAP_S = 1800", "mem_age < 1800)"),
                  ("RETARGET_STOP_DEADBAND = 1", "d_stop >= 1"), ("RETARGET_EXPORT_DEADBAND_W = 200", "(d_exp | abs) >= 200"), ("RETARGET_END_DEADBAND_MIN = 20", "d_end >= 20"),
+                 ("RETARGET_END_DEADBAND_MIN = 20", "dev_stop or dev_exp or dev_end"),     # the END rule cannot fire for a lease the schedule started (its end is bounded): the pins keep it, behaviour cannot reach it
                  ("ORIGIN_RUN_WINDOW_S = 900", "since_run <= 900"), ("ORIGIN_RUN_TOLERANCE_S = 10", "since_run >= -10"), ("ORIGIN_WINDOW_START_TOLERANCE_S = 60", "l_start_ts >= w_start - 60"),
                  ("ORIGIN_WINDOW_END_TOLERANCE_S = 120", "l_end_ts <= w_end + 120"), ("PHYSICAL_MAX_W = 30000", "0, 30000)"),
                  ("MODEL_MAX_AGE_S = 180", "age <= 180"), ("MODEL_MAX_AGE_S = 180", "(now_ts - pm_eval) <= 180"))
@@ -138,7 +142,9 @@ HEADER_PINS = ("NOT INSTALLED, NOT LIVE-PROVEN", "READ-ONLY SHADOW", "no automat
                "Install ONLY with NO Dump to Grid or Free Power lease running", "OUTSIDE any armed scheduled Export or charge run", "window end plus 10 minutes",
                "re-creates EVERY template entity", "Exclude sensor.ecco_export_coordinator_model from the recorder", "is NOT established", "NOT a bound at every power",
                "An UNKNOWN re-target lists no changes", "No attribute carries a time that moves with the clock", "except as the latched value of a RUNNING lease", "LEASE_STOP_SOC_UNREADABLE",
-               "FLOOR_FROM_RUNNING_LEASE")
+               "FLOOR_FROM_RUNNING_LEASE", "WHILE A LEASE RUNS the same bound holds at EVERY render", "a running lease gets no time past the end of the window it runs in",
+               "min(window end, the lease's own latched end) + 20 s", "editing the schedule's duration or start helper while it runs cannot move it later", "can only KEEP the end or SHORTEN it, never move it later",
+               "THE END RULE NEVER FIRES")
 
 
 # ===========================================================================================================================
@@ -412,6 +418,19 @@ def anchors(text: str | None = None) -> list[str]:
         bad.append(f"5 minutes left: the cause names the window: {w.attr(X.PROPOSAL, 'blocked_by')} {w.attr(X.PROPOSAL, 'reasons')}")
     expect("before the window a start at its own time may run the whole energy", {X.SCH_START: started_ago(-600)}, "VALID", duration="166")
     expect("after the window the next one will", {X.SCH_START: started_ago(14401)}, "VALID", duration="166")
+    # a lease that RUNS: the same bound at every render, and after the window end it gets no time (the next window is for the next start, not for a run still going)
+    expect("a lease running before its window opens: the whole length, as for a start at the window's own time", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(-600)}, "VALID", duration="166")
+    expect("a lease running inside the window: the time left (140 minutes), as for a start", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(100 * 60)}, "VALID", duration="140")
+    for after, label in ((14400, "at the window end"), (14419, "19 s after the window end (the schedule's own 20 s still count 0 minutes)"), (14421, "21 s after the window end"), (14401, "1 s after the window end"),
+                         (14400 + 3600, "an hour after the window end"), (14400 + 86400, "a day after the window end")):
+        w = expect(f"a lease still running {label}: it gets no time (not the next window's 166 minutes): INVALID", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(after)}, "INVALID",
+                   floor="unavailable", energy="unavailable", power="unavailable", net="unavailable", duration="unavailable")
+        if w.attr(X.PROPOSAL, "blocked_by") != ["BELOW_MINIMUM_DURATION"] or not any("the proposed duration is 0 minutes" in r and "the window the running lease is authorised for leaves 0 minutes" in r
+                                                                                     for r in (w.attr(X.PROPOSAL, "reasons") or [])):
+            bad.append(f"a lease still running {label}: the cause names the window it runs in and 0 minutes: {w.attr(X.PROPOSAL, 'blocked_by')} {w.attr(X.PROPOSAL, 'reasons')}")
+    expect("a lease that does not run (the flag off) after the window end: the next window's proposal", {X.LEASE: "off", X.SCH_START: started_ago(14401)}, "VALID", duration="166")
+    expect("a lease flag that cannot be read after the window end is not a running lease: the next window's proposal (the re-target says it cannot tell)", {X.LEASE: "unavailable", X.SCH_START: started_ago(14401)}, "VALID",
+           duration="166")
     w = expect("an unreadable window start", {X.SCH_START: "unknown"}, "INVALID")
     if w.attr(X.PROPOSAL, "blocked_by") != ["SCHEDULE_START_UNREADABLE"]:
         bad.append(f"the unreadable window start: {w.attr(X.PROPOSAL, 'blocked_by')}")
@@ -524,6 +543,8 @@ def property_problems(w: X.CoordWorld, over: dict, capm: "tuple | None" = None) 
             if ws <= w.now_ts() < we:
                 if dur > math.floor((we - w.now_ts() + 20) / 60) or w.now_ts() + dur * 60 > we + 20 + 1e-6:
                     bad.append(f"the duration {dur} ends after the window end {we} (now {w.now_ts()})")
+            if raw.get(X.LEASE) == "on" and w.now_ts() >= we:
+                bad.append(f"a proposal is {st} while a lease still runs after the window end {we} (now {w.now_ts()}): a running lease gets no time past its window")
         # the loop figures: what the dongle's own loop would do, never below the proposal's power, never above its ceiling
         lp, ld = w.attr(X.PROPOSAL, "loop_battery_power_w"), w.attr(X.PROPOSAL, "loop_duration_min")
         if lp is None or ld is None or lp > val(X.PCEIL) or lp < power or ld < 0 or ld > val(X.WIN) or (st == "VALID" and (lp != power or ld != dur)):
@@ -595,6 +616,39 @@ def lease_state(w: X.CoordWorld) -> dict:
 
 def reasons_have(st: dict, code: str) -> bool:
     return any(r.startswith(code + ":") for r in (st["reasons"] or []))
+
+
+END_SLACK_S = 21.0     # the schedule's own 20 s rounding of the time left in its window, and a second for the whole-second window end the model publishes
+
+
+def run_end_problems(w: X.CoordWorld, label: str = "") -> list[str]:
+    """The property of EVERY render while a lease runs, read from what the template published (no reference involved). A VALID or UNVERIFIED proposal never ends (now plus its duration, and now plus the
+    loop's duration) after the window end plus the schedule's own 20 s, and for a lease the schedule started never after the lease's own latched end plus 20 s either; nothing is VALID or UNVERIFIED after the
+    window end while the lease still runs; and a lease the schedule started is never listed an END change (its proposed end cannot be later than its own end, so the END rule cannot fire for it)."""
+    bad: list[str] = []
+    if w.errors:
+        bad.append(f"{label}: template errors {w.errors[:2]}")
+    if w.state(X.LEASE) != "on":
+        return bad
+    now = w.now_ts()
+    scheduled = w.attr(X.RETARGET, "lease_origin") == "SCHEDULE"
+    if scheduled and any(str(c).startswith("END ") for c in (w.attr(X.RETARGET, "changes") or [])):
+        bad.append(f"{label}: a lease the schedule started is listed an END change {w.attr(X.RETARGET, 'changes')}")
+    if w.state(X.PROPOSAL) not in ("VALID", "UNVERIFIED"):
+        return bad
+    we, own = w.attr(X.PROPOSAL, "window_end_ts"), w.attr(X.COMPARE, "end_lease_ts")
+    try:
+        ends = {"proposal": now + float(w.state(X.P_DUR)) * 60, "loop": now + float(w.attr(X.PROPOSAL, "loop_duration_min")) * 60}
+    except (TypeError, ValueError):
+        return bad + [f"{label}: a {w.state(X.PROPOSAL)} proposal without a duration while a lease runs"]
+    for name, end in ends.items():
+        if we is None or end > we + END_SLACK_S:
+            bad.append(f"{label}: the {name} ends {end - (we or 0):+.0f} s from the window end while a lease runs (limit +20 s)")
+        if scheduled and (own is None or end > own + END_SLACK_S):
+            bad.append(f"{label}: the {name} ends {end - (own or 0):+.0f} s from the end of the lease the schedule started (limit +20 s)")
+    if we is not None and now >= we:
+        bad.append(f"{label}: a {w.state(X.PROPOSAL)} proposal {now - we:+.0f} s from the window end while the lease still runs: it gets no time")
+    return bad
 
 
 STOP50 = {X.STOP_S: "50.0"}      # the floor is 50 (above the reserve 40): a lease latched at 49, 50 or 51 is not under the lease guard's reserve rule
@@ -731,8 +785,12 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
     case("the target export 200 W off", 50, 2800, 190, "ALLOWED")
     case("the target export 200 W the other way", 50, 3200, 190, "ALLOWED")
     case("the target export 100 W off is no deviation", 50, 2900, 190, "NO CHANGE")
-    case("the energy lasts 20 minutes beyond the lease", 50, 3000, 103, "ALLOWED")
+    # the END rule never fires for a lease the schedule started: its proposed end is bounded by its own latched end plus the schedule's 20 s (a lease is never extended beyond the window it was authorised
+    # for), which is far below the 20 minute deadband; the rule stays as a second line and its mutants are killed by the literal pins, no behaviour reaches it
+    case("the energy lasts 20 minutes beyond the lease: no END beyond the run's own end is proposed", 50, 3000, 103, "NO CHANGE")
     case("the energy lasts 19 minutes beyond the lease", 50, 3000, 104, "NO CHANGE")
+    case("the energy lasts two hours beyond the lease: still no END beyond the run's own end", 50, 3000, 3, "UNKNOWN")
+    case("the energy lasts an hour beyond the lease", 50, 3000, 63, "NO CHANGE")
     case("the lease outlasting the energy by an hour is no deviation", 50, 3000, 183, "NO CHANGE")
     # the lease facts that cannot be read
     for label, over_l, code in (("the latched Stop SOC", {X.L_STOP: "unknown"}, "PROPOSAL_NOT_VALID"), ("the latched target", {X.L_EXP: "unavailable"}, "LEASE_FACTS_UNREADABLE"),
@@ -757,7 +815,9 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
     w4.sched_lease_on(stop=49, export=3000, command=3500, age_min=45)
     w4.bulk({X.L_END: w4.local_text(w4.now_ts() + 1)})
     s4 = lease_state(w4)
-    expect("an end time a second ahead is read", s4["rt"] != "UNKNOWN" and s4["cmp_attrs"].get("end_lease_ts") == w4.now_ts() + 1, f"{s4['rt']} {s4['cmp_attrs'].get('end_lease_ts')}")
+    expect("an end time a second ahead is read (the lease has no time left to propose: the proposal is INVALID, the re-target UNKNOWN for that reason and not for an unreadable fact)",
+           s4["cmp_attrs"].get("end_lease_ts") == w4.now_ts() + 1 and s4["origin"] == "SCHEDULE" and s4["proposal"] == "INVALID" and s4["rt"] == "UNKNOWN" and reasons_have(s4, "PROPOSAL_NOT_VALID")
+           and not reasons_have(s4, "LEASE_FACTS_UNREADABLE"), f"{s4['rt']} {s4['cmp_attrs'].get('end_lease_ts')} {s4['reasons']}")
     w4 = lease_world(text, over=STOP50)
     w4.sched_lease_on(stop=49, export=3000, command=3500, age_min=45)
     w4.bulk({X.L_END: w4.local_text(w4.now_ts() - 2700 - 1)})     # one second before the lease started (and before now)
@@ -800,15 +860,17 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
            and ca.get("battery_w_loop") == 3800 and ca.get("battery_w_commanded") == 3500.0 and ca.get("battery_w_difference") == 300.0 and ca.get("battery_w_loop_difference") == 300.0
            and ca.get("end_difference_min") == -72 and ca.get("end_lease_ts") == w8.now_ts() + 11695, str(ca))
     # the comparison and the re-target of an UNVERIFIED proposal: the live-like limits. The re-target is UNKNOWN with no change listed (it was a list that said END + 127 minutes); the comparison shows the
-    # loop: 4656 W expected against the 4600 W commanded, and the END difference is the loop's (118 minutes), not the clamp's (183 minutes)
+    # loop: 4656 W expected against the 4600 W commanded, and the END difference is the loop's (118 minutes: 77 minutes short of the lease's end at the window end), not the clamp's (183 minutes: 12 short).
+    # The lease latched an export target 300 W below the proposal's, which is what makes the comparison DIFFER
     live = {X.PCEIL: "8000.0", X.PROV: "3000.0", X.LOAD: "1656.0", X.SOC: "60.0", X.STOP_S: "25.0", X.RESERVE: "25"}
     w9 = lease_world(text, over=live)
-    w9.sched_lease_on(stop=25, export=3000, command=4600, age_min=45, ends_in_min=60)
+    w9.sched_lease_on(stop=25, export=2700, command=4600, age_min=45)
     s9 = lease_state(w9)
     ca = s9["cmp_attrs"]
     expect("an UNVERIFIED proposal: the re-target is UNKNOWN with no change listed", s9["rt"] == "UNKNOWN" and s9["proposal"] == "UNVERIFIED" and reasons_have(s9, "PROPOSAL_NOT_VALID") and s9["changes"] == [], f"{s9['rt']} {s9['changes']}")
     expect("an UNVERIFIED proposal: the comparison shows how the live loop compares (the loop's power and END, and the clamp)", s9["cmp"] == "DIFFERS" and ca.get("battery_w_proposed") == 3000 and ca.get("battery_w_loop") == 4656
-           and ca.get("battery_w_commanded") == 4600.0 and ca.get("battery_w_difference") == -1600.0 and ca.get("battery_w_loop_difference") == 56.0 and ca.get("end_difference_min") == 58, str(ca))
+           and ca.get("battery_w_commanded") == 4600.0 and ca.get("battery_w_difference") == -1600.0 and ca.get("battery_w_loop_difference") == 56.0 and ca.get("export_w_difference") == 300.0
+           and ca.get("end_difference_min") == -77, str(ca))
     # ---- F1: the schedule's own window bounds the proposal and the re-target ---------------------------------------------------------------------------------------
     p1 = {X.STOP_S: "25.0", X.RESERVE: "25", X.SOC: "93.0"}               # plenty of energy: 67 points x 0.30 x 0.90 = 18.09 kWh = 285 minutes at 3800 W
     for label, win, age, want_dur in (("a full-window lease 35 minutes in", 240, 35, 205), ("the same lease 90 minutes in", 240, 90, 150), ("a 120 minute window, 31 minutes in", 120, 31, 89),
@@ -871,13 +933,27 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
     so = lease_state(wo)
     expect("the owner shortened the window while the lease ran (it ends 35 minutes after the window end): not the schedule's lease any more", so["origin"] == "OTHER" and so["rt"] == "UNKNOWN"
            and reasons_have(so, "LEASE_ORIGIN_UNKNOWN"), f"{so['origin']} {so['rt']} {so['reasons']}")
-    # the owner raised the window while the lease ran (it ends 100 minutes before the window end): the energy lasts beyond the lease, inside the window: an END re-target is allowed, never beyond the window
+    # the owner raised the window while the lease ran (it ends 135 minutes before the window end) and the energy lasts beyond the lease: the run was authorised for ITS window, the one captured at its start
+    # (its own latched end), so no END beyond that end is proposed, only the 20 s the schedule rounds by; the re-target keeps the end (RC2 of the second review)
     wo = lease_world(text, over={**p1})
     wo.sched_lease_on(stop=25, export=3000, command=3800, age_min=45, ends_in_min=60)
     so = lease_state(wo)
-    win_end = wo.attr(X.PROPOSAL, "window_end_ts")
-    expect("a lease that ends before the window end and the energy lasts beyond it: ALLOWED, the END is inside the window", so["rt"] == "ALLOWED" and any(c.startswith("END ") for c in so["changes"]) and so["origin"] == "SCHEDULE"
-           and wo.now_ts() + wo.attr(X.PROPOSAL, "loop_duration_min") * 60 <= win_end + 20, f"{so['rt']} {so['changes']}")
+    own_end = wo.attr(X.COMPARE, "end_lease_ts")
+    expect("a lease that ends before the window end and the energy lasts beyond it: NO CHANGE, the proposed end is the lease's own end (never later than it plus the schedule's 20 s)",
+           so["rt"] == "NO CHANGE" and so["cmp"] == "IN LINE" and so["changes"] == [] and so["origin"] == "SCHEDULE" and wo.state(X.P_DUR) == "60" and wo.attr(X.PROPOSAL, "loop_duration_min") == 60
+           and own_end == wo.now_ts() + 3600 and wo.now_ts() + 60 * 60 <= own_end + 20 and not wo.errors, f"{so['rt']} {so['cmp']} {so['changes']} {wo.state(X.P_DUR)} {wo.attr(X.PROPOSAL, 'loop_duration_min')}")
+    # the same lease after the owner edits the duration or the start helper (the schedule disarms after its start, so the card lets the owner edit them for the next night): nothing moves the bound (RC2)
+    for label, edit, want_dur, want_origin in (("the duration raised to 240", {X.WIN: "240.0"}, "20", "SCHEDULE"), ("the duration raised to 61", {X.WIN: "61.0"}, "20", "SCHEDULE")):
+        we2 = lease_world(text, over={**p1, X.WIN: "60.0"})
+        we2.sched_lease_on(stop=25, export=3000, command=3800, age_min=40, window_min=60)
+        before = lease_state(we2)
+        we2.bulk(edit)
+        we2.set_memory_age(7200)
+        we2.force()
+        after = lease_state(we2)
+        expect(f"a scheduled lease 40 minutes into its 60 minute window, then {label}: it stays in line, its end is its own", before["rt"] == "NO CHANGE" and before["cmp"] == "IN LINE" and after["rt"] == "NO CHANGE"
+               and after["cmp"] == "IN LINE" and after["changes"] == [] and after["origin"] == want_origin and we2.state(X.P_DUR) == want_dur and not run_end_problems(we2, label),
+               f"{before['rt']} {after['rt']} {after['cmp']} {after['changes']} {after['origin']} {we2.state(X.P_DUR)} {run_end_problems(we2, label)}")
     # ---- F5: END NOW (the lease guard's rule), outside the 30 minute rules --------------------------------------------------------------------------------------
     def end_case(label: str, want: str, *, over=None, stop=30, age_min=10.0, scheduled=True, after=None, code=None):
         we = lease_world(text, over=over)
@@ -980,37 +1056,230 @@ def dst_problems(text: str | None = None) -> list[str]:
     return bad
 
 
-def lease_sweep_problems(n: int, seed: int, text: str | None = None, first_only: bool = False) -> list[str]:
+def tail_problems(text: str | None = None, first_only: bool = False) -> list[str]:
+    """THE TAIL OF THE WINDOW and the schedule's helpers edited while a lease runs (RC1 and RC2 of the second review of N3).
+
+    RC1. The schedule fixes a run's end at its start plus its length, so a run pressed in the first 20 s of its window ends up to 20 s AFTER the window end, and the lease still runs in the seconds between
+    the window end and its own end. A running lease gets no time past the end of the window it runs in (a re-target never moves its END beyond the window): at every second from a minute before the window end
+    to the lease's own end the proposal is INVALID (no start fits), the re-target UNKNOWN with no change listed, and no render ends past the window end plus 20 s; the lease ends, and the next window's
+    proposal is back. The same for a lease that ends 100 s after the window end (inside the origin's 120 s tolerance), rendered every 10 s from half an hour before it, and for a lease the schedule did not start.
+    RC2. A lease the schedule started is bounded by its OWN latched end (the window captured at its start): editing the duration or the start helper during the lease (the schedule disarms after its start, so the
+    card lets the owner edit them for the next night) cannot move the bound. Every edit, rendered, against what it must give."""
+    bad: list[str] = []
+    p1 = {X.STOP_S: "25.0", X.RESERVE: "25", X.SOC: "93.0"}      # 285 minutes of energy at 3800 W: only the window and the lease's own end can limit a proposal
+
+    def expect(label: str, cond: bool, detail: str = "") -> None:
+        if not cond:
+            bad.append(f"{label}: {detail}")
+
+    # (a) a run pressed in the first 20 s of its window, rendered at EVERY SECOND from 70 s before the window end to its own end: the proposal gives it no time, the re-target changes nothing
+    for win_min in (60, 240):
+        for press in (0, 10, 20):
+            staged = 60 * math.floor((win_min * 60 - press + 20) / 60)              # what the schedule stages: min(length, floor((time left + 20 s) / 60 s)) minutes
+            w = lease_world(text, over={**p1, X.WIN: str(float(win_min))})
+            age_s = win_min * 60 - press - 70                                       # the window ends 70 s from now
+            lease_end = w.now_ts() - age_s + staged                                 # the lease ends `press` s after the window end
+            w.sched_lease_on(stop=25, export=3000, command=3800, age_min=age_s / 60, window_min=win_min, start_gap_s=press, run_gap_s=3.0, ends_text=w.local_text(lease_end))
+            w.set_memory_age(7200)
+            w.force()
+            w_end = w.attr(X.PROPOSAL, "window_end_ts")
+            for k in range(0, int(lease_end - w.now_ts()) + 7):
+                if k:
+                    w.advance(1)
+                if w.now_ts() >= lease_end:
+                    w.lease_off()
+                else:
+                    w.force()
+                rel = w.now_ts() - w_end
+                lbl = f"a {win_min} minute window, the run pressed {press} s into it, {rel:+.0f} s from the window end"
+                bad += run_end_problems(w, lbl)
+                s = lease_state(w)
+                if w.state(X.LEASE) == "on":
+                    expect(f"{lbl}: the lease still runs and gets no time", s["proposal"] == "INVALID" and w.attr(X.PROPOSAL, "blocked_by") == ["BELOW_MINIMUM_DURATION"] and s["rt"] == "UNKNOWN"
+                           and s["changes"] == [] and s["origin"] == "SCHEDULE" and s["cmp"] == "UNKNOWN", f"{s['proposal']} {w.attr(X.PROPOSAL, 'blocked_by')} {s['rt']} {s['changes']} {s['origin']} {s['cmp']}")
+                else:
+                    expect(f"{lbl}: the lease is over, the next window's proposal is back", s["rt"] == "NOT RUNNING" and s["proposal"] == "VALID" and w.state(X.P_DUR) == str(min(285, win_min)),
+                           f"{s['rt']} {s['proposal']} {w.state(X.P_DUR)}")
+            if bad and first_only:
+                return bad
+    # (b) a lease that ends 100 s after the window end (the origin tolerates 120 s): in the window the proposed end is the WINDOW's, not the lease's later one; after the window end it gets no time, and the text says 0
+    w = lease_world(text, over={**p1, X.WIN: "60.0"})
+    age_s = 60 * 60 - 5 - 1800                                                      # the window ends in half an hour
+    lease_end = w.now_ts() - age_s + 3600 + 100 - 5
+    w.sched_lease_on(stop=25, export=3000, command=3800, age_min=age_s / 60, window_min=60, start_gap_s=5, ends_text=w.local_text(lease_end))
+    w.set_memory_age(7200)
+    w.force()
+    w_end = w.attr(X.PROPOSAL, "window_end_ts")
+    seen = set()
+    while w.now_ts() < lease_end + 10:
+        if w.now_ts() >= lease_end:
+            w.lease_off()
+        else:
+            w.force()
+        rel = w.now_ts() - w_end
+        lbl = f"a lease ending 100 s after the window end, {rel:+.0f} s from the window end"
+        bad += run_end_problems(w, lbl)
+        s = lease_state(w)
+        seen.add((s["proposal"], s["rt"]))
+        if w.state(X.LEASE) == "on" and rel > 20:
+            reasons = " ".join(w.attr(X.PROPOSAL, "reasons") or [])
+            expect(f"{lbl}: more than the schedule's 20 s past the window end the time left is 0, never a negative number", s["proposal"] == "INVALID" and "the window the running lease is authorised for leaves 0 minutes" in reasons
+                   and "the proposed duration is 0 minutes" in reasons, reasons[:200])
+        if w.state(X.LEASE) == "on" and rel < -660:
+            expect(f"{lbl}: inside the window the end is the window's: the duration is the time left (the lease's later end counts for nothing)", s["proposal"] == "VALID"
+                   and w.state(X.P_DUR) == str(math.floor((w_end - w.now_ts() + 20) / 60)) and s["rt"] == "NO CHANGE", f"{s['proposal']} {w.state(X.P_DUR)} {s['rt']}")
+        w.advance(10)
+    expect("a lease ending 100 s after the window end: valid inside the window, INVALID to its end, then the next window's proposal", ("VALID", "NO CHANGE") in seen and ("INVALID", "UNKNOWN") in seen and ("VALID", "NOT RUNNING") in seen, str(sorted(seen)))
+    if bad and first_only:
+        return bad
+    # (c) the helpers edited while the lease runs (RC2): a lease the schedule started, 40 minutes into its 60 minute window (it ends in 1195 s, the window with it), then each edit
+    day = 86400
+    edits = (("the duration raised to 240", lambda w, ws: w.bulk({X.WIN: "240.0"}), "SCHEDULE", "VALID", "20"),
+             ("the duration raised to 61", lambda w, ws: w.bulk({X.WIN: "61.0"}), "SCHEDULE", "VALID", "20"),
+             ("the duration lowered to 45 (the window now ends 295 s from now: the lease no longer fits it)", lambda w, ws: w.bulk({X.WIN: "45.0"}), "OTHER", "INVALID", "unavailable"),
+             ("the start moved 1 minute earlier (the window ends a minute before the lease: the smaller bound)", lambda w, ws: w.schedule_window(ws - 60), "SCHEDULE", "VALID", "19"),
+             ("the start moved 3 minutes earlier (the lease no longer fits the window)", lambda w, ws: w.schedule_window(ws - 180), "OTHER", "VALID", "17"),
+             ("the start moved half an hour earlier (the window is over, the lease runs on)", lambda w, ws: w.schedule_window(ws - 1800), "OTHER", "INVALID", "unavailable"),
+             ("the start moved 1 minute later", lambda w, ws: w.schedule_window(ws + 60), "SCHEDULE", "VALID", "20"),
+             ("the start moved half an hour later (the lease began before this window)", lambda w, ws: w.schedule_window(ws + 1800), "OTHER", "VALID", "50"),
+             ("the start moved to tomorrow (arming the next night)", lambda w, ws: w.schedule_window(ws + day), "OTHER", "VALID", "60"),
+             ("the start moved to yesterday", lambda w, ws: w.schedule_window(ws - day), "OTHER", "INVALID", "unavailable"),
+             ("the duration raised to 240 and the start moved 1 minute later", lambda w, ws: (w.schedule_window(ws + 60), w.bulk({X.WIN: "240.0"})), "SCHEDULE", "VALID", "20"),
+             ("the start moved tomorrow and the duration raised to 240", lambda w, ws: (w.schedule_window(ws + day), w.bulk({X.WIN: "240.0"})), "OTHER", "VALID", "240"))
+    for label, edit, want_origin, want_prop, want_dur in edits:
+        w = lease_world(text, over={**p1, X.WIN: "60.0"})
+        w.sched_lease_on(stop=25, export=3000, command=3800, age_min=40, window_min=60)
+        ws = w.now_ts() - 40 * 60 - 5
+        s0 = lease_state(w)
+        expect(f"a scheduled lease 40 minutes into its window: in line before the edit ({label})", s0["rt"] == "NO CHANGE" and s0["cmp"] == "IN LINE" and s0["origin"] == "SCHEDULE" and w.state(X.P_DUR) == "20",
+               f"{s0['rt']} {s0['cmp']} {s0['origin']} {w.state(X.P_DUR)}")
+        edit(w, ws)
+        w.set_memory_age(7200)
+        w.force()
+        s = lease_state(w)
+        lbl = f"a scheduled lease, {label}"
+        bad += run_end_problems(w, lbl)
+        expect(f"{lbl}: origin {want_origin}, the proposal {want_prop}, the duration {want_dur}, no END change, never ALLOWED", s["origin"] == want_origin and s["proposal"] == want_prop and w.state(X.P_DUR) == want_dur
+               and s["rt"] != "ALLOWED" and not any(c.startswith("END ") for c in s["changes"]) and (want_origin == "SCHEDULE" or s["rt"] == "UNKNOWN"),
+               f"{s['origin']} {s['proposal']} {w.state(X.P_DUR)} {s['rt']} {s['changes']}")
+        if bad and first_only:
+            return bad
+    # (d) a lease the schedule did not start, running through the window end: it gets no time either
+    w = lease_world(text, over={**p1, X.WIN: "60.0"})
+    w.lease_on(stop=25, export=3000, command=3800, ends_in_min=120, age_min=20)
+    w.schedule_window(w.now_ts() - 55 * 60, 60.0)
+    w.force()
+    w_end = w.attr(X.PROPOSAL, "window_end_ts")
+    for k in range(0, 24):
+        w.advance(30)
+        w.force()
+        rel = w.now_ts() - w_end
+        lbl = f"a manual lease through the window end, {rel:+.0f} s from the window end"
+        bad += run_end_problems(w, lbl)
+        s = lease_state(w)
+        expect(f"{lbl}: not the schedule's lease: UNKNOWN, no change, and after the window end no time", s["origin"] == "OTHER" and s["rt"] == "UNKNOWN" and s["changes"] == [] and (rel < 0 or s["proposal"] == "INVALID"),
+               f"{s['origin']} {s['rt']} {s['changes']} {s['proposal']}")
+    if bad and first_only:
+        return bad
+    # (e) a whole run in real time, polled every 10 s (a 60 minute window, the run pressed 15 s into it, in line all the way): NO CHANGE until the last 10 minutes, then UNKNOWN to its end, never ALLOWED
+    w = lease_world(text, over={**p1, X.WIN: "60.0"})
+    w.sched_lease_on(stop=25, export=3000, command=3800, age_min=0.0, window_min=60, start_gap_s=15, ends_in_min=60)
+    lease_end = w.now_ts() + 3600
+    w_end = w.attr(X.PROPOSAL, "window_end_ts")
+    seen = {}
+    while w.now_ts() < lease_end:
+        w.advance(10)
+        if w.now_ts() >= lease_end:
+            w.lease_off()
+        else:
+            rt = lease_state(w)["rt"]
+            seen[rt] = seen.get(rt, 0) + 1
+            bad += run_end_problems(w, f"a whole run, {w.now_ts() - w_end:+.0f} s from the window end")
+    s = lease_state(w)
+    expect("a whole run in real time: in line (NO CHANGE) until the last minutes, UNKNOWN to its end, never WAIT or ALLOWED; then NOT RUNNING and the next window's proposal", set(seen) == {"NO CHANGE", "UNKNOWN"}
+           and s["rt"] == "NOT RUNNING" and s["proposal"] == "VALID" and not w.errors, f"{seen} {s['rt']} {s['proposal']} {w.errors[:2]}")
+    return bad
+
+
+def lease_sweep_problems(n: int, seed: int, text: str | None = None, first_only: bool = False, scheduled: bool = False) -> list[str]:
     """Random lease worlds against the reference, in fresh worlds: what started the lease (the start script, the window, the end), its age, the latched values, the hold and the reserve, the memory
-    (its age, when it was last evaluated, the previous would-change and re-target state) and the four spellings of `this`. The facts are set, the memory is written, and ONE final render is compared."""
+    (its age, when it was last evaluated, the previous would-change and re-target state) and the four spellings of `this`. The facts are set, the memory is written, and ONE final render is compared:
+    the re-target, the comparison and the PROPOSAL (a running lease's bound is in it), and the property of every render while a lease runs.
+    `scheduled`: almost every lease is the schedule's own, at a random moment of its window or of the seconds after it (the tail), its end as the schedule stages it or a little off it, and the
+    schedule's duration or start helper sometimes edited while it runs."""
     rng = random.Random(seed)
     bad: list[str] = []
     for i in range(n):
         mode = rng.choice(["ha", "ha", "ha", "first-none", "none", "undefined"])
-        soc = float(rng.randint(41, 100))
-        hold = rng.choice(["clear"] * 7 + ["held", "unknown"])
-        reserve = rng.choice(["40", "40", "40", "30", "62", "45.5", "unknown", "nan"])
-        stop_s = rng.choice(["25.0", "25.0", "50.0", "35.0"])
-        win = rng.choice([240.0, 240.0, 120.0, 60.0, 30.0, 15.0])
+        now = T0
+        edit = "none"
+        press = 0
+        rel = 0.0
+        if scheduled:
+            soc = float(rng.choice([93, 93, 93, rng.randint(41, 100)]))
+            hold = "clear"
+            reserve = rng.choice(["25", "25", "25", "25", "25", "40", "24"])
+            stop_s = rng.choice(["25.0", "25.0", "26.0", "35.0"])
+            win0 = rng.choice([15.0, 30.0, 60.0, 120.0, 240.0])
+            flag = "on"
+            press = rng.choice([0, 3, 5, 10, 19, 20, 21, 45, 100])             # the second of the window the start button was pressed (the window began that long before the lease flag turned on)
+            run_gap = rng.choice([3, 3, 3, 0, 8, -5, 10])
+            lo = press - win0 * 60                                              # the lease has started
+            r = rng.random()
+            rel = rng.uniform(lo, -700.0) if r < 0.5 else (rng.uniform(-700.0, -30.0) if r < 0.7 else rng.uniform(-30.0, 130.0))   # seconds from the window end: inside it, its last minutes, its tail
+            rel = float(round(rel))
+            age_s = int(rel + win0 * 60 - press)
+            start_gap = press
+            lease_start = now - age_s
+            w_start0 = lease_start - press
+            w_end0 = w_start0 + win0 * 60
+            staged = 60 * min(win0, math.floor((win0 * 60 - press + 20) / 60))   # what the schedule stages: min(length, floor((time left + 20 s) / 60 s)) minutes
+            end_kind = rng.choice(["window"] * 7 + ["w-600", "w-60", "w+30", "w+100", "w+120", "w+121"])
+            end_text = text_at({"window": lease_start + staged, "w-600": w_end0 - 600, "w-60": w_end0 - 60, "w+30": w_end0 + 30, "w+100": w_end0 + 100, "w+120": w_end0 + 120, "w+121": w_end0 + 121}[end_kind])
+            win, w_start = win0, w_start0
+            edit = rng.choice(["none"] * 6 + ["dur240", "dur+1", "dur-30", "start-60", "start+60", "start-180", "start+180", "start-1800", "start+1800", "start+day", "start-day"])
+            if edit == "dur240":
+                win = 240.0
+            elif edit == "dur+1":
+                win = min(240.0, win0 + 1)
+            elif edit == "dur-30":
+                win = max(1.0, win0 - 30)
+            elif edit.startswith("start"):
+                w_start = w_start0 + {"start-60": -60, "start+60": 60, "start-180": -180, "start+180": 180, "start-1800": -1800, "start+1800": 1800, "start+day": 86400, "start-day": -86400}[edit]
+            stop = rng.choice([25.0, 25.0, 25.0, 25.0, 25.0, 24.0, 26.0, 30.0, 40.0, "unknown"])
+            export = rng.choice([3000.0, 3000.0, 3000.0, 2800.0, 3200.0, 2900.0])
+            cmd = 3800.0
+            mem_s = rng.choice([7200, 7200, 7200, 1799, 1800, 0])
+            eval_age = rng.choice([0, 0, 0, 0, 60, 181])
+            rt_entry = rng.choice(["keep", "keep", "keep", now - 100, now - 1801])
+            rt_state = rng.choice(["keep", "keep", "ALLOWED", "WAIT"])
+        else:
+            soc = float(rng.randint(41, 100))
+            hold = rng.choice(["clear"] * 7 + ["held", "unknown"])
+            reserve = rng.choice(["40", "40", "40", "30", "62", "45.5", "unknown", "nan"])
+            stop_s = rng.choice(["25.0", "25.0", "50.0", "35.0"])
+            win = rng.choice([240.0, 240.0, 120.0, 60.0, 30.0, 15.0])
+            flag = rng.choice(["on", "on", "on", "on", "off", "unavailable", "unknown", None])
+            age_s = rng.choice([-600, 0, 300, 1739, 1740, 1799, 1800, 1801, 3600, 5400, 7200, 12000])
+            run_gap = rng.choice([None, 3, 3, 3, 3, -12, -10, 0, 10, 899, 900, 901, 7200])
+            start_gap = rng.choice([5, 5, 5, 0, -59, -60, -61, 20000, -4000])
+            if rng.random() < 0.8:                                   # most leases run inside their window (a running lease gets no time past the window end, so a window that is over says nothing else)
+                win = min(240.0, max(win, float(math.ceil((max(age_s + start_gap, 0) / 60) + 15))))
+            lease_start = now - age_s
+            w_start = lease_start - start_gap
+            w_end = w_start + win * 60
+            end_kind = rng.choice(["window", "window", "window", "w+120", "w+121", "w-600", "soon", "late", "past", "garbage", "inactive", "missing"])
+            end_text = {"window": text_at(w_end), "w+120": text_at(w_end + 120), "w+121": text_at(w_end + 121), "w-600": text_at(w_end - 600), "soon": text_at(now + 60), "late": text_at(now + 3000),
+                        "past": text_at(now - 60), "garbage": "soon-ish", "inactive": "Inactive", "missing": None}[end_kind]
+            stop = rng.choice([30.0, 39.0, 40.0, 41.0, 40.5, "unknown", 55.0, "-5", 49.0, 50.0, 51.0])
+            export = rng.choice([3000.0, 2800.0, 2900.0, 3200.0, 3100.0, "unavailable", 1000.0])
+            cmd = rng.choice([3500.0, 3800.0, 0.0, "unknown"])
+            mem_s = rng.choice([-6, -5, 0, 1, 1799, 1800, 1801, 7200])
+            eval_age = rng.choice([0, 0, 0, 0, 60, 180, 181, 400, -5, -6])
+            rt_entry = rng.choice(["keep", None, now - 100, now - 1799, now - 1800, now - 1801, now + 600])
+            rt_state = rng.choice(["keep", None, "ALLOWED", "WAIT", "NO CHANGE"])
         w = lease_world(text, this_mode=mode, over={X.SOC: str(soc), X.HOLD: hold, X.RESERVE: reserve, X.STOP_S: stop_s, X.WIN: str(win)}, memory_s=None)
-        now = w.now_ts()
-        flag = rng.choice(["on", "on", "on", "on", "off", "unavailable", "unknown", None])
-        age_s = rng.choice([-600, 0, 300, 1739, 1740, 1799, 1800, 1801, 3600, 5400, 7200, 12000])
-        lease_start = now - age_s
-        run_gap = rng.choice([None, 3, 3, 3, 3, -12, -10, 0, 10, 899, 900, 901, 7200])
-        start_gap = rng.choice([5, 5, 5, 0, -59, -60, -61, 20000, -4000])
-        w_start = lease_start - start_gap
-        w_end = w_start + win * 60
-        end_kind = rng.choice(["window", "window", "window", "w+120", "w+121", "w-600", "soon", "late", "past", "garbage", "inactive", "missing"])
-        end_text = {"window": text_at(w_end), "w+120": text_at(w_end + 120), "w+121": text_at(w_end + 121), "w-600": text_at(w_end - 600), "soon": text_at(now + 60), "late": text_at(now + 3000),
-                    "past": text_at(now - 60), "garbage": "soon-ish", "inactive": "Inactive", "missing": None}[end_kind]
-        stop = rng.choice([30.0, 39.0, 40.0, 41.0, 40.5, "unknown", 55.0, "-5", 49.0, 50.0, 51.0])
-        export = rng.choice([3000.0, 2800.0, 2900.0, 3200.0, 3100.0, "unavailable", 1000.0])
-        cmd = rng.choice([3500.0, 3800.0, 0.0, "unknown"])
-        mem_s = rng.choice([-6, -5, 0, 1, 1799, 1800, 1801, 7200])
-        eval_age = rng.choice([0, 0, 0, 0, 60, 180, 181, 400, -5, -6])
-        rt_entry = rng.choice(["keep", None, now - 100, now - 1799, now - 1800, now - 1801, now + 600])
-        rt_state = rng.choice(["keep", None, "ALLOWED", "WAIT", "NO CHANGE"])
+        assert w.now_ts() == now
         w.bulk({X.LEASE: flag, X.L_STOP: str(stop), X.L_EXP: str(export), X.L_CMD: str(cmd), X.L_END: end_text})
         if run_gap is None:
             w.put(X.SCRIPT, None)
@@ -1023,16 +1292,18 @@ def lease_sweep_problems(n: int, seed: int, text: str | None = None, first_only:
         got = lease_state(w)
         m = w.model()
         raw = {**X.HEALTHY, X.SOC: str(soc), X.HOLD: hold, X.RESERVE: reserve, X.STOP_S: stop_s, X.WIN: str(win), X.SCH_START: text_at(w_start), X.LEASE: flag, X.L_STOP: str(stop)}
-        ref_p = X.reference(raw, poll_skew_s=0.0, now_ts=now)
+        l_start = w.w.changed_at.get(X.LEASE) if X.LEASE in w.w.states else None
+        run_ts = None if run_gap is None else lease_start - run_gap
+        # the proposal of a running lease is bounded by its window, and for a lease the schedule started by its own end: the reference needs the lease's facts to say which
+        ref_p = X.reference(raw, poll_skew_s=0.0, now_ts=now, lease={"end_text": end_text, "start_ts": l_start, "run_ts": run_ts})
         mem_ok = mode in ("ha", "first-none")
         # when `this` cannot be read there is no previous model at all: no previous would-change and no previous state
         prev_entry = (prev.get("rt_entry") if rt_entry == "keep" else rt_entry) if mem_ok else None
         prev_state = (prev.get("rt_state") if rt_state == "keep" else rt_state) if mem_ok else None
-        l_start = w.w.changed_at.get(X.LEASE) if X.LEASE in w.w.states else None
-        run_ts = None if run_gap is None else lease_start - run_gap
         ref = X.reference_lease(ref_p, lease=("unknown" if flag is None else flag), l_stop_raw=str(stop), l_exp_raw=str(export), l_cmd_raw=str(cmd), l_end_text=("unknown" if end_text is None else end_text),
                                 l_start_ts=l_start, run_ts=run_ts, now_ts=now, prev_state=prev_state, prev_entry=prev_entry, mem_age=X.memory_age(mem_s, eval_age, mem_ok), mem_ok=mem_ok)
-        label = f"lease case {i} (mode {mode} flag {flag} age {age_s} script {run_gap} window {win} start_gap {start_gap} end {end_kind} stop {stop} export {export} mem {mem_s}/{eval_age} entry {rt_entry} state {rt_state} hold {hold} reserve {reserve})"
+        label = (f"lease case {i} (mode {mode} flag {flag} age {age_s} script {run_gap} window {win} start_gap {start_gap} end {end_kind} stop {stop} export {export} mem {mem_s}/{eval_age} entry {rt_entry} state {rt_state} "
+                 f"hold {hold} reserve {reserve}" + (f", scheduled: {rel:+.0f} s from the window end, edit {edit}" if scheduled else "") + ")")
         if got["rt"] != ref["rt_state"] or got["cmp"] != ref["cmp_state"] or m.get("rt_entry") != ref["rt_entry"]:
             bad.append(f"{label}: rt {got['rt']} cmp {got['cmp']} entry {m.get('rt_entry')} != {ref['rt_state']} {ref['cmp_state']} {ref['rt_entry']}")
         codes = [r.split(":")[0] for r in (got["reasons"] or [])]
@@ -1057,6 +1328,9 @@ def lease_sweep_problems(n: int, seed: int, text: str | None = None, first_only:
             bad.append(f"{label}: end_difference_min {have} != {want}")
         if (m.get("end_lease_ts") is None) != (ref["l_end_ts"] is None) or (ref["l_end_ts"] is not None and abs(m.get("end_lease_ts") - ref["l_end_ts"]) > 1e-6):
             bad.append(f"{label}: end_lease_ts {m.get('end_lease_ts')} != {ref['l_end_ts']}")
+        # the proposal itself against the reference (state, causes, numbers, the loop's figures, the window end: the bound of a running lease is in all of them), and the property of every render while a lease runs
+        bad += [f"{label}: proposal {b}" for b in compare(w, ref_p)]
+        bad += run_end_problems(w, label)
         if w.errors:
             bad.append(f"{label}: template errors {w.errors[:2]}")
         SERVICE_LOG.extend(w.w.service_log)
@@ -1608,7 +1882,13 @@ def battery(text: str, deep: bool = False) -> list[str]:
         bad += dst_problems(text)
         if bad:
             return bad
+        bad += tail_problems(text, first_only=True)
+        if bad:
+            return bad
         bad += lease_sweep_problems(60 if not deep else 200, 7, text, first_only=True)
+        if bad:
+            return bad
+        bad += lease_sweep_problems(60 if not deep else 200, 29, text, first_only=True, scheduled=True)
         if bad:
             return bad
         bad += churn_problems(text)
@@ -1816,6 +2096,21 @@ MUTANTS = [
     ("the Stop SOC deviation is ignored", "{%- set dev = dev_stop or dev_exp or dev_end -%}", "{%- set dev = dev_exp or dev_end -%}"),
     ("the origin is reported for a lease that is not running", "'lease_origin': (('SCHEDULE' if origin else 'OTHER') if lease_on else ''),", "'lease_origin': ('SCHEDULE' if origin else 'OTHER'),"),
     ("the lease age is published in tenths of a minute", "'lease_age_min': age_min_i if lease_on else none,", "'lease_age_min': ((age / 60) | round(1)) if (lease_on and age is not none) else none,"),
+    # ---- RC1 and RC2 of the second review: a RUNNING lease's bound (the window it runs in at every render, and for a lease the schedule started its own latched end) --------------------------------
+    ("RC1: a running lease is bounded only inside the window (after the window end it gets the whole length again)", "if (lease_on and run_end is not none) else none -%}", "if (lease_on and run_end is not none and now_ts < w_end) else none -%}"),
+    ("RC1: the running lease's bound is not used at all (the old behaviour)", "{%- set wcap = wcap_r if wcap_r is not none else wcap_w -%}", "{%- set wcap = wcap_w -%}"),
+    ("RC1: the window's own count wins over the running lease's", "{%- set wcap = wcap_r if wcap_r is not none else wcap_w -%}", "{%- set wcap = wcap_w if wcap_w is not none else wcap_r -%}"),
+    ("RC1: a lease that is not running is bounded too (the next window's start gets no time after the window end)", "if (lease_on and run_end is not none) else none -%}", "if (run_end is not none) else none -%}"),
+    ("RC1: the running lease's time left is not clipped at 0 (a negative duration)", "([(((run_end - now_ts + 20) / 60) | round(0, 'floor')), 0] | max)", "(((run_end - now_ts + 20) / 60) | round(0, 'floor'))"),
+    ("RC1: the running lease's time left ignores the schedule's 20 s", "(((run_end - now_ts + 20) / 60) | round(0, 'floor'))", "(((run_end - now_ts) / 60) | round(0, 'floor'))"),
+    ("RC1: the running lease's time left is 30 s more generous", "(((run_end - now_ts + 20) / 60) | round(0, 'floor'))", "(((run_end - now_ts + 50) / 60) | round(0, 'floor'))"),
+    ("RC1: the running lease's time left rounds to the nearest minute", "(((run_end - now_ts + 20) / 60) | round(0, 'floor'))", "(((run_end - now_ts + 20) / 60) | round(0))"),
+    ("RC2: the running lease's bound ignores its own latched end (a helper edited while it runs moves it)", "{%- set run_end = ([w_end, l_end_ts] | min) if origin else w_end -%}", "{%- set run_end = w_end -%}"),
+    ("RC2: the running lease's bound is the later of the window end and its own end", "{%- set run_end = ([w_end, l_end_ts] | min) if origin else w_end -%}", "{%- set run_end = ([w_end, l_end_ts] | max) if origin else w_end -%}"),
+    ("RC2: the lease's own end bounds any lease that has a readable end, not only the schedule's", "if origin else w_end -%}", "if (w_end is not none and l_end_ts is not none) else w_end -%}"),
+    ("RC2: the lease's own end counts a minute early", "{%- set run_end = ([w_end, l_end_ts] | min) if origin else w_end -%}", "{%- set run_end = ([w_end, l_end_ts - 60] | min) if origin else w_end -%}"),
+    ("RC1: the reason does not say it is the running lease's window that leaves nothing", "(', the window the running lease is authorised for leaves ' ~ wcap ~ ' minutes' if (lease_on and wcap is not none) else",
+     "(', the authorised schedule window leaves ' ~ wcap ~ ' minutes' if (lease_on and wcap is not none) else"),
 ]
 
 
@@ -1833,7 +2128,8 @@ README_PINS = ("READ-ONLY SHADOW", "NOTHING INSTALLED", "soft", "does not read t
                "the END of the lease plus a guarded re-START", "exc1", "NOT ESTABLISHED", "NOT WIRED", "END NOW", "LEASE_ORIGIN_UNKNOWN", "energy_above_reserve_kwh", "0.90", "recorder",
                "bounded by the schedule's own window", "loop_battery_power_w", "TARGET_INFEASIBLE_LOW", "MEMORY_YOUNG", "Install ONLY with NO Dump to Grid or Free Power lease running",
                "OUTSIDE any armed scheduled Export or charge run", "window end plus 10 minutes", "test_ecco_start_gate.py", "owner decision", "except as the latched value of a RUNNING lease", "LEASE_STOP_SOC_UNREADABLE", "lower the dongle's Power Ceiling to the proven level",
-               "prove the proven level and raise it", "a shadow with no re-target data", "SCHEDULE path", "never enters the floor")
+               "prove the proven level and raise it", "a shadow with no re-target data", "SCHEDULE path", "never enters the floor", "a running lease gets no time past the end of the window it runs in",
+               "min(window end, the lease's own latched end) + 20 s", "cannot move it later", "the END rule never fires", "can only keep the end or shorten it")
 
 
 def main() -> int:
@@ -1991,9 +2287,22 @@ def main() -> int:
     dp = dst_problems()
     check("the end time of a lease in an hour that happens twice (the clocks go back) or does not exist (they go forward) is not read, never ALLOWED; every five minutes across both nights equals the reference; a "
           "lease across the change ends at the window end", dp == [], str(dp[:3]))
+    tp = tail_problems()
+    check("THE TAIL OF THE WINDOW and the helpers edited during a lease (the second review's RC1 and RC2): a run pressed 0, 10 and 20 s into its 60 and 240 minute windows rendered at EVERY SECOND from 70 s before the "
+          "window end to its own end, up to 20 s after it (the lease gets no time: the proposal INVALID, the re-target UNKNOWN with no change, never ALLOWED to a later END; the next window's proposal is back "
+          "when it ends); a lease that ends 100 s after the window end (the window's own end in the window, a duration of 0 minutes and not a negative one after it); the duration and the start helper edited "
+          "12 ways (raised, lowered, moved by 1 minute, 3 minutes, half an hour and a day, both): a lease the schedule started keeps its own end as the bound, one that no longer fits the window is UNKNOWN; "
+          "a lease the schedule did not start through the window end; a whole run in real time polled every 10 s; and at every one of those renders no proposal ends past the window end plus 20 s or, for "
+          "a lease the schedule started, past its own end plus 20 s", tp == [], str(tp[:3]))
     ls = lease_sweep_problems(400, 11)
     check("400 random lease worlds (the flag, what started the lease, the window, the end, the latched values, the hold and the reserve, the memory and its continuity, the previous would-change, the four spellings of "
-          "`this`): the comparison, the re-target, the reasons, the changes, the wait, the origin and the memory equal the reference", ls == [], str(ls[:3]))
+          "`this`): the comparison, the re-target, the reasons, the changes, the wait, the origin and the memory equal the reference; so does the PROPOSAL of every one of them (state, causes, notes, every number, "
+          "the loop's figures, the window end: the bound of a running lease is in them), and no render while a lease runs breaks the property of the window's and the lease's own end", ls == [], str(ls[:3]))
+    ls2 = lease_sweep_problems(400, 12, scheduled=True)
+    check("400 random leases the SCHEDULE started (a window of 15 to 240 minutes, the start button pressed 0 to 100 s into it, at a random moment of the window, its last minutes or the seconds after its end, "
+          "the lease ending as the schedule stages it or 10 minutes, 1 minute, 30 s, 100 s, 120 s or 121 s off, the duration or start helper edited in 11 ways in nearly half of them, the Stop SOC, the target, "
+          "the reserve and the memory varied): the proposal, the comparison and the re-target equal the reference at every one, and no render ends past the window end plus 20 s or past the lease's own end "
+          "plus 20 s, or lists an END change", ls2 == [], str(ls2[:3]))
     rl = reload_realtime_problems()
     check("in real time: a template reload five minutes after a would-change allows nothing for 30 minutes and then allows it (to the second), whether `this` is a state object with no attributes or none first; a restart "
           "cannot be matched to the scheduled start", rl == [], str(rl[:3]))
@@ -2040,7 +2349,8 @@ def main() -> int:
           "rounding and window and minimum, the time left in the window at the schedule's own rounding and boundaries, UNVERIFIED, the loop figures, the state ordering, the numbers of a non-VALID state, "
           "the limits, the PV surplus rules, the origin of a lease at each boundary, the comparison, the lease's deadbands and 30 minute rules, the memory and its continuity, END NOW, the lease's end text, "
           "the lookups' age bound and availability, a forecast entity, an attribute of an allowed entity (R27, R28), a previous would-change in the future (R01), a service call, a trigger, the pinned names, "
-          "a site address): all caught", not survivors and len(MUTANTS) >= 150, str(survivors[:3]))
+          "a site address, and the bound of a RUNNING lease (RC1, RC2: inside the window only, not used, the window's count first, not clipped at 0, no 20 s, 30 s too many, rounded to the nearest, its own end "
+          "ignored, the later end, any lease's end, a minute early, the reason's wording)): all caught (the END rule's own deadband and term are caught by the literal pins alone: no behaviour reaches it)", not survivors and len(MUTANTS) >= 150, str(survivors[:3]))
     harmless = TEXT.replace("# WHAT THIS IS. Item N3", "# WHAT THIS IS, restated. Item N3", 1)
     check("a harmless rewrite (a comment) survives the static battery, and a rewrite of a rule does not", harmless != TEXT and static_problems(harmless) == []
           and bool(battery(TEXT.replace("(pskew | abs) <= 90", "(pskew | abs) <= 190", 1))))
@@ -2051,7 +2361,8 @@ def main() -> int:
     check("the deployment manifest lists the package with its own stanza (an offline, read-only shadow, nothing installed, the owner's go, no restart, the install cautions), once",
           stanza is not None and MANIFEST_TEXT.count("ecco_export_coordinator.yaml") == 2
           and all(s in flat(re.sub(r"\s*\n\s*#\s*", " ", stanza.group(0))) for s in ("NOT installed", "NOT LIVE-PROVEN", "READ-ONLY", "shadow", "needs the owner's go", "NO Dump to Grid or Free Power lease running",
-                                                                                      "armed scheduled Export or charge run", "window end plus 10 minutes", "bounded by the schedule's own window", "not wired")),
+                                                                                      "armed scheduled Export or charge run", "window end plus 10 minutes", "bounded by the schedule's own window", "not wired",
+                                                                                      "gets no time past the end of the window it runs in", "END it can only keep or shorten")),
           "" if stanza else "no stanza")
     sec = README_TEXT.split("## Export coordinator", 1)
     rflat = flat(sec[1]) if len(sec) == 2 else ""
@@ -2062,7 +2373,8 @@ def main() -> int:
           "END NOW, the memory, the efficiency, the install cautions and the recorder, the edit of the start gate suite, and the owner's decision on the Power Ceiling", len(sec) == 2 and all(n in rflat for n in names)
           and not missing_pins, ("no section" if len(sec) != 2 else f"missing {missing_pins[:4]}"))
     check("the CHANGELOG has the bullet (Export coordinator v0, read-only shadow, nothing installed, the window bound, END NOW)", "Export coordinator v0" in CHANGELOG_TEXT and "ecco_export_coordinator.yaml" in CHANGELOG_TEXT
-          and "read-only shadow" in CHANGELOG_TEXT and "bounded by the schedule's own window" in CHANGELOG_TEXT and "END NOW" in CHANGELOG_TEXT and "test_ecco_start_gate.py" in CHANGELOG_TEXT)
+          and "read-only shadow" in CHANGELOG_TEXT and "bounded by the schedule's own window" in CHANGELOG_TEXT and "END NOW" in CHANGELOG_TEXT and "test_ecco_start_gate.py" in CHANGELOG_TEXT
+          and "gets no time past the end of the window it runs in" in CHANGELOG_TEXT and "can only keep the end or shorten it" in CHANGELOG_TEXT)
 
     if FAILURES:
         print(f"\nFAILED: {len(FAILURES)} check(s)")
