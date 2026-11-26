@@ -17,8 +17,9 @@ Invariants (every run; each is True, False or None = does not apply to this kind
   REPORT_JUSTIFIED       every 'unreachable' report is asked of the REFERENCE kernel again on the same inputs; a report it does not stand behind is a
                          false alarm (the cry-wolf that used to pass REACHES_OR_REPORTS). The SWEEP also counts the false alarms on nights that
                          reach with a 30 minute margin (FALSE_ALARM_MAX_RATE)
-  NEVER_WORSE_THAN_TODAY a night that today's fixed rate would have won (target reached 25 minutes before the window end) is not lost (Gentle); not
-                         applicable where today's rate would breach the owner's import ceiling: a hard ceiling outranks it
+  NEVER_WORSE_THAN_TODAY a night that today's fixed rate would have won (target reached 25 minutes before the window end) is not lost (Gentle). Strict
+                         everywhere; the SWEEP counts (does not fail) the one class the design itself ranks lower: a night where today's rate would
+                         breach the owner's import ceiling, because a hard ceiling outranks 'never worse than today' (tolerated_finding)
   NO_UNTRUSTED_ACTUATION no start, change or loop write while the clock it depends on is untrusted
   NO_REWRITE             no setpoint write that repeats the value already in force (a double write wastes the flash-wear budget)
   NO_STALE_DRIVE         no plan-driven change decided on a frame older than STALE_HOLD_S (45 s)
@@ -467,8 +468,6 @@ def inv_never_worse(run):
     base = getattr(run, "baseline", None)
     if base is None:
         return None, "no baseline run"
-    if ceiling_binds(base):
-        return None, "n/a: the owner's import ceiling binds on this night (today's rate would breach it) and a hard ceiling outranks 'never worse than today'"
     we = sc.window[1]
     today = max(x.read for x in base.rows if x.t <= we - KR.END_MARGIN_S - KR.GUARD_MARGIN_S) >= sc.target_soc_pct - 1e-9
     ours = max(x.read for x in run.rows if x.t <= we) >= sc.target_soc_pct - 1e-9
@@ -653,6 +652,20 @@ def outcome_of(run):
     return "REPORTED EARLY" if run.first_unreachable_t is not None else "MISSED"
 
 
+def tolerated_finding(spec, run, name, classes):
+    """The finding a FAILED invariant is counted under, instead of failing, when the spec says it tolerates that class (the sweeps only): the
+    restore into a breach (F01); the 'never worse than today' comparison on a night where today's rate would breach the owner's import ceiling,
+    which the design ranks lower (a hard ceiling outranks it: the target guard never hands back into a breach); a miss outside the world's
+    envelope that no report foresaw (F06). None: the failure stands."""
+    if name == "IMPORT_CEILING" and classes and classes <= set(spec.tolerate):
+        return "F01-restore (tolerated in the sweep)"
+    if name == "NEVER_WORSE_THAN_TODAY" and name in spec.tolerate and getattr(run, "baseline", None) is not None and ceiling_binds(run.baseline):
+        return "ceiling-outranks (tolerated in the sweep: a hard import ceiling outranks never-worse)"
+    if name == "REACHES_OR_REPORTS" and name in spec.tolerate:
+        return "F06-tail (tolerated outside the envelope)"
+    return None
+
+
 def evaluate(spec, run):
     inv = check_invariants(run, spec.skip)
     gaps = dict(spec.known_gap)
@@ -673,10 +686,9 @@ def evaluate(spec, run):
                 hit.append((name, pins[name][0]))
         elif ok is False:
             classes = {k for k, _t in (import_analysis(run) or {"violations": []})["violations"]} if name == "IMPORT_CEILING" else set()
-            if name == "IMPORT_CEILING" and classes and classes <= set(spec.tolerate):
-                hit.append((name, "F01-restore (tolerated in the sweep)"))
-            elif name in spec.tolerate:
-                hit.append((name, "F06-tail (tolerated outside the envelope)"))
+            why = tolerated_finding(spec, run, name, classes)
+            if why is not None:
+                hit.append((name, why))
             else:
                 failures.append("%s: %s" % (name, detail))
     unknown = set(pins) - set(inv)
@@ -1420,10 +1432,10 @@ def random_spec(seed, kind, envelope="world"):
         if envelope == "world":
             bad_draw = envelope_problems(sc)
             assert not bad_draw, "the generator drew a plant outside the declared envelope (seed %d): %s" % (seed, bad_draw)
-            tol = ("restore",)
+            tol = ("restore", "NEVER_WORSE_THAN_TODAY")
         else:
             # outside the world's envelope the projection cannot see a miss: the unreported misses are counted as finding F06, not failed
-            tol = ("restore", "REACHES_OR_REPORTS")
+            tol = ("restore", "NEVER_WORSE_THAN_TODAY", "REACHES_OR_REPORTS")
         # a restore into a known breach is finding F01 of the design (pinned in the scenarios, README): the sweep counts it, it does not fail on it
         return Spec(sc=sc, skip=(), tolerate=tol)
     cap = rng.uniform(25.0, 40.0)

@@ -980,8 +980,13 @@ check("NEVER_WORSE_THAN_TODAY and REACHES_DEADLINE (crafted): the session reache
       and S.inv_reaches_deadline(night_pair(15000.0, 10000.0))[0] is False and S.inv_never_worse(night_pair(15000.0, 10000.0))[0] is True)
 check("NEVER_WORSE_THAN_TODAY and REACHES_DEADLINE (crafted): a night today's rate would not win either holds trivially",
       S.inv_never_worse(night_pair(None, None))[0] is True and S.inv_reaches_deadline(night_pair(None, 16000.0))[0] is True)
-check("NEVER_WORSE_THAN_TODAY and REACHES_DEADLINE (crafted): where today's rate would breach the owner's import ceiling the ceiling outranks them and both are not applicable",
-      S.inv_never_worse(night_pair(None, 10000.0, ceil=11000.0, breach=True))[0] is None and S.inv_reaches_deadline(night_pair(None, 10000.0, ceil=11000.0, breach=True))[0] is None)
+rb = night_pair(None, 10000.0, ceil=11000.0, breach=True)
+check("NEVER_WORSE_THAN_TODAY (crafted): strict even where today's rate would breach the owner's import ceiling (it fails there); REACHES_DEADLINE, which is about today's rate as a yardstick, is not applicable there",
+      S.inv_never_worse(rb)[0] is False and S.inv_reaches_deadline(rb)[0] is None)
+sweep_spec, strict_spec = S.Spec(sc=gsc, tolerate=("restore", "NEVER_WORSE_THAN_TODAY")), S.Spec(sc=gsc)
+check("the sweep COUNTS the failed never-worse comparison on a night where today's rate would breach the ceiling (the design ranks the hard ceiling higher) and fails on any other; a spec that tolerates nothing fails on both",
+      S.tolerated_finding(sweep_spec, rb, "NEVER_WORSE_THAN_TODAY", set()) is not None and S.tolerated_finding(sweep_spec, night_pair(None, 10000.0), "NEVER_WORSE_THAN_TODAY", set()) is None
+      and S.tolerated_finding(strict_spec, rb, "NEVER_WORSE_THAN_TODAY", set()) is None)
 r46 = night_pair(None, 10000.0)
 r46.sc = replace(gsc, plant=P.PlantParams(capacity_kwh=46.0))
 check("REACHES_DEADLINE (crafted): outside the declared envelope (a 46 kWh battery against 35) it is not applicable", S.inv_reaches_deadline(r46)[0] is None)
@@ -1116,6 +1121,8 @@ check(f"false alarms are counted: {ALARM[1]} of the {ALARM[0]} nights that reach
 AB = sweep_stats["alarm"]["above_knee"]
 print(f"  info  above the pessimistic knee (a 95 or 100 percent target) {AB[1]} of {AB[0]} nights that reach with a margin carry a report ({100.0 * AB[1] / AB[0]:.0f} percent): "
       f"the planner's knee at 90 percent and its tail make 'at risk' the normal word there (finding F06, README)")
+CEIL_HITS = sum(v for (n, w), v in sweep_stats.get("findings", {}).items() if n == "NEVER_WORSE_THAN_TODAY")
+print(f"  info  {CEIL_HITS} of the {3 * SWEEP_N} sweep runs fail the never-worse comparison on a night where today's rate would breach the owner's import ceiling; counted, not failed: a hard ceiling outranks it (README, finding 4)")
 F01_HITS = sweep_stats.get("findings", {}).get(("IMPORT_CEILING", "F01-restore (tolerated in the sweep)"), 0)
 check(f"finding F01 is alive in the sweep: {F01_HITS} of the {3 * SWEEP_N} runs end with a restore into a breach (counted, not failed; pinned at 1 or more, so the day the design is fixed this "
       f"check goes red and the tolerance in scenarios.random_spec must be removed)", F01_HITS >= 1)
