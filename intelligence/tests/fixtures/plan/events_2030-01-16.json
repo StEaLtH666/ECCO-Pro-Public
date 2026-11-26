@@ -1,0 +1,23 @@
+{
+ "_note": "SYNTHETIC fixture: fictional 2030 Saving Session and free-electricity periods; rewards are never modelled (O-4)",
+ "payload": {
+  "free_electricity": {
+   "events": [
+    {
+     "end": "2030-01-18T14:00:00+00:00",
+     "start": "2030-01-18T12:00:00+00:00"
+    }
+   ]
+  },
+  "saving_sessions": {
+   "joined_events": [
+    {
+     "end": "2030-01-16T18:30:00+00:00",
+     "id": 1,
+     "octopoints_per_kwh": 800,
+     "start": "2030-01-16T17:30:00+00:00"
+    }
+   ]
+  }
+ }
+}

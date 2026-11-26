@@ -15,7 +15,7 @@ and nothing acts on this estimate. The package contains no service call, script,
 | Part | File |
 |---|---|
 | Estimate (Home Assistant, read only) | [`home-assistant/packages/ecco_battery_runtime.yaml`](../home-assistant/packages/ecco_battery_runtime.yaml) |
-| Display (Energy Flow card, FE-0 hook `nodes.battery.time_to_reserve`) | [`frontend/ecco-energy-flow-card/`](../frontend/ecco-energy-flow-card/README.md) |
+| Display (Energy Flow card, FE-0 hook `nodes.battery.time_to_reserve`) | [`frontend/ecco-energy-flow-card/`](../frontend/ecco-energy-flow-card/README.md); from dashboard 7.23.0 the Overview shows the same hook on the ECCO 3D Energy Flow card, [`frontend/ecco-flow-3d-card/`](../frontend/ecco-flow-3d-card/README.md) |
 | Dashboard wiring (Overview) | `home-assistant/dashboards/ecco_pro.yaml` v7.21.0 |
 | Offline proofs | `home-assistant/tests/test_ecco_battery_runtime.py`, `frontend/ecco-energy-flow-card/test/reserveRuntime.test.ts` |
 

@@ -71,7 +71,19 @@ actions: set = set()
 collect_actions(dash, actions)
 check("every tap action is none or more-info", actions <= {"none", "more-info"}, str(actions))
 manifest = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
-check("prototype files are not in the deployment manifest", "prototypes" not in manifest and "intelligence" not in manifest.lower())
+# PEX (isp1): the manifest lists the ECCO Intelligence SHADOW v0.1 release files (post-export entry isp1); the prototype stays out.
+# Exempt are exactly isp1's eleven paths; any other manifest path that names Intelligence, and any prototype file, still fails.
+# A path line counts with or without a trailing comment.
+_ISP1_PATHS = {"home-assistant/packages/ecco_intelligence.yaml", "/config/packages/ecco_intelligence.yaml",
+               "home-assistant/packages/ecco_intelligence_prefs.yaml", "/config/packages/ecco_intelligence_prefs.yaml",
+               "home-assistant/packages/ecco_intelligence_dashboard.yaml", "/config/packages/ecco_intelligence_dashboard.yaml",
+               "home-assistant/dashboards/ecco_intelligence.yaml", "/config/ecco/dashboards/ecco_intelligence.yaml",
+               "frontend/ecco-intelligence-card/ecco-intelligence-card.js", "/config/www/ecco/ecco-intelligence-card.js",
+               "/local/ecco/ecco-intelligence-card.js"}
+_man_paths = re.findall(r"^\s*(?:-\s*)?(?:source|destination|resource_url):\s*(\S+)(?:[ \t]+#.*)?\s*$", manifest, re.M)
+check("prototype files are not in the deployment manifest", "prototypes" not in manifest and "intelligence_v1" not in manifest.lower()
+      and "intelligence-v1" not in manifest.lower() and len(_man_paths) > 30
+      and not [p for p in _man_paths if "intelligence" in p.lower() and p not in _ISP1_PATHS])
 check("prototype lives outside home-assistant/dashboards and packages",
       "dashboards" not in str(PROTO.relative_to(ROOT)) and "packages" not in str(PROTO.relative_to(ROOT)))
 check("production dashboard is untouched by name (this view is separate)", "ecco-intelligence-v1-prototype" in dash_text

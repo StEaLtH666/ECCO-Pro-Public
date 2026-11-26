@@ -51,6 +51,7 @@ class ChargeTargetInputs:
     window_load_kwh: float | None = None        # expected house load inside the window (the grid carries it)
     soc_at_window_start_pct: float | None = None  # the caller's PREDICTION of SOC when the window opens (e.g. V1's trajectory)
     previous: Advice | None = None              # the previous charge_target Advice, for change attribution
+    reserve_raise_pct: float | None = None      # the raise-only advisory reserve preference (SHADOW), never the helper
 
 
 def _raw_target(end_floor: float, need_kwh: float, eta: float, cap: float) -> float:
@@ -90,7 +91,7 @@ def advise_charge_target(cfg: SiteConfig, inp: ChargeTargetInputs) -> Advice:
         return blocked(KIND, [Blocker("INVALID_WINDOW", "the charging window must be aware datetimes with end after start")])
     if inp.now >= w1:
         return blocked(KIND, [Blocker("WINDOW_OVER", "the charging window has already ended")])
-    reserve: EffectiveReserve = cfg.effective_reserve(inp.ha_reserve_pct)
+    reserve: EffectiveReserve = cfg.effective_reserve(inp.ha_reserve_pct, inp.reserve_raise_pct)
     floor = reserve.effective_pct
     buffer = cfg.soc_safety_margin_pct
     cap = cfg.battery_capacity_kwh

@@ -3,9 +3,14 @@
 
   [1] pure helpers: content-addressed bundle names, the destination allow-list (as tools/EccoDeploy.psm1), entity-id extraction
       (comments and dynamic JavaScript-template ids skipped), snapshot shapes
-  [2] the real tree for a synthetic site: the plan passes, stages exactly the three cards that changed (names carry their sha256),
+  [2] the real tree for a synthetic site: the plan passes, stages exactly the four cards that changed (names carry their sha256),
       the dashboard and bundles are rendered for the site, the preview configuration is valid JSON under the websocket limit,
-      nothing in the repository changes
+      nothing in the repository changes; the 3D Energy Flow card the Overview uses is accepted but never deployed by default (its
+      bundle and resource are shared with the preview dashboard); with --site-policy (fictional) that protects the dashboard, its
+      deploy command is preceded by the guard's `apply` step (run in memory: PASS, or FAIL when it would refuse, by a missing parent
+      or by the post-condition after a release that changes the protected card); a re-run into the same --out deploys the applied
+      file a previous `apply` step left there, or FAILs when that file is not apply's output; a malformed, missing or letter-case
+      policy is refused before anything is written
   [3] negative controls: a snapshot missing an entity fails; with a baseline only NEW missing ids fail; a wrong expected git sha fails;
       an unparseable dashboard, a leftover default slug and an undefined custom card are flagged; an unknown --deploy card is refused
   [4] verify-staged and verify-served: pass on matching bytes; fail on a tampered staged file, a tampered served file and a 404
@@ -19,7 +24,8 @@
       changed / was added / was removed, the id or type changed, a card has two resources, the served bytes differ or are missing,
       or the read-back is stale; prints a VERIFIED line only when the whole run passes; refuses unusable inputs
   [8] deploy-ha.ps1 (static): the manual-resource reminder is printed for every /config/www/ecco/ destination, not only for
-      frontend/<card>/dist sources, and the script only ever reads the persisted resource list
+      frontend/<card>/dist sources, and the script only ever reads the persisted resource list (the reminder's `cat`, the dashboard
+      preservation gate's read-only copy and the backup copy)
 
 Synthetic values only. Test-only; the only network use is 127.0.0.1. I/O: reads the repo, writes only under a temp dir.
 """
@@ -47,6 +53,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "registry" / "tests"))
 import ecco_deploy_preflight as F  # noqa: E402
 import ecco_site_render as R  # noqa: E402
+import ecco_dashboard_guard as G  # noqa: E402
 import _pub0_scope as P  # noqa: E402
 
 FAILURES: list[str] = []
@@ -86,6 +93,17 @@ check("the destination allow-list is the deploy tooling's: packages, ecco and ww
       F.destination_allowed("/config/www/ecco/a.js") and F.destination_allowed("/config/ecco/dashboards/ecco_pro.yaml")
       and not F.destination_allowed("/config/www/a.js") and not F.destination_allowed("/config/www/ecco-evil/a.js")
       and not F.destination_allowed("/config/www/ecco/../secrets.yaml") and not F.destination_allowed("/etc/passwd"))
+check("the site-local dashboard protection policy area is never a destination (as tools/EccoDeploy.psm1); a sibling sharing its prefix is",
+      not F.destination_allowed("/config/ecco/site-local/dashboard-protection.json") and not F.destination_allowed("/config/ecco/site-local")
+      and F.destination_allowed("/config/ecco/site-localx/a.yaml"))
+check("the Intelligence site file and state area and the kit staging area are never destinations (as tools/EccoDeploy.psm1); "
+      "siblings sharing their prefixes are",
+      not F.destination_allowed("/config/ecco/intelligence/site.local.json")
+      and not F.destination_allowed("/config/ecco/intelligence/state/history.sqlite")
+      and not F.destination_allowed("/config/ecco/intelligence")
+      and not F.destination_allowed("/config/ecco/staging/20300101-000000/new/ecco_intelligence/manifest.json")
+      and not F.destination_allowed("/config/ecco/staging")
+      and F.destination_allowed("/config/ecco/intelligence-x/a.yaml") and F.destination_allowed("/config/ecco/stagingx/a.yaml"))
 text = ("# sensor.in_a_comment\n"
         "x: sensor.alpha_one\n"
         "y: \"states['binary_sensor.beta_two']\"\n"
@@ -127,13 +145,13 @@ before = F.sha(b"".join((ROOT / r).read_bytes() for r in [F.DASHBOARD_REL, "VERS
 code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out), "--allow-dirty"])
 check("the plan passes for the synthetic site with a complete snapshot", code == 0, log[-600:])
 plan = json.loads((out / "plan.json").read_text(encoding="utf-8"))
-check("it plans exactly the three cards that changed, each with a content-addressed name, an allowed destination and a /local URL",
-      [c["card"] for c in plan["cards"]] == ["energy-actions", "weather-solar", "advanced-config"]
+check("it plans exactly the four cards that changed, each with a content-addressed name, an allowed destination and a /local URL",
+      [c["card"] for c in plan["cards"]] == ["energy-actions", "weather-solar", "advanced-config", "tou-settings"]
       and all(c["name"] == f"{Path(c['source']).stem}.{c['sha256'][:8]}.js" and F.destination_allowed(c["destination"])
               and c["resource_url"] == "/local/ecco/" + c["name"] and c["resource_type"] == "module" for c in plan["cards"]))
 check("the staged files are the rendered bytes (sha256 equals the plan), and the cards that need the slug are rendered for the site",
       all(F.sha((out / "stage" / c["name"]).read_bytes()) == c["sha256"] for c in plan["cards"])
-      and {c["card"]: c["slug_substituted"] for c in plan["cards"]} == {"energy-actions": False, "weather-solar": True, "advanced-config": True}
+      and {c["card"]: c["slug_substituted"] for c in plan["cards"]} == {"energy-actions": False, "weather-solar": True, "advanced-config": True, "tou-settings": True}
       and SLUG.encode() in (out / "stage" / next(c["name"] for c in plan["cards"] if c["card"] == "weather-solar")).read_bytes())
 check("the staged dashboard is the rendered dashboard: the site slug everywhere, no default slug but the kept entity",
       F.sha((out / "stage" / "ecco_pro.yaml").read_bytes()) == plan["dashboard"]["sha256_as_rendered"]
@@ -143,8 +161,114 @@ cfg = json.loads((out / "ecco_pro_preview.json").read_text(encoding="utf-8"))
 check("the preview configuration is the dashboard as JSON (views kept), well under the websocket limit",
       len(cfg["views"]) == len(plan["dashboard"]["views"]) and (out / "ecco_pro_preview.json").stat().st_size < F.MAX_PREVIEW_JSON)
 check("the plan names the unchanged cards it does not deploy, requires no restart and lists one deploy command per file",
-      set(plan["unchanged_cards_not_deployed"]) == {"energy-flow", "fallback-recovery"} and plan["restart_required"] is False
-      and len(plan["deploy_commands"]) == 4 and plan["deploy_commands"][-1].endswith("-Destination " + F.DASHBOARD_DEST))
+      set(plan["unchanged_cards_not_deployed"]) == {"energy-flow", "fallback-recovery", "flow-3d"} and plan["restart_required"] is False
+      and len(plan["deploy_commands"]) == 5 and plan["deploy_commands"][-1].endswith("-Destination " + F.DASHBOARD_DEST))
+F3D_SRC, F3D_TAG = F.CARDS["flow-3d"]
+check("the ECCO 3D Energy Flow card the Overview uses is a bundle of this tree, accepted by the dashboard check, and never deployed by default "
+      "(its bundle and Lovelace resource are shared with the preview dashboard): no staged copy, no deploy command, no resource action",
+      F3D_SRC == f"frontend/{F3D_TAG}/dist/{F3D_TAG}.js" and (ROOT / F3D_SRC).is_file() and "flow-3d" not in F.DEFAULT_DEPLOY
+      and f"type: custom:{F3D_TAG}" in dash_text and re.search(r"PASS  every custom:ecco-\* card the dashboard uses is defined by a bundle[^\n]*" + F3D_TAG, log)
+      and "flow-3d" not in [c["card"] for c in plan["cards"]] and not [c for c in plan["deploy_commands"] if F3D_TAG in c]
+      and not [n for n in os.listdir(out / "stage") if n.startswith(F3D_TAG)]
+      and plan["unchanged_cards_not_deployed"]["flow-3d"]["source"] == F3D_SRC, log[-400:])
+check("without --site-policy the plan says that the dashboard command deploys the render as it is, and how to get the `apply` step",
+      plan["dashboard"]["site_policy"] is None and "INFO  the dashboard command deploys the render as it is (no --site-policy)" in log
+      and "re-run with --site-policy <local copy of it>" in log, log[-800:])
+
+# A site dashboard protection policy (fictional): the second view's title is the site layer.
+site_doc = G.parse_yaml(dash_text, "fixture")
+site_doc["views"][1]["title"] = "Example Site View"
+
+
+def site_policy(dest: str = F.DASHBOARD_DEST, overlay: list | None = None, protected: dict | None = None) -> Path:
+    obj = {"schema": G.SCHEMA, "gate": "EXAMPLE_PRESERVE_GATE", "dashboards": [{
+        "destination": dest,
+        "protect": [{"pointer": "/views/1", "sha256": G.canon_hash(protected if protected is not None else site_doc["views"][1])}],
+        "overlay": overlay if overlay is not None else [{"pointer": "/views/1/title", "value": "Example Site View"}]}]}
+    p = TMP / f"site-policy-{len(list(TMP.glob('site-policy-*')))}.json"
+    p.write_text(json.dumps(obj), encoding="utf-8")
+    return p
+
+
+pol = site_policy()
+out_pol = TMP / "out-policy"
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out_pol), "--allow-dirty", "--site-policy", str(pol)])
+plan_pol = json.loads((out_pol / "plan.json").read_text(encoding="utf-8")) if (out_pol / "plan.json").is_file() else {}
+cmds = plan_pol.get("deploy_commands", [])
+sp = (plan_pol.get("dashboard") or {}).get("site_policy") or {}
+applied = sp.get("apply_out", "")
+staged = str((out_pol / "stage" / "ecco_pro.yaml").resolve())
+check("with --site-policy that protects the dashboard, the dashboard's deploy command is preceded by the guard's `apply` step, and "
+      "deploy-ha.ps1 deploys apply's output, not the render", code == 0 and len(cmds) == 6
+      and cmds[-2] == f"python tools\\ecco_dashboard_guard.py apply --policy {pol} --destination {F.DASHBOARD_DEST} --candidate {staged} --out {applied}"
+      and cmds[-1] == f".\\tools\\deploy-ha.ps1 -Source {applied} -Destination {F.DASHBOARD_DEST}"
+      and re.fullmatch(r".*[\\/]stage[\\/]ecco_pro\.site-[0-9a-f]{8}\.yaml", applied) is not None
+      and sp.get("names_dashboard") is True and sp.get("sha256") == F.sha(pol.read_bytes()), log[-800:] + str(cmds[-2:]))
+check("... and the plan ran `apply` in memory (PASS), writing nothing for it: the applied file does not exist until the step is run",
+      re.search(r"PASS  site policy: `apply` writes the site layer into the staged dashboard \(1 overlay operation\(s\), 1 protected pointer\(s\)\)", log)
+      is not None and not Path(applied).exists(), log[-800:])
+with contextlib.redirect_stdout(io.StringIO()) as gbuf:
+    gcode = G.main(["apply", "--policy", str(pol), "--destination", F.DASHBOARD_DEST, "--candidate", staged, "--out", applied])
+gcode2 = -1
+if Path(applied).is_file():
+    with contextlib.redirect_stdout(io.StringIO()):
+        gcode2 = G.main(["check", "--destination", F.DASHBOARD_DEST, "--live", applied, "--candidate", applied, "--policy", str(pol)])
+check("the printed `apply` step works on the staged render, and its output passes the guard's check under the site policy",
+      gcode == 0 and gcode2 == 0, gbuf.getvalue())
+# Re-running the plan into the same --out: the applied file has the same name (same render, same policy), and `apply` refuses it.
+applied_bytes = Path(applied).read_bytes() if Path(applied).is_file() else b""
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out_pol), "--allow-dirty", "--site-policy", str(pol)])
+cmds_again = json.loads((out_pol / "plan.json").read_text(encoding="utf-8"))["deploy_commands"] if code in (0, 1) else []
+check("re-running the plan into the same --out after the printed `apply` step: PASS, the applied file is already staged, and the plan "
+      "prints only deploy-ha.ps1 for it (the `apply` step would refuse its existing --out)",
+      code == 0 and applied_bytes != b"" and re.search(r"PASS  site policy: [^\n]*ecco_pro\.site-[0-9a-f]{8}\.yaml already holds `apply`'s "
+                                                       r"output for this render and policy \(1 overlay operation\(s\), 1 protected", log)
+      is not None and len(cmds_again) == 5 and cmds_again[-1] == f".\\tools\\deploy-ha.ps1 -Source {applied} -Destination {F.DASHBOARD_DEST}"
+      and not [c for c in cmds_again if "ecco_dashboard_guard.py apply" in c] and Path(applied).read_bytes() == applied_bytes,
+      log[-800:] + str(cmds_again[-2:]))
+Path(applied).write_bytes(applied_bytes + b"# edited by hand\n")
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out_pol), "--allow-dirty", "--site-policy", str(pol)])
+cmds_again = json.loads((out_pol / "plan.json").read_text(encoding="utf-8"))["deploy_commands"] if code in (0, 1) else []
+check("... and when that file is not `apply`'s output (edited, or from another run), the plan FAILs with 'remove it first', keeps the "
+      "`apply` step and leaves the file as it is (it never deletes or overwrites)",
+      code == 1 and re.search(r"FAIL  site policy: `apply` writes the site layer[^\n]*already exists and is not `apply`'s output for this "
+                              r"render and policy: remove it first", log) is not None
+      and len(cmds_again) == 6 and "ecco_dashboard_guard.py apply" in cmds_again[-2]
+      and Path(applied).read_bytes() == applied_bytes + b"# edited by hand\n", log[-800:])
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(TMP / "out-policy-bad"), "--allow-dirty",
+                 "--site-policy", str(site_policy(overlay=[{"pointer": "/views/1/no_such_parent/title", "value": "x"}]))])
+check("a site policy whose `apply` would refuse this render is a FAIL row (the printed dashboard step could not succeed)",
+      code == 1 and re.search(r"FAIL  site policy: `apply` writes the site layer[^\n]*parent is missing", log) is not None, log[-800:])
+# A release that changes the protected card: the policy froze /views/1 as an older release had it (one more key), so `apply` sets the
+# overlay but the result no longer matches the protect hash (the post-condition).
+older_view = dict(site_doc["views"][1], subtitle="Example older release")
+release_pol = site_policy(protected=older_view)
+out_release = TMP / "out-policy-release"
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(out_release), "--allow-dirty",
+                 "--site-policy", str(release_pol)])
+with contextlib.redirect_stdout(io.StringIO()) as gbuf:
+    gcode = G.main(["apply", "--policy", str(release_pol), "--destination", F.DASHBOARD_DEST,
+                    "--candidate", str(out_release / "stage" / "ecco_pro.yaml"), "--out", str(TMP / "release-applied.yaml")])
+check("a release that changes the protected card (apply sets the overlay, but the protect hash no longer matches) is a FAIL row naming "
+      "the post-condition and the owner procedure, as the printed `apply` step refuses (exit 3, nothing written)",
+      code == 1 and re.search(r"FAIL  site policy: `apply` writes the site layer[^\n]*post-condition[^\n]*owner procedure", log) is not None
+      and gcode == 3 and not (TMP / "release-applied.yaml").exists(), log[-800:] + gbuf.getvalue()[-300:])
+code, log = run(["plan", "--site", str(site), "--snapshot", str(full_snapshot), "--out", str(TMP / "out-policy-other"), "--allow-dirty",
+                 "--site-policy", str(site_policy(dest="/config/ecco/dashboards/other.yaml"))])
+other_cmds = json.loads((TMP / "out-policy-other" / "plan.json").read_text(encoding="utf-8"))["deploy_commands"] if code == 0 else []
+check("a site policy that does not name the dashboard destination leaves the dashboard command as it is (INFO)", code == 0
+      and "does not name /config/ecco/dashboards/ecco_pro.yaml" in log and len(other_cmds) == 5
+      and all(c.startswith(".\\tools\\deploy-ha.ps1 -Source ") for c in other_cmds), log[-600:])
+bad_pol = TMP / "site-policy-bad.json"
+bad_pol.write_text('{"schema": "ecco-dashboard-protection/1", "gate": "EXAMPLE_PRESERVE_GATE", "dashboards": [', encoding="utf-8")
+refusals = []
+for label, path in (("malformed", bad_pol), ("missing", TMP / "no-such-policy.json"),
+                    ("letter case", site_policy(dest=F.DASHBOARD_DEST.replace("ecco_pro", "Ecco_pro")))):
+    o = TMP / f"out-policy-refused-{label.replace(' ', '-')}"
+    code, log = run(["plan", "--site", str(site), "--out", str(o), "--allow-dirty", "--site-policy", str(path)])
+    refusals.append((label, code, (o / "plan.json").exists()))
+check("a site policy that is malformed, missing or names the dashboard only with another letter case is refused (exit 2) before "
+      "anything is written", all(c == 2 and not wrote for _l, c, wrote in refusals), str(refusals))
 after = F.sha(b"".join((ROOT / r).read_bytes() for r in [F.DASHBOARD_REL, "VERSION.yaml"]))
 check("the repository's own files are unchanged by planning", before == after)
 (out2 := TMP / "out_res").mkdir()
@@ -211,7 +335,7 @@ url = f"http://127.0.0.1:{srv.server_address[1]}"
 for c in plan["cards"]:
     (out / "stage" / "local" / "ecco" / c["name"]).write_bytes((out / "stage" / c["name"]).read_bytes())
 code, log = run(["verify-served", "--plan", str(out / "plan.json"), "--base-url", url, "--timeout", "5"])
-check("verify-served passes when the server hands out the planned bytes", code == 0 and log.count("PASS") == 3, log[-400:])
+check("verify-served passes when the server hands out the planned bytes", code == 0 and log.count("PASS") == 4, log[-400:])
 (out / "stage" / "local" / "ecco" / card["name"]).write_bytes(good + b"\n//x")
 code, log = run(["verify-served", "--plan", str(out / "plan.json"), "--base-url", url, "--timeout", "5"])
 check("verify-served fails when a served bundle differs by a byte", code == 1 and "DIFFERS" in log, log[-400:])
@@ -232,9 +356,10 @@ src_text = (ROOT / "tools" / "ecco_deploy_preflight.py").read_text(encoding="utf
 tree = ast.parse(src_text)
 imports = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
 imports |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-check("it imports only the standard library, PyYAML and the site renderer: no socket/ssl/ssh/ftp/http client libraries, no os or shutil",
+check("it imports only the standard library, PyYAML, the site renderer and the dashboard guard (itself network-, process- and OS-free, "
+      "tools/tests/test_ecco_dashboard_guard.py): no socket/ssl/ssh/ftp/http client libraries, no os or shutil",
       imports <= {"__future__", "argparse", "hashlib", "json", "re", "subprocess", "sys", "urllib", "dataclasses", "datetime", "pathlib",
-                  "yaml", "ecco_site_render"}, str(sorted(imports)))
+                  "yaml", "ecco_site_render", "ecco_dashboard_guard"}, str(sorted(imports)))
 runs = [c for c in ast.walk(tree) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
         and isinstance(c.func.value, ast.Name) and c.func.value.id == "subprocess"]
 
@@ -556,8 +681,20 @@ check("it is printed for every /config/www/ecco/ destination: gated on Get-EccoL
       "if (Get-EccoLovelaceResourceUrl -Destination $Destination)" in dha and "Format-EccoResourceReminder -Destination $Destination" in dha
       and "$prefix = '/config/www/ecco/'" in mod and "'/local/ecco/' + $Destination.Substring($prefix.Length)" in mod)
 storage = [ln.strip() for ln in dha.splitlines() if ".storage" in ln]
-check("deploy-ha.ps1 only READS the persisted resource list: its one .storage command is a captured `cat` of lovelace_resources",
-      len(storage) == 1 and "-Command 'cat /config/.storage/lovelace_resources' -Capture" in storage[0], str(storage))
+res_uses = [ln.strip() for ln in dha.splitlines() if "$lovelaceResourcesPath" in ln]
+check("deploy-ha.ps1 only READS the persisted resource list: .storage is spelled in the reminder's captured `cat` and in one path variable, "
+      "which is only ever a read source (the preservation gate's read-only copy, `cp -p` into the backup folder, and -Action Retire's "
+      "check that no resource still loads a retired card)",
+      len(storage) == 2 and any("-Command 'cat /config/.storage/lovelace_resources' -Capture" in ln for ln in storage)
+      and "$lovelaceResourcesPath = '/config/.storage/lovelace_resources'" in storage
+      and len(res_uses) == 5 and "$lovelaceResourcesPath = '/config/.storage/lovelace_resources'" in res_uses
+      and any(ln.startswith("$retired = Invoke-EccoRetireFile ") and "-ResourcesPath $lovelaceResourcesPath" in ln for ln in res_uses)
+      and any("-ResourcesPath $lovelaceResourcesPath" in ln and "Invoke-EccoDashboardPreservationGate" in ln for ln in res_uses)
+      and "$resourcesBackupPath = \"$backupDir/\" + ($lovelaceResourcesPath.TrimStart('/') -replace '/', '__')" in res_uses
+      # The copy into the backup folder answers a marker (review L3W-6): copied, or no resource list on the host.
+      and any(ln.startswith("$resourcesCopyCommand = ")
+              and "then cp -p '$lovelaceResourcesPath' '$resourcesBackupPath' && echo ECCO_RESOURCES_COPIED; "
+                  "else echo ECCO_RESOURCES_ABSENT; fi" in ln for ln in res_uses), str(storage + res_uses))
 check("the deployment module names no .storage path in code: it parses the text it is given and never reads or writes Home Assistant storage",
       "/config/.storage" not in mod)
 check("the reminder says when the copy is not live, names the persisted resource or why it is unknown, and points at verify-resource",

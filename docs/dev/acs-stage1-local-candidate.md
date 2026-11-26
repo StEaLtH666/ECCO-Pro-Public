@@ -74,7 +74,7 @@ sections below are the candidate's reuse proof, matrix, contract, risks and plan
 |---|---|---|---|---|---|---|
 | Target SOC (unchanged ACS0) | 267+N | `number.…_manual_slot_N_target_soc` | max(shutdown SOC, ECCO reserve)..100 / 0..100 | none | DRIFT | all below |
 | Power | 255+N | `number.…_manual_slot_N_power` | **500..8000, step 100** (and the LIVE slot power must be a multiple of 100 W, F3) / 0..8000 | its meaning depends on register 244 (load/export mode); Dump to Grid and Free Power overwrite it while they own the slot | DRIFT | all below |
-| Start time | 249+N (= slot N-1's end; slot 1's start = slot 6's end) | `number.…_manual_slot_N_start_hhmm` | 5-minute grid; the six starts strictly ascending before and after; new != old; not within 15 minutes of the old or new boundary / HHMM valid, mm%5==0, start != end | moves two slots' window at once; moves the RTC precision-correction and quiet windows (`ecco_rtc_policy.h`) | CONTEXT (slot times are context) | all below |
+| Start time | 249+N (= slot N-1's end; slot 1's start = slot 6's end) | `number.…_manual_slot_N_start_hhmm` | 5-minute grid; the six starts strictly ascending before and after (acs1c, 2026-10-25: one 24-hour cycle in slot order instead, see [acs1c-cyclic-tou.md](acs1c-cyclic-tou.md)); new != old; not within 15 minutes of the old or new boundary / HHMM valid, mm%5==0, start != end | moves two slots' window at once; moves the RTC precision-correction and quiet windows (`ecco_rtc_policy.h`) | CONTEXT (slot times are context) | all below |
 | Charge source | 273+N bits 0-1 | `select.…_manual_slot_N_charge_source` | **None or Grid only**; refused if the live source is a generator value / firmware: 0-3 | mode bits 2-4 and reserved bits preserved (staged mode == live mode, firmware keeps cache & 0xFFE0) | DRIFT | all below |
 
 **Rejected in Stage 1, with reasons:**
@@ -112,6 +112,11 @@ inherited from ACS0):
   - refused if the change would switch which slot is active right now (the current time lies between the old and new
     boundary);
   - refused if any slot's live start is not a well-formed HH:MM (the firmware publishes `?nnnn` for out-of-range words).
+  - **acs1c (2026-10-25; offline, not yet independently reviewed, not installed, not live-proven):** the six live starts are validated as
+    one 24-hour cycle in slot order (each on the 5-minute grid, every slot at least 5 minutes, exactly one wrap past midnight) instead of
+    strictly ascending HH:MM values, the new start must lie strictly between its neighbours counted round the clock (slot 6 precedes
+    slot 1), the proposed layout must itself be one cycle, and the active-slot-now guard is evaluated in the same unwrapped minutes.
+    This makes the owner's live layout (slot 5 running 22:00 -> 00:25) editable; see [acs1c-cyclic-tou.md](acs1c-cyclic-tou.md).
 
 **Added after the owner's review decisions of 2026-10-20 (F1-F4, see section 9):**
 - **F1, a start-time edit refreshes slot N-1's Manual Controls staging.** After a VERIFIED SUCCESSFUL start-time edit of slot N the
@@ -271,7 +276,8 @@ selects; the suite checks that and renders service data the way Home Assistant d
 2. **Edit:** a pencil on power, start or source (and SOC, as today). The input is bounded:
    - power: 500-8000 W in 100 W steps;
    - start: a 5-minute picker limited to between the neighbours, at least 15 minutes from now, and never switching which slot
-     is active now;
+     is active now (acs1c: the neighbours are counted round the clock, slot 6 before slot 1, so a slot that runs past midnight is
+     editable like any other; the Review names the two resulting windows);
    - source: None / Grid.
 
    An effect line explains the change, for example "Slot 3 starts 09:30 instead of 09:00; slot 2 then ends 09:30". The
@@ -321,7 +327,7 @@ What the Stage 1 suite covers:
   by the firmware path; the firmware's six charge-source selects list None first.
 - **Every slot x every setting** end to end. Only the intended register changes, checked against every model register.
 - **SOC parity with the installed ACS0** on shared scenarios.
-- **Per-setting validation:** power bounds and step; start grid, order, wrap, neighbours, the 15-minute guard, the active-slot
+- **Per-setting validation:** power bounds and step; start grid, order, wrap, neighbours (acs1c: the cyclic rule, section [4c] of the suite), the 15-minute guard, the active-slot
   rule (a 49-case table), the inverter-clock coherence and malformed live times; charge source words and live generator values;
   the clock-change nights.
 - **Review and phrase handling;** the full gate for every setting.
@@ -393,6 +399,10 @@ Decided by the owner on 2026-10-21:
    given for a SOC-only editor, is re-approved for the wider Stage 1 editor). DCO sign-off (D4): **approved**, added by the owner.
 8. N1 (keep the write-seen helper and recorder automation as built): **accepted**. N2 (the success verdict needs the gate-pass counter to
    move by exactly 1): **approved**.
+9. **Proposed 2026-10-25, NOT yet decided (acs1c):** P3's "strictly ascending starts" becomes "one 24-hour cycle in slot order" (P3c: 5-minute
+   grid, every slot at least 5 minutes, exactly one wrap past midnight; the new start strictly between its neighbours round the clock; the
+   15-minute distance, the active-slot rule, the inverter-clock rule and P4 unchanged). Implemented offline at the owner's direction of
+   2026-10-25; the owner decides after the independent review, before any install ([acs1c-cyclic-tou.md](acs1c-cyclic-tou.md)).
 
 Still open (the owner decides each): I1 install by restart or by reloads (the manifest says `restart_required: true`); I2 the stale comment in
 `deployment/ha-manifest.yaml` (a chain-pinned manifest edit, left as is); I3 the supervised live proof; I4 the push, pull request, merge,

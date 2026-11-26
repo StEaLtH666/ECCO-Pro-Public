@@ -75,6 +75,7 @@ class LiveInputs:
     tariff: TariffInfo | None = None
     saving_sessions: list[tuple[datetime, datetime]] = field(default_factory=list)
     inverter_ok: bool | None = None         # None = unknown = export withheld
+    reserve_raise_pct: float | None = None  # the raise-only advisory reserve preference (SHADOW), never the HA helper
 
 
 def default_cheap_windows(cfg: SiteConfig, now: datetime, days_ahead: int = 3) -> list[tuple[datetime, datetime]]:
@@ -193,7 +194,7 @@ def advise(cfg: SiteConfig, planner: Planner, inp: LiveInputs, windows: list[tup
     """The shadow answers. Returns a plain dict (JSON-serialisable via the engine)."""
     now = inp.now
     tz = zone(cfg.tz)
-    reserve = cfg.effective_reserve(inp.ha_reserve_pct)
+    reserve = cfg.effective_reserve(inp.ha_reserve_pct, inp.reserve_raise_pct)
     floor = reserve.effective_pct               # the effective minimum SOC: nothing below may be advised as safe
     desired = floor + cfg.soc_safety_margin_pct
     eta = eta_one_way(cfg)

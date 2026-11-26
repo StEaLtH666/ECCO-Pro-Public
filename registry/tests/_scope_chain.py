@@ -115,14 +115,27 @@ import _smr1_scope as _smr1  # noqa: E402
 import _fe1_scope as _fe1  # noqa: E402
 import _acs0_scope as _acs0  # noqa: E402
 import _acs1_scope as _acs1  # noqa: E402
+import _acu1_scope as _acu1  # noqa: E402
+import _acs1c_scope as _acs1c  # noqa: E402
+import _acs1x_scope as _acs1x  # noqa: E402
+import _bpd1_scope as _bpd1  # noqa: E402
 import _fps1_scope as _fps1  # noqa: E402
 import _fsw1_scope as _fsw1  # noqa: E402
 import _hd1_scope as _hd1  # noqa: E402
+import _isp1_scope as _isp1  # noqa: E402
+import _epc1_scope as _epc1  # noqa: E402
+import _epc2_scope as _epc2  # noqa: E402
+import _epc3_scope as _epc3  # noqa: E402
 import _lic0_scope as _lic0  # noqa: E402
 import _mtou1_scope as _mtou1  # noqa: E402
 import _ovw1_scope as _ovw1  # noqa: E402
 import _ovw2_scope as _ovw2  # noqa: E402
+import _ovw3_scope as _ovw3  # noqa: E402
+import _ovw4_scope as _ovw4  # noqa: E402
+import _ovw5_scope as _ovw5  # noqa: E402
+import _r9_scope as _r9  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
+import _ptt1_scope as _ptt1  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
@@ -1091,7 +1104,371 @@ ACS1 = Entry(
          "recorded by an invertible transform, not by a reverter (the package is neither chain-pinned nor frozen): ZERO firmware, "
          "registry, deployment, frozen-file or reserved-token-allowlist change, unchanged write surface",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1)
+# acu1 (ECCO TOU Settings card, frontend/ecco-tou-settings-card: the six live TOU slots and a guarded editor on the dashboard;
+# _acu1_scope.py): made on public main
+# a7235433 after acs1. OWNER-APPROVED 2026-10-25 (assignment A2 of the new Window A, decisions D1-D9 as recommended, D5 and D6 refined):
+# a SEPARATE card (the read-only Advanced / Experimental Configuration card of section 13 is byte-identical), which calls ONLY the
+# installed ACS1 editor scripts - script.ecco_cfg_review_tou_slot_setting, script.ecco_cfg_apply_tou_slot_setting and
+# script.ecco_cfg_acknowledge_edit_review - each through script.turn_on, and reads the editor's helpers back. It holds no safety logic
+# of its own (every gate stays in the scripts; the Review's refusal text is shown verbatim), reports success only on the editor's
+# APPLIED AND VERIFIED, binds Apply to the slot, setting and value reviewed in that card (the one-time code is read from the live plan
+# record), enforces a fixed 300 s spacing after every Apply that passed the editor's first gate, whatever its outcome (a REFUSED Apply adds
+# none; provisional, not a firmware rule, not configurable), offers Undo only when the result text, the owner-edit record and a current live read agree, keeps
+# start times display-only (the site's layout wraps midnight, L1) and explains the shadow latch only on the Review's own refusal (D3 as
+# approved, reading the two FB-C3 display decoders, is pinned out of frontend/ by the FB-C3 suite and was not implemented). FROZEN edits (PEX): the dashboard (the v7.22.0 header note; section 7 of the Inverter / Advanced view keeps its heading and
+# badge while its two read-only markdown cards become the card) and VERSION.yaml (dashboard 7.22.0, staged). CHAIN-PINNED edit: the
+# deployment manifest, one frontend_assets stanza (copy and resource registration stay manual). Added: the card folder, its CI wrapper
+# suite tools/tests/test_tou_settings_card.py and the scope module. Measured, not declared: ZERO firmware, Home Assistant package,
+# registry, Intelligence or ecco_core byte; ZERO Modbus operation; no reserved-token holder (the card spells none); the write surface
+# is unchanged.
+ACU1 = Entry(
+    id="acu1", pr="ACU1", commit="unmerged",
+    reverts=dict(_acu1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after acu1
+        HA_MANIFEST: "ca537531897fa73c3f61a7a5a151397643b1bb80764c8e8f689e0d3120a100cf",
+    },
+    added_files=_acu1.ADDED_FILES,
+    frozen_reverts=dict(_acu1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after acu1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _acu1.DASHBOARD_REL: "01e6c2d42f022de0661b1394b4c96ae7ad7265a2954c98a2e2f0b6283171cd10",
+        _acu1.VERSION_REL: "2c05d16b0fc8a63ccb119c4a1b382f2bcd155bc354984ac80062dcef43b560e6",
+    },
+    # _pex.fingerprint(ACU1): hashes its parent acs1's fingerprint and every declaration above
+    fingerprint="352c542819485963e3b30be6dbefca189c04b8b6fdc9491fa6edc901548405b7",
+    note="OWNER-APPROVED 2026-10-25 (A2; D1-D9, D5 and D6 refined): the ECCO TOU Settings card on section 7 of the Inverter / Advanced view "
+         "(the six live TOU slots and a guarded editor for the target SOC, the power and the charge source of one slot) which calls only the "
+         "three installed ACS1 editor scripts through script.turn_on and reads the editor's helpers back; no safety logic of its own, success "
+         "only on the editor's APPLIED AND VERIFIED, Apply bound to the slot, setting and value reviewed in the card, a fixed provisional 300 s "
+         "spacing after every Apply that passed the editor's first gate, Undo only with agreeing records and a current live read, start times display-only (L1), the shadow latch explained only on the Review's refusal (D3 "
+         "not implementable: the FB-C3 suite pins the decoders out of frontend/); "
+         "dashboard 7.22.0 staged (the section 7 heading kept, its two read-only markdown cards replaced), one manual frontend_assets stanza in "
+         "the manifest; the read-only catalogue card of section 13 is unchanged: ZERO firmware, Home Assistant package, registry, Intelligence "
+         "or ecco_core change, ZERO Modbus operation, no reserved-token holder, unchanged write surface",
+)
+# acs1c (Advanced Configuration Stage 1, cyclic TOU correction; _acs1c_scope.py): made on public main a7235433 after acs1, rebased onto
+# 07b37c14 after acu1 on 2026-10-26. The acs1 editor
+# refused every start-time Review of the owner's live layout (starts 00:30, 05:30, 12:00, 16:35, 22:00, 00:25: slot 5 runs past midnight,
+# slot 6 lasts five minutes) as "not strictly ascending": a software limitation, not an invalid schedule (the inverter's six slots are a ring
+# and the fallback capture's ring_valid already says so). acs1c replaces the ordering rule in the four copies of the gate by a cyclic one (one
+# 24-hour cycle in slot order on the 5-minute grid, every slot at least 5 minutes, exactly one wrap; the new start strictly between its
+# neighbours counted round the clock; the proposed layout itself one cycle; the active-slot-now guard in the same unwrapped minutes) and
+# changes nothing else: every other guard, the staged-equals-live proof, the one quiet-window press, the readback, F1 / F2 and the lock are
+# byte for byte acs1's; the written value is still the typed HH:MM on the grid. The exact record is a SECOND invertible transform layered on
+# the Stage 1 text (home-assistant/prototypes/acs-stage1/acs1c_transform.py, 21 pairs; unrender_cyclic(installed) is the Stage 1 text of
+# 2026-10-25, sha256 pinned, the rollback file of this correction), proven both ways by the Stage 1 suite; the acs1 transform, its pins and
+# its declaration are unchanged. NO reverter and NO checkpoint (acs1's reasons); no frozen file, no reserved-token allowlist and no reserved
+# id is edited (the gate lines that carry the six ids are inherited untouched); banned_files is empty. Measured, not declared: ZERO firmware,
+# registry YAML, deployment, dashboard, Intelligence or ecco_core byte; the firmware write surface is unchanged. OWNER STATUS: offline
+# implementation at the owner's direction of 2026-10-25 (Window C); independently reviewed offline (2026-10-25/26); not installed, not live-proven; policy P3 ("strictly ascending") is superseded only on the owner's approval after review.
+ACS1C = Entry(
+    id="acs1c", pr="ACS1C", commit="unmerged",
+    added_files=_acs1c.ADDED_FILES,
+    # _pex.fingerprint(ACS1C): hashes its parent acu1's fingerprint (acs1c was re-sealed on acu1, main 07b37c14, on 2026-10-26) and every declaration above
+    fingerprint="9b4e5b349ef18de9c9ddf36bd61e98d85ac8da5443ce3240377cd370797aaffc",
+    note="Advanced Configuration Stage 1, cyclic TOU correction (offline, at the owner's direction of 2026-10-25; independently reviewed "
+         "offline on 2026-10-25/26; not installed, not live-proven): the start-time ordering rule of the guarded TOU editor becomes one 24-hour cycle in slot order (5-minute grid, every "
+         "slot at least 5 minutes, exactly one wrap past midnight; the new start strictly between its neighbours round the clock, slot 6 before "
+         "slot 1; the proposed layout itself one cycle; the active-slot-now guard in unwrapped minutes), so the owner's live layout can be edited; "
+         "every other guard, proof, press, readback and lock unchanged; the written value is still HH:MM on the grid; recorded by a second "
+         "invertible transform on the Stage 1 text (21 pairs), the acs1 record unchanged: ZERO firmware, registry, deployment, frozen-file or "
+         "reserved-token-allowlist change, unchanged write surface",
+)
+# acs1x (Advanced Configuration Stage 1, midnight-crossing hold; _acs1x_scope.py): made on public main e97ba36c (the acs1c merge, PR #45).
+# acs1c made every slot of the owner's layout start-time editable through the scripts, so a single edit could also move the midnight
+# crossing (the one slot pair whose next start is earlier in raw HH:MM minutes; slot 5 -> 6 in the owner's layout) to another slot: a
+# position the inverter's scheduler has not been observed with. The owner restricted that until a separately authorised supervised test,
+# and on 2026-10-27 directed that the scripts enforce it, fail closed. acs1x adds to the four copies of the gate one check (`xw`: one raw
+# decrease in the live and in the proposed layout, at the same index; anything unreadable refuses) and its refusal, right after acs1c's
+# proposed-layout refusal, and rewrites four refusal texts, shorter and never truncated, so that every value written to the 255-character
+# result helper fits (acs1c's cycle and neighbour refusals and acs1's power and fallback live match refusals did not fit the last check's
+# frame); nothing else changes. The exact record is a THIRD invertible transform layered on the acs1c
+# text (home-assistant/prototypes/acs-stage1/acs1x_transform.py, 12 pairs; unrender_crossing(installed) is the acs1c text of e97ba36c,
+# sha256 pinned: provenance, not an installed rollback while the restriction stands), proven both ways by the Stage 1 suite; the acs1 and acs1c transforms,
+# pins and declarations are unchanged. NO reverter and NO checkpoint (acs1's reasons); no frozen file, no reserved-token allowlist and no
+# reserved id is edited; banned_files is empty. Measured, not declared: ZERO firmware, registry YAML, deployment, dashboard, frontend,
+# Intelligence or ecco_core byte; the firmware write surface is unchanged. OWNER STATUS: offline implementation at the owner's direction
+# of 2026-10-27, corrected for an independent review's findings; the correction awaits its own re-check; not installed; no relocated-crossing test is authorised.
+ACS1X = Entry(
+    id="acs1x", pr="ACS1X", commit="unmerged",
+    added_files=_acs1x.ADDED_FILES,
+    # _pex.fingerprint(ACS1X): hashes its parent acs1c's fingerprint (public main e97ba36c) and every declaration above
+    fingerprint="775ddcd098a21f4971c594abf383af696fe40785654197b5916bd62c1ce2014f",
+    note="Advanced Configuration Stage 1, midnight-crossing hold (offline, at the owner's direction of 2026-10-27, corrected for an "
+         "independent review's findings, the correction awaiting its re-check; not installed): the guarded TOU editor's scripts refuse any "
+         "start-time edit that would move the midnight crossing (the one slot pair whose next start is earlier in raw HH:MM minutes) to another "
+         "slot boundary, in all four copies of the gate, fail closed on anything unreadable, until a separately authorised supervised "
+         "relocated-crossing proof; four refusal texts rewritten, shorter and never truncated, so every value written to the result helper "
+         "fits; target SOC, power and charge-source edits and every other guard, proof, press, readback and lock unchanged; recorded by a "
+         "third invertible transform on the acs1c text (12 pairs), the acs1 and acs1c records unchanged: ZERO firmware, registry, deployment, frontend, frozen-file or "
+         "reserved-token-allowlist change, unchanged write surface",
+)
+# ovw3 (the ECCO 3D Energy Flow card on the Overview; _ovw3_scope.py): made on public main 24506e36 (the 3D card V2 merge, PR #46) after
+# acs1x. Section S3 of the Overview shows the read-only 3D card (frontend/ecco-flow-3d-card, V2; its sources and bundle unchanged) in place
+# of the 2D Energy Flow card, configured as the ECCO 3D Preview dashboard serves it, in the dashboard's generic entity naming: the 2D card's
+# nodes, today, format and grid layout settings kept (not its card_mod style), its grid voltage, connection and frequency moved to
+# nodes.grid, and the 3D card's ECCO status block, scene pack and freshness settings added. FROZEN edits (PEX): the dashboard (the v7.23.0 header note and the S3 card) and
+# VERSION.yaml (dashboard 7.23.0, staged), both already frozen (_ovw3_scope.FROZEN_REVERTERS); as of acs1x each is the 24506e36 blob byte
+# for byte. Nothing is newly enrolled. Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware,
+# Home Assistant package, deployment manifest, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no new service call (the
+# card only opens more-info); no manifest stanza (the card's Lovelace resource and bundle file are the ones the preview already loads);
+# every other section and view is byte-identical. The FE-1 suite's dashboard wiring pin reads the dashboard as of acs1x (a commented PEX
+# read) and keeps a live check on the Overview's flow card; the Stage 1 suite pins acs1x as followed by ovw3 (it pinned acs1x as the last).
+OVW3 = Entry(
+    id="ovw3", pr="OVW3", commit="unmerged",
+    added_files=_ovw3.ADDED_FILES,
+    frozen_reverts=dict(_ovw3.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after ovw3; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _ovw3.DASHBOARD_REL: "3786335fbbf7bfa4906d11b9b128101e87cd0b781cdc72076e4fbe890f840546",
+        _ovw3.VERSION_REL: "0dddce0c82eee252f28b3a02a13782c69e9fc6a03b5874e8f9ddfc286db7cfb0",
+    },
+    # _pex.fingerprint(OVW3): hashes its parent acs1x's fingerprint and every declaration above
+    fingerprint="42a7ad40caa587d7d2b8c5da732bd177d90a7259a865dc347cfcc94394b91a89",
+    note="the read-only ECCO 3D Energy Flow card (V2, sources and bundle unchanged) on the Overview: section S3 shows it in place of the 2D "
+         "Energy Flow card, configured as the ECCO 3D Preview serves it in generic entity naming (the 2D card's nodes, today, format and "
+         "grid layout kept, grid voltage / connection / frequency read from nodes.grid, the ECCO status block, scene pack and freshness settings "
+         "added); it loads through the Lovelace resource the preview already registered; dashboard 7.23.0 staged: ZERO firmware, Home "
+         "Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call, no manifest stanza",
+)
+# isp1 (ECCO Intelligence SHADOW v0.1 in the release files; _isp1_scope.py): made on the export after ovw3, the newest entry when it was
+# built (its fingerprint is sealed after ovw3's and is sealed again if another entry merges first). Three new Home Assistant packages:
+# the presentation package (the pause helper input_boolean.ecco_intel_paused, the dead-man watchdog
+# binary_sensor.ecco_intel_watchdog_fresh and three notification-only alerts that call persistent_notification.create with fixed
+# ecco_intel_ ids), the raise-only advisory reserve helper (one input_number, no `initial`) and the standalone dashboard's
+# registration (one YAML-mode lovelace dashboards entry, administrators only). CHAIN-PINNED edit: the deployment manifest, three package
+# stanzas, a new top-level intelligence_dashboard mapping and one manual frontend_assets stanza for the card
+# (_isp1_scope.PINNED_REVERTERS). FROZEN edits (PEX): VERSION.yaml (current.home_assistant.intelligence_package and a new
+# current.intelligence block, version 0.1.0, SHADOW, applies_nothing, tested_in_home_assistant false; project_version and the dashboard
+# version unchanged) and the V1 prototype suite's isolation pin (intelligence/tests/test_intelligence_dashboard_prototype.py: "no
+# `intelligence` in the manifest" narrowed to no prototype file and no Intelligence path other than exactly isp1's eleven)
+# (_isp1_scope.FROZEN_REVERTERS); as of pub0 each is the export byte for byte. Nothing is newly enrolled.
+# Measured, not declared: no delta, no op path, no substitution, no banned token; ZERO firmware, registry data, Intelligence engine,
+# runtime or ecco_core byte; ZERO Modbus operation; the production dashboard untouched; no service call other than
+# persistent_notification.create, no script, no write of any entity.
+ISP1 = Entry(
+    id="isp1", pr="ISP1", commit="unmerged",
+    reverts=dict(_isp1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after isp1
+        HA_MANIFEST: "65136f935c12eabaf5c943a7a596bd3bb54ca17dae86be7344e818478d934492",
+    },
+    added_files=_isp1.ADDED_FILES,
+    frozen_reverts=dict(_isp1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after isp1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _isp1.VERSION_REL: "29852433eb4e84a849a790ef2e9debde5a2145c417b1a5823f0ff8b7b7ef4d15",
+        _isp1.PROTO_SUITE_REL: "a6110bfb9b5f06d7f62ce48f02817c37360de60bc1aa5a9033e048002b69868a",
+    },
+    # _pex.fingerprint(ISP1): hashes its parent ovw3's fingerprint and every declaration above
+    fingerprint="ad3a192fb075d32b0b4bb1a36f687941091f49ceb8d9744dd0ba56cc538d0f8c",
+    note="ECCO Intelligence SHADOW v0.1 in the release files: the presentation package (pause helper, dead-man watchdog, three "
+         "notification-only alerts), the raise-only advisory reserve helper and the standalone dashboard's registration as three new "
+         "packages; manifest stanzas for the three packages, the standalone dashboard and the card (manual resource registration); "
+         "VERSION.yaml's intelligence block (0.1.0, SHADOW, applies nothing, not tested in Home Assistant); the V1 prototype suite's "
+         "manifest isolation pin narrowed to exactly isp1's paths: ZERO firmware, registry data, "
+         "Intelligence engine, runtime or ecco_core change, ZERO Modbus operation, no service call other than "
+         "persistent_notification.create, the production dashboard untouched",
+)
+# r9 (no automatic start of a missed scheduled run after a Home Assistant restart; _r9_scope.py): the owner's requirement of 12 Nov 2026
+# (docs/dev/grid-loss-interlock-spec.md section 5 R9), made on the export after isp1. FROZEN edits (PEX): the Export to Grid and the Charge
+# Battery schedule packages (_r9_scope.FROZEN_REVERTERS); as of isp1 each is the isp1-state blob byte for byte. CHAIN-PINNED edit (owner
+# decision of 18 Nov 2026, R9 first as its own pull request): the deployment manifest, COMMENTS ONLY, two short blocks above the two package
+# stanzas stating that R9 needs a FULL Home Assistant restart, not a reload (_r9_scope.PINNED_REVERTERS), declared exactly as acfg1's and
+# isp1's manifest edits are. Each package gains a
+# captured-Home-Assistant-start helper written only by a new capture automation on the `homeassistant` start event, a fail-closed guard
+# (`missed_run`) on both start paths (the schedule watchdog and the startup recovery), and a record / notification / disarm of a missed run in
+# place of its start; future occurrences and the on-time start are unchanged. Measured, not declared: no delta, no op path; ZERO firmware,
+# registry, dashboard or card byte and no manifest byte other than those two comment blocks (no stanza, key, value or order moves); no register
+# and no dongle entity written that was not written before (the one new service call is input_datetime.set_datetime on the package's own helper).
+R9 = Entry(
+    id="r9", pr="R9", commit="unmerged",
+    reverts=dict(_r9.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after r9 (the FULL-restart comment blocks)
+        HA_MANIFEST: "0d844bf7f2c904b5f2db6e91f071657a3073edc97a05bc5bf28467ce24930d8f",
+    },
+    added_files=_r9.ADDED_FILES,
+    frozen_reverts=dict(_r9.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after r9
+        _r9.DUMP_REL: "97d1af088d9c8912e5098b98eadb5bdb1a48faa5808111d766174ac1ab0f58f3",
+        _r9.FREE_REL: "e0917a5d43bdf68ab8a90aadc0bae0394d4c59f8181a5ad61858a4e002438249",
+        _r9.PKGTEST_REL: "2e85448a97c195bbf8bf5c16621df81e9f077d5b673abc1324128b4f807dcfb1",
+        _r9.SHADOW_REL: "3ab1fd78cbe9e29e85ab1d86b81ebcc7a57598eab5d9cd7b077fda92796bb423",
+    },
+    # _pex.fingerprint(R9): hashes its parent isp1's fingerprint and every declaration above
+    fingerprint="d90142a0205112514b1d0f94402ca1e990327a323a4cb55bed0a7f1b5bb7b274",
+    note="no automatic start of a missed scheduled Charge Battery or Export to Grid run after a Home Assistant restart (owner requirement "
+         "R9 of 12 Nov 2026; offline, not installed): a captured Home Assistant start time, a fail-closed guard on the schedule "
+         "watchdog and the startup recovery, a missed run recorded (MISSED - not started after a Home Assistant restart), notified and "
+         "disarmed instead of started, future occurrences and the on-time start unchanged; the deployment manifest gains comments "
+         "only (the FULL Home Assistant restart requirement on both package stanzas): ZERO firmware, registry, dashboard or card "
+         "change, no new inverter or dongle write",
+)
+# epc1 (stage 2 of the two-master-card energy-control work: the read-only plan views in the Energy Actions card; _epc1_scope.py): made on
+# the export after isp1. FROZEN edits (PEX): the card's README.md (a pub0 target) and its src/config.ts and src/ecco-energy-actions-card.ts
+# (enrolled): the `show_plan` / `plan` configuration and the plan section under the two tiles. The card's tsconfig.json is NOT declared (it
+# is neither frozen nor enrolled; enrolling it is an owner decision): the working tree keeps it at its export content. ADDED: the plan sources
+# and tests of the card (the card folder's added files are what the three folder pins skip), the plan-core package and its tests.
+# Measured, not declared: no chain-pinned reverter, no delta, no op path; ZERO firmware, Home Assistant package, deployment, registry,
+# Intelligence or ecco_core byte; ZERO Modbus operation; no service call (the views display only).
+EPC1 = Entry(
+    id="epc1", pr="EPC1", commit="unmerged",
+    added_files=_epc1.ADDED_FILES,
+    frozen_reverts=dict(_epc1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after epc1; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _epc1.README_REL: "08355cf94824817953b9781d0801844a341741f78e0e524d58a8088ac335562d",
+        _epc1.CONFIG_REL: "ba00c1bd90b1b0187dec9718df6a1bd99b2e5546040efb74dc4bd8496fdd950d",
+        _epc1.SRC_REL: "c5205c6cc04943e0082f53324205e9d613b93172daf6451a9a84c434a98d6986",
+    },
+    # _pex.fingerprint(EPC1): hashes its parent isp1's fingerprint and every declaration above
+    fingerprint="0b6e38835e6d14ac831e18a01132366e2d2aae137f30fb2b23a39e5834953185",
+    note="the read-only plan views in the Energy Actions card (Tomorrow's Plan, the six-slot TOU timeline, the override limits and running "
+         "overrides, behind show_plan, default off): the card's README, config and source, plus the plan sources, tests and the plan-core "
+         "package they use; the views display only (no service call); ZERO firmware, Home Assistant package, deployment, registry, "
+         "Intelligence or ecco_core change, ZERO Modbus operation",
+)
+# epc2 (stage 3 of the same work: guarded overrides and their enforcement; offline, nothing installed; _epc2_scope.py): made on the export
+# after epc1. FROZEN edits (PEX): the card's README.md, src/config.ts, src/ecco-energy-actions-card.ts and the rebuilt
+# dist/ecco-energy-actions-card.js (the bundle was not rebuilt since the export: the rebuild carries every source change since), and the
+# scheduled Dump to Grid package (it refuses during Hold battery / Skip tonight / Prepare for power cut, fails closed, and raises the
+# Stop SOC it stages to the effective reserve). CHAIN-PINNED edit: the deployment manifest (the stanzas of the two new packages, and comments only above
+# the changed scheduled Dump to Grid stanza: its helper dependency and the active-override warning).
+# ADDED: the plan helper package (the owner's limits, the override records, two guarded scripts that write only those helpers, the
+# export-hold and effective-reserve sensors) and the guarded start package, their suites and test support, the card's control sources
+# and tests. Measured, not declared: no delta, no op path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte;
+# ZERO Modbus operation; the new scripts call only helper setters and persistent notifications, and the guarded start presses the
+# existing dongle start button once, as the card did before.
+EPC2 = Entry(
+    id="epc2", pr="EPC2", commit="unmerged",
+    reverts=dict(_epc2.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after epc2
+        HA_MANIFEST: "b6242191061aa705a3977bea9c4ab219febe614df617f9dfa396030b2ca35392",
+    },
+    added_files=_epc2.ADDED_FILES,
+    frozen_reverts=dict(_epc2.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of each file after epc2; as of pub0 each is its pub0 state (manifest result / enrolled hash)
+        _epc2.README_REL: "67b3ad09c5f8e7242ee1fd726da48b46b0e29807aab5526b1ba65625c97160cf",
+        _epc2.CONFIG_REL: "c854bc8e3c3436e643dcc31566b43eb6310599418c39b92cf852e05fc2cbad25",
+        _epc2.SRC_REL: "076b03bbd039efb5472dd8ae3ce3147d9c6f361728e51eb8bcdcff45c4aa3579",
+        _epc2.DIST_REL: "ae25c13deb315ac044ecd4b06ac2d7c2a2bb65c66236643a029d63651ceb8c06",
+        _epc2.DUMP_REL: "1af5c0a51f540a7de4dcaa9effeb1cff95b789bc1219e06a36699309c4bdc2a6",
+    },
+    # _pex.fingerprint(EPC2): hashes its parent epc1's fingerprint and every declaration above
+    fingerprint="54acc24b002c81219b84d70b2b2a9bfa39e6e6a1e0bfc4bc584c6606214124f4",
+    note="guarded Hold battery / Skip tonight / Prepare for power cut overrides, offline and not installed: the plan helper package and "
+         "its two guarded scripts (server-side limits, expiry, raise-only reserve, stable refusal codes; they write only plan helpers and "
+         "never call a charge, discharge, TOU, inverter or dongle service), the guarded manual Dump to Grid start, the scheduled Dump to "
+         "Grid start refusing during an override and raising its Stop SOC to the effective reserve, the card's start and cancel controls "
+         "(script.turn_on on the guarded scripts only) and its rebuilt bundle, and the manifest stanzas of the two packages: ZERO firmware, "
+         "registry data, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+# epc3 (the Gentle Smart Charging controller MODEL: read only, offline, nothing installed or actuated; _epc3_scope.py): made on the export
+# after epc2. ADDED files only: the pure controller model in the plan-core package, its closed-loop battery simulator and its suite. No
+# frozen or chain-pinned edit (the plan-core README and index are epc1 added files). Measured, not declared: no reverter, no delta, no op
+# path; ZERO firmware, Home Assistant package, deployment, registry, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation;
+# no service call and no write: the model returns data labelled "model, not a command" with actuationSupported false.
+EPC3 = Entry(
+    id="epc3", pr="EPC3", commit="unmerged",
+    added_files=_epc3.ADDED_FILES,
+    # _pex.fingerprint(EPC3): hashes its parent epc2's fingerprint and every declaration above
+    fingerprint="a9921068378e9d3957f3041eaccd72d87a8c6599f92b5477f476fdb3b90a3d76",
+    note="the read-only Gentle Smart Charging controller model (dynamic charge-power setpoint from SOC, remaining time and the safe ceiling, "
+         "with hysteresis, dwell and a changes budget), its closed-loop battery simulator and tests, in the plan-core package; data only, "
+         "labelled model-not-a-command, actuationSupported false (today's firmware fixes the Free Power rate at START): ZERO firmware, "
+         "Home Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
+)
+# bpd1 (the start bypass detector: DETECT AND ALERT ONLY, option O2 of the R9 / Stage 3 integration plan; offline, nothing installed; _bpd1_scope.py): made on the export
+# after epc3. ADDED: the detector package and its suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op
+# path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation; the package calls only persistent_notification.create and the setters
+# of its own helpers; it presses and writes nothing on the dongle, the inverter or any ECCO control, and prevents nothing.
+BPD1 = Entry(
+    id="bpd1", pr="BPD1", commit="unmerged",
+    reverts=dict(_bpd1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after bpd1
+        HA_MANIFEST: "99ba89d5e4f4a3d021d0917653e86633aed5c61043bc1f42227c94f3778be035",
+    },
+    added_files=_bpd1.ADDED_FILES,
+    frozen_reverts=dict(_bpd1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the frozen suite after bpd1 (Z11 (vii): one declared read-only reader of the schedule result helpers)
+        _bpd1.SHADOW_EVALUATOR_TEST_REL: "7c4665b15fb8d1681aa56795732aaef4f7af5711e1a4bc93a57d444398023a43",
+    },
+    # _pex.fingerprint(BPD1): hashes its parent epc3's fingerprint and every declaration above
+    fingerprint="def05280a8cc233f0c3c61b35ad361bebabc7d27f8e2ae31f37f86a71ebebea8",
+    note="the start bypass detector (detect and alert only): a package that notices a Dump to Grid or Charge Battery session that turned active without ECCO's own record "
+         "of the start, always records an incident in its own helpers and raises a persistent notification (Charge Battery only with a fact true); it prevents nothing, writes nothing on the dongle, the inverter or "
+         "any ECCO control, and is blind while Home Assistant is down; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+# ptt1 (the Power Flow Today chart's tooltip stays inside the card and the viewport; _ptt1_scope.py): made on public main c6e5a588 after isp1, the
+# newest entry when it was built (its fingerprint is sealed after isp1's and is sealed again if another entry merges first). The
+# `Power Flow Today` chart (custom:apexcharts-card; the same chart three times, in the Overview, Intelligence and System views) shows a
+# shared tooltip with five readings; ApexCharts places it from the plot grid only and the card's own `overflow: hidden` cuts it, so on
+# the Overview chart the last reading (SOC) is cut off. ptt1 adds ONE key to each of the three charts, apex_config.chart.events.mounted,
+# an EVAL string (the chart already uses EVAL strings for its TOU annotation) that moves the tooltip the shortest way inside the card
+# and the viewport (a MutationObserver on the chart and one pure function; it writes only the tooltip's style.left and style.top, and
+# cleans up when the chart is destroyed). FROZEN edit (PEX): the dashboard (_ptt1_scope.FROZEN_REVERTERS; as of isp1 it is the 7.23.0
+# file, ovw3's checkpoint, byte for byte); the dashboard version is NOT bumped (the same precedent as wsc1; VERSION.yaml and the header
+# notes are untouched, so the v7.23.0 pins stand). Nothing is newly enrolled. Measured, not declared: no chain-pinned reverter, no
+# checkpoint, no delta, no op path; ZERO firmware, Home Assistant package, deployment manifest, registry, Intelligence or ecco_core byte;
+# ZERO Modbus operation; no service call, no entity, no network access; every other section, view and chart value is byte-identical.
+PTT1 = Entry(
+    id="ptt1", pr="PTT1", commit="unmerged",
+    added_files=_ptt1.ADDED_FILES,
+    frozen_reverts=dict(_ptt1.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after ptt1; as of pub0 it is its pub0 state (manifest result)
+        _ptt1.DASHBOARD_REL: "4ced46e37d720744c1d7ea555bf363da1069899235814dddb9c2cc79bfa6a73e",
+    },
+    # _pex.fingerprint(PTT1): hashes its parent isp1's fingerprint and every declaration above
+    fingerprint="83ff93b6873d6e5f8464601616b0a216379ee08aec571f134639906560e09faf",
+    note="the Power Flow Today chart's shared tooltip stays inside the card and the viewport: one EVAL key (apex_config.chart.events.mounted) "
+         "per chart, three identical charts; display only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, "
+         "deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation, no service call, no entity, no network access",
+)
+# ovw4 (the Overview's Energy Actions card carries the Stage 3 plan options; _ovw4_scope.py): made on public main after ptt1 (the newest entry
+# when it was built; its fingerprint is sealed after ptt1's and is sealed again if another entry merges first). Stage 3 (PR 59) added three
+# optional settings to the Energy Actions card: `show_plan`, `plan` (entity_prefix, reserve) and `dump_to_grid.guarded_start`. The repository's
+# dashboard never set them, so a production Overview that uses them differed from a render of this repository (and a whole-file dashboard
+# deploy would have removed them). ovw4 sets them on the ONE Energy Actions card of the Overview view in the dashboard's generic naming (the
+# quoted default device slug, which tools/ecco_site_render.py renders per site exactly as it does for the TOU Settings cards). FROZEN edit
+# (PEX): the dashboard (_ovw4_scope.FROZEN_REVERTERS; as of ptt1 it is ptt1's checkpoint, byte for byte); the dashboard version is NOT bumped
+# (the precedent of wsc1 and ptt1). The site policy's protected layer (the Overview's flow card) is untouched. Nothing is newly enrolled.
+# Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant package, deployment
+# manifest, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no service call of its own.
+OVW4 = Entry(
+    id="ovw4", pr="OVW4", commit="unmerged",
+    added_files=_ovw4.ADDED_FILES,
+    frozen_reverts=dict(_ovw4.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after ovw4; as of pub0 it is its pub0 state (manifest result)
+        _ovw4.DASHBOARD_REL: "6959c967d5ce457a87e55ac947e48496c745277bef4f95d994b48426bec36d6c",
+    },
+    # _pex.fingerprint(OVW4): hashes its parent ptt1's fingerprint and every declaration above
+    fingerprint="92f3ff54a3173c79199393cbd249f4629c08b5d29a5f34fd620989a5f9742acb",
+    note="the Overview's Energy Actions card sets show_plan, the plan block (generic entity_prefix, the reserve helper) and "
+         "dump_to_grid.guarded_start, as Stage 3's card supports them; display configuration only, the dashboard version is not bumped: "
+         "ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core change, ZERO Modbus operation",
+)
+# ovw5 (the Solar series of each Power Flow Today chart carries its own group_by with fill last; _ovw5_scope.py): made on public main after ovw4
+# (the newest entry when it was built; its fingerprint is sealed after ovw4's and is sealed again if another entry merges first). The chart
+# (custom:apexcharts-card, three copies) shows its shared five-series tooltip only while every series has the same time points; with the
+# empty-bucket fill `null` the Solar series ended one 5-minute bucket early whenever the PV reading had not changed, and the tooltip listed
+# Solar alone. The SOC series already has its own group_by with fill last; ovw5 gives Solar the same (func avg, duration 5min, fill last: four
+# lines per chart, twelve in all). It was applied to the production Overview first (25 Nov 2026); this entry records it so that a whole-file
+# dashboard deployment cannot undo it. FROZEN edit (PEX): the dashboard (_ovw5_scope.FROZEN_REVERTERS; as of ovw4 it is ovw4's checkpoint,
+# byte for byte); ONE exact pair found and made exactly three times (declared as three hunks, one per chart); the dashboard version is NOT
+# bumped (the precedent of wsc1, ptt1 and ovw4). The trade-off (fill last has no age limit; an unavailable entity still draws a gap; no freshness
+# limit is built) is recorded in docs/dev/post-export-edit-layer.md. The site policy's protected layer (the Overview's flow card) is untouched.
+# Nothing is newly enrolled. Measured, not declared: no chain-pinned reverter, no checkpoint, no delta, no op path; ZERO firmware, Home Assistant
+# package, deployment manifest, registry, Intelligence or ecco_core byte; ZERO Modbus operation; no service call, no entity, no network access.
+OVW5 = Entry(
+    id="ovw5", pr="OVW5", commit="unmerged",
+    added_files=_ovw5.ADDED_FILES,
+    frozen_reverts=dict(_ovw5.FROZEN_REVERTERS),
+    frozen_checkpoints={   # sha256 (LF) of the file after ovw5; as of pub0 it is its pub0 state (manifest result)
+        _ovw5.DASHBOARD_REL: "2236750f709dd0ef4b15d708bfec3228856671efb982b0f0d6732cacb29deaee",
+    },
+    # _pex.fingerprint(OVW5): hashes its parent ovw4's fingerprint and every declaration above
+    fingerprint="22fbad72a6b1ad72d0f0576deb98ab978d6d4957bb452efbe2cb9ed5e095e26e",
+    note="the Solar series of each Power Flow Today chart gets its own group_by (func avg, duration 5min, fill last), as the SOC series "
+         "already has, so the five-series tooltip stays whole when Solar has no reading change in the newest bucket; display configuration "
+         "only, the dashboard version is not bumped: ZERO firmware, Home Assistant package, deployment, registry, Intelligence or ecco_core "
+         "change, ZERO Modbus operation, no service call, no entity",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

@@ -100,8 +100,11 @@ feature snapshot, status, confidence, mode), `forecasts` (kind, issued/horizon s
 predicted p50, band low/high, nominal coverage, confidence, model/feature id, explanation JSON, status
 PENDING/SCORED/VOID_NO_DATA/VOID_SCENARIO, **actual, error = actual − predicted, abs_error, pct_error, in_band**, scored time),
 `recommendations` (shadow only; outcome column for the future ledger), `schema_meta`. Recording is idempotent; nothing is scored before
-horizon end + 2 h; a plan-conditional SOC forecast whose plan was not what happened is `VOID_SCENARIO` with a reason (a
-control decision is not a forecast error). `metrics()` gives MAE, RMSE, bias, band coverage, MAPE, groupable by weekday/hour.
+horizon end + 2 h; a plan-conditional SOC forecast whose plan was not what happened (its SOC more than 3 points from the
+planned target) is `VOID_SCENARIO` with a reason (a control decision is not a forecast error). That branch is reserved
+for plan-conditional `soc_pct` kinds, which v0.1 does not record: it skips `soc_pct:pre_window_hour`, the only SOC kind
+the engine records (independent of any charge decision), so it cannot fire in the v0.1 runtime and is no active
+safeguard there. `metrics()` gives MAE, RMSE, bias, band coverage, MAPE, groupable by weekday/hour.
 `insights()` produces sentences like *"I have been underestimating Wednesday mornings by 1.2 kWh (n=8)"* but only past a
 multiple-comparison-corrected t-test (≈ 50 weekday × window comparisons; the 2-σ rule would raise a false finding about every
 other week) and a 0.3 kWh floor. A private-data campaign found none; an injected 1.2 kWh Wednesday bias is found (synthetic test).
@@ -161,6 +164,9 @@ Forecast kinds recorded: `load_kwh:{next_1h,cheap_window,morning,overnight,to_us
   HA reserve (capped at 100) as plain data: configured reserve, technical minimum, effective minimum, which of them was binding, and a plain-language
   `override_reason` when the technical minimum (or an HA reserve) overrides what the user asked for. The advisor emits it as `recommended.reserve`
   (with the legacy `floor_pct` = the effective minimum) and as a `TECHNICAL_MIN_OVERRIDES_USER_RESERVE` / `HA_RESERVE_RAISES_USER_RESERVE` reason.
+  The SHADOW cycle can also pass the raise-only advisory reserve preference (`reserve_raise_pct`, contract 13.7): it is named as itself
+  (`binding` `reserve_raise`, `PREF_RESERVE_RAISE`) and listed in the breakdown as `reserve_raise_pct`, never as the HA reserve; without it the
+  breakdown above is unchanged.
   `SiteConfig` refuses, at construction, a non-finite, boolean or out-of-range (0-100) reserve or technical minimum, a `max_soc_pct` at or below the
   effective minimum, a technical minimum at or above `max_soc_pct`, a reserve that leaves no room for the safety margin below `max_soc_pct`, a negative or
   non-finite margin and nonsense advisor constants, so no configuration can put a recommended target at or below the effective minimum. The same

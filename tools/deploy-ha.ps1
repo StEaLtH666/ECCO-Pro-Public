@@ -1,12 +1,34 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Deploy')]
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Mandatory = $true, Position = 0, ParameterSetName = 'Deploy')]
     [string]$Source,
 
+    # -Action Retire -Destination <file>: an exact-file move of one
+    # Intelligence file (the PR-6 packages, dashboard or card; see
+    # Test-EccoRetireDestination) into /config/ecco-backups/<stamp>/. Never rm,
+    # never a restart; a failed ha core check copies the file back.
+    [Parameter(Mandatory = $true, ParameterSetName = 'Retire')]
+    [ValidateSet('Retire')]
+    [string]$Action,
+
+    [Parameter(ParameterSetName = 'Deploy')]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Retire')]
     [string]$Destination,
 
     [string]$SshHost = 'ecco-ha',
 
+    # Which Home Assistant this run is for (amendment A10). Mandatory whenever
+    # -SshHost is not the production alias 'ecco-ha'; Production is refused
+    # when the host carries the L3 test-instance marker, Test when it does
+    # not (Assert-EccoDeployTarget). Default with 'ecco-ha': Production.
+    [ValidateSet('Test', 'Production')]
+    [string]$Target,
+
+    # A harness-owned ssh configuration (ssh -F) for the isolated L3 test
+    # instance; accepted with -Target Test only.
+    [string]$SshConfigFile,
+
+    [Parameter(ParameterSetName = 'Deploy')]
     [switch]$Restart,
 
     [switch]$SkipValidation,
@@ -14,7 +36,40 @@ param(
     # Deliberately named so an uncommitted deployment can never happen by
     # accident. Normal deployments must come from a clean git working tree
     # so the file on Home Assistant always matches a committed revision.
-    [switch]$AllowDirtyWorkingTree
+    [switch]$AllowDirtyWorkingTree,
+
+    # Dashboard preservation gate, generic layer only: custom card types
+    # (custom:<name>) the live dashboard uses that this deployment may
+    # deliberately drop. It never waives the site policy's protected
+    # layers or required resources.
+    [Parameter(ParameterSetName = 'Deploy')]
+    [ValidatePattern('^custom:[A-Za-z0-9][A-Za-z0-9._-]*\z')]
+    [string[]]$AcceptRemovedCardType = @(),
+
+    # Dashboard preservation gate, drift recovery: the live file differs
+    # from the site policy at a protected pointer, and this candidate
+    # restores the policy's protected layer exactly. Without this switch
+    # that is BLOCKED (live may hold newer site values than the policy);
+    # with it the gate passes with a loud warning. A candidate that does
+    # not carry the protected layer is never passed.
+    [Parameter(ParameterSetName = 'Deploy')]
+    [switch]$AllowDriftRecovery,
+
+    # Optional pin of the site's gate name (the site policy's "gate"): a
+    # dashboard destination must then pass under exactly this gate, so a
+    # host policy that was moved aside or no longer names the destination
+    # cannot fall back to DASHBOARD_PRESERVE_GATE without a word. Default:
+    # the git-ignored file ecco_dashboard_gate.local.txt at the repository
+    # root, when it exists. DASHBOARD_PRESERVE_GATE states that this
+    # deployment deliberately targets a dashboard the policy does not protect.
+    [ValidatePattern('(?-i)^[A-Z][A-Z0-9_]{2,63}\z')]
+    [string]$ExpectedSiteGate,
+
+    # The Python that runs tools/ecco_dashboard_guard.py (with -I, so
+    # PyYAML must be installed in that interpreter itself, not only in a
+    # user site-packages folder) and the repository validator
+    # (validate-ecco.ps1 -Python). Default: the python on PATH.
+    [string]$Python = 'python'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +77,25 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 Import-Module (Join-Path $PSScriptRoot 'EccoDeploy.psm1') -Force
 
+# The -Target guard's local half, before anything else and before any ssh
+# call: a run against any alias but 'ecco-ha' must say which Home Assistant it
+# is for. The remote half (marker, loopback, machine) follows the ssh probe.
+$Target = Assert-EccoDeployTargetParameters -SshHost $SshHost -Target $Target -SshConfigFile $SshConfigFile
+Set-EccoSshConfigFile -Path $SshConfigFile
+$sshConfigArgs = @(Get-EccoSshConfigArguments)
+$isRetire = $PSCmdlet.ParameterSetName -eq 'Retire'
+
+# Home Assistant's persisted Lovelace resource list. This script only ever
+# READS it: the preservation gate copies it from the host, the backup copies
+# it into the backup folder, and the reminder below cats it.
+$lovelaceResourcesPath = '/config/.storage/lovelace_resources'
+$guardPath = Join-Path $PSScriptRoot 'ecco_dashboard_guard.py'
+
+if ($isRetire) {
+    # The file to retire: an allowlisted destination, and one of the exact
+    # Intelligence files (Test-EccoRetireDestination).
+    $Destination = Test-EccoRetireDestination -Destination (Test-EccoDeploymentDestination -Destination $Destination)
+} else {
 $sourceCandidate = if ([System.IO.Path]::IsPathRooted($Source)) {
     $Source
 } else {
@@ -57,6 +131,21 @@ if (-not $Destination) {
 }
 
 $Destination = Test-EccoDeploymentDestination -Destination $Destination
+}   # end of the source and destination resolution (Deploy parameter set)
+
+# The optional gate pin: the parameter, else the local pin file. A pin file
+# that exists but cannot be read stops the deployment here (never "no pin").
+if ($ExpectedSiteGate) {
+    $gatePin = $ExpectedSiteGate
+    $gatePinSource = '-ExpectedSiteGate'
+} else {
+    $gatePinFile = Get-EccoDashboardGatePinPath -RepoRoot $repoRoot
+    $gatePin = Get-EccoDashboardGatePin -Path $gatePinFile
+    $gatePinSource = 'the local pin file ' + [System.IO.Path]::GetFileName($gatePinFile)
+}
+if ($gatePin) {
+    Write-Host "Expected site gate: $gatePin (from $gatePinSource)"
+}
 
 if ($AllowDirtyWorkingTree) {
     Write-Warning 'Deploying with -AllowDirtyWorkingTree: the working tree may not match any committed revision.'
@@ -66,14 +155,20 @@ if ($AllowDirtyWorkingTree) {
 
 if (-not $SkipValidation) {
     Write-Host 'Running repository validation before deployment...'
-    & (Join-Path $PSScriptRoot 'validate-ecco.ps1')
+    # The same -Python as the guard, never a silent fall back to the python on PATH (review L3W-5).
+    & (Join-Path $PSScriptRoot 'validate-ecco.ps1') -Python $Python
 }
 
 Write-Host "Testing SSH connection to '$SshHost'..."
 $previousErrorActionPreference = $ErrorActionPreference
 try {
     $ErrorActionPreference = 'Continue'
-    & ssh -o BatchMode=yes $SshHost 'true'
+    if ($sshConfigArgs.Count -gt 0) {
+        # -Target Test with a harness-owned ssh configuration (ssh -F).
+        & ssh -o BatchMode=yes @sshConfigArgs $SshHost 'true'
+    } else {
+        & ssh -o BatchMode=yes $SshHost 'true'
+    }
     $sshProbeCode = $LASTEXITCODE
 }
 finally {
@@ -82,6 +177,62 @@ finally {
 if ($sshProbeCode -ne 0) {
     throw "SSH connection to '$SshHost' failed."
 }
+
+# Retire: /config itself, before anything else is read under it (amendment
+# A26; the SSH add-on's /config is a symlink). Accepted only as a real folder
+# or a symlink that resolves to an existing real folder; Invoke-EccoRetireFile
+# checks it unchanged immediately before its first write.
+if ($isRetire) {
+    $configRoot = Get-EccoRemoteConfigRoot -SshHost $SshHost -Name 'RETIRE'
+    Write-Host $configRoot.Line
+}
+
+# The -Target guard's remote half (read-only, before the first remote write):
+# Production needs the test-instance marker proven absent, a host that is not
+# loopback and a machine that is not the test machine; Test needs all three
+# the other way round.
+$targetLine = Assert-EccoDeployTarget -SshHost $SshHost -Target $Target
+Write-Host $targetLine
+
+if ($isRetire) {
+    $retired = Invoke-EccoRetireFile -SshHost $SshHost -Destination $Destination -GuardPath $guardPath -Python $Python -ExpectedGate $gatePin -PinSource $gatePinSource -ResourcesPath $lovelaceResourcesPath -Stamp ((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')) -ConfigRoot $configRoot.Resolved
+    Write-Host ''
+    Write-Host 'ECCO RETIRE PASSED'
+    Write-Host $targetLine
+    Write-Host $configRoot.Line
+    Write-Host "Retired     : $($retired.Destination)"
+    Write-Host "Moved to    : $($retired.BackupPath) (sha256 $($retired.Sha256); nothing was deleted)"
+    Write-Host "Dashboard   : $($retired.GateLine)"
+    if ($retired.PinLine) {
+        Write-Host $retired.PinLine
+    }
+    Write-Host 'Restart     : no - Home Assistant drops a retired package or dashboard registration only at the next restart, which is separately gated.'
+    Write-Host "To undo     : deploy the repository file to $($retired.Destination) again with deploy-ha.ps1, or copy $($retired.BackupPath) back (owner approval)"
+    return
+}
+
+# Dashboard preservation gate: BEFORE the first remote write (mkdir, backup,
+# upload). Read-only on the host. A dashboard destination (under
+# /config/ecco/dashboards/, .yaml/.yml, or named by the site policy at
+# /config/ecco/site-local/dashboard-protection.json) is checked by
+# tools/ecco_dashboard_guard.py: the candidate may not drop a protected
+# site layer, a required resource or (unless -AcceptRemovedCardType) a
+# custom card type the live dashboard uses. Anything but PASS throws here,
+# so nothing on the host has changed. With a gate pin, a dashboard
+# destination must have passed under the pinned gate (also a throw here).
+Write-Host 'Running the dashboard preservation gate (read-only)...'
+$dashboardGate = Invoke-EccoDashboardPreservationGate -SshHost $SshHost -Destination $Destination -CandidatePath $sourceFull -GuardPath $guardPath -ResourcesPath $lovelaceResourcesPath -AcceptRemovedCardType $AcceptRemovedCardType -Python $Python -AllowDriftRecovery:$AllowDriftRecovery
+Write-Host $dashboardGate.GateLine
+$gatePinLine = Assert-EccoDashboardGatePin -GateResult $dashboardGate -ExpectedGate $gatePin -PinSource $gatePinSource
+if ($gatePinLine) {
+    Write-Host $gatePinLine
+}
+foreach ($gateWarning in @($dashboardGate.Warnings)) {
+    Write-Warning "Dashboard preservation gate: $gateWarning"
+}
+# The gate's only WARNING lines are a drift recovery's: the live file (and so
+# the backup below) differs from the site policy at a protected pointer.
+$driftRecovery = @($dashboardGate.Warnings).Count -gt 0
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $lastSlash = $Destination.LastIndexOf('/')
@@ -100,6 +251,20 @@ if ($probe.ExitCode -ne 0) {
 }
 $probeText = ($probe.Output -join '').Trim()
 $hadOriginal = $probeText.EndsWith('yes')
+if ($dashboardGate.Applies -and (($dashboardGate.LiveState -eq 'present') -ne $hadOriginal)) {
+    throw 'The destination appeared or disappeared on the host after the dashboard preservation gate read it. Nothing was written; re-run the deployment.'
+}
+
+# The source must still be the file the gate checked (the documented
+# sources under dist/ are git-ignored, so the clean-tree check does not
+# cover them): a re-render in between stops the deployment here, before
+# anything is written. The uploaded copy is tied to the same hash below.
+if ($dashboardGate.Applies) {
+    $checkedSourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFull).Hash.ToLowerInvariant()
+    if (-not $dashboardGate.CandidateSha256 -or $checkedSourceHash -ne $dashboardGate.CandidateSha256) {
+        throw "The source changed after the dashboard preservation gate checked it (gate $($dashboardGate.CandidateSha256), now $checkedSourceHash). Nothing was written; re-run the deployment."
+    }
+}
 
 Invoke-EccoRemoteCommand -SshHost $SshHost -Command "mkdir -p '$remoteDir' '$backupDir'"
 if ($hadOriginal) {
@@ -109,12 +274,50 @@ if ($hadOriginal) {
     Write-Host 'No existing remote file; rollback will remove the new file if validation fails.'
 }
 
+# The persisted Lovelace resource list goes into the same backup folder (a
+# read of .storage; the copy is written only under $backupDir). Its marker
+# says what this run put in that folder, so a new file's "Backup: none" names
+# the folder and what it holds (review L3W-6). A failed copy stops the
+# deployment here, as before.
+$resourcesBackupPath = "$backupDir/" + ($lovelaceResourcesPath.TrimStart('/') -replace '/', '__')
+$resourcesCopyCommand = "if [ -f '$lovelaceResourcesPath' ]; then cp -p '$lovelaceResourcesPath' '$resourcesBackupPath' && echo ECCO_RESOURCES_COPIED; else echo ECCO_RESOURCES_ABSENT; fi"
+$resourcesCopy = Invoke-EccoRemoteCommand -SshHost $SshHost -Command $resourcesCopyCommand -Capture
+if ($resourcesCopy.ExitCode -ne 0) {
+    $resourcesCopy.Output | ForEach-Object { Write-Host $_ }
+    throw "Remote command failed: $resourcesCopyCommand"
+}
+$resourcesMarks = @($resourcesCopy.Output | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -ceq 'ECCO_RESOURCES_COPIED' -or $_ -ceq 'ECCO_RESOURCES_ABSENT' })
+$newFileBackupNote = if ($resourcesMarks.Count -ne 1) {
+    "the backup folder $backupDir is kept; whether this run copied the Lovelace resource list into it was not confirmed"
+} elseif ($resourcesMarks[0] -ceq 'ECCO_RESOURCES_COPIED') {
+    "the backup folder $backupDir is kept; this run copied only the Lovelace resource list into it"
+} else {
+    "the backup folder $backupDir is kept; this run copied nothing into it (no Lovelace resource list on the host)"
+}
+
+# The file that was backed up must be the file the gate checked: a change on
+# the host in between stops the deployment before the upload.
+if ($dashboardGate.Applies -and $hadOriginal -and $dashboardGate.LiveSha256) {
+    $backupHashResult = Invoke-EccoRemoteCommand -SshHost $SshHost -Command "sha256sum '$backupPath' | cut -d ' ' -f 1" -Capture
+    $backupHash = $null
+    if ($backupHashResult.ExitCode -eq 0 -and $backupHashResult.Output.Count -gt 0) {
+        $backupHash = ($backupHashResult.Output[-1]).Trim().ToLowerInvariant()
+    }
+    if ($backupHash -ne $dashboardGate.LiveSha256) {
+        throw "The live dashboard changed on the host after the dashboard preservation gate checked it (gate $($dashboardGate.LiveSha256), backup $backupHash). Nothing was uploaded; backup folder: $backupDir."
+    }
+}
+
 Write-Host "Uploading $relative -> $Destination"
 $remoteSpec = '{0}:{1}' -f $SshHost, $tempPath
 $previousErrorActionPreference = $ErrorActionPreference
 try {
     $ErrorActionPreference = 'Continue'
-    & scp -q $sourceFull $remoteSpec
+    if ($sshConfigArgs.Count -gt 0) {
+        & scp -q @sshConfigArgs $sourceFull $remoteSpec
+    } else {
+        & scp -q $sourceFull $remoteSpec
+    }
     $scpCode = $LASTEXITCODE
 }
 finally {
@@ -137,6 +340,12 @@ if ($localHash -ne $remoteHash) {
     Invoke-EccoRemoteCommandBestEffort -SshHost $SshHost -Command "rm -f '$tempPath'"
     throw "SHA256 mismatch. Local=$localHash Remote=$remoteHash"
 }
+# The uploaded bytes must be the bytes the preservation gate checked, not
+# merely the local file as it is now.
+if ($dashboardGate.Applies -and $remoteHash -ne $dashboardGate.CandidateSha256) {
+    Invoke-EccoRemoteCommandBestEffort -SshHost $SshHost -Command "rm -f '$tempPath'"
+    throw "The uploaded file is not the file the dashboard preservation gate checked (gate $($dashboardGate.CandidateSha256), uploaded $remoteHash). Nothing was installed; the backup folder is $backupDir."
+}
 Write-Host "Upload SHA256 verified: $localHash"
 
 # A failure here is ambiguous: SSH could have dropped after the remote
@@ -152,7 +361,7 @@ try {
 catch {
     $moveFailureMessage = $_.Exception.Message
     Invoke-EccoRemoteCommandBestEffort -SshHost $SshHost -Command "rm -f '$tempPath'"
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason "The move into place failed, or its result could not be confirmed because of a possible SSH/transport failure - the destination may already have been modified. Original error: $moveFailureMessage"
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -NewFileBackupNote $newFileBackupNote -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason "The move into place failed, or its result could not be confirmed because of a possible SSH/transport failure - the destination may already have been modified. Original error: $moveFailureMessage"
 }
 
 # Post-install verification: hash the file that actually landed at
@@ -171,16 +380,31 @@ if (-not $postInstallHash -or $postInstallHash -ne $localHash) {
     } else {
         "Post-install SHA256 mismatch. Local=$localHash Installed=$postInstallHash"
     }
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason $reason
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -NewFileBackupNote $newFileBackupNote -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason $reason
 }
 Write-Host "Post-install SHA256 verified: $postInstallHash"
+
+# Post-install preservation check: when the site policy protects this
+# destination, re-read the installed file and prove it still carries every
+# protected layer (guard verify-live). A failure goes through the same
+# rollback path as a failed hash or `ha core check`.
+$liveVerificationLine = $null
+if ($dashboardGate.PolicyNamesDestination) {
+    Write-Host 'Re-reading the installed dashboard for the post-install preservation check...'
+    $liveVerification = Invoke-EccoDashboardLiveVerification -SshHost $SshHost -Destination $Destination -GuardPath $guardPath -Python $Python -ExpectedGate $dashboardGate.Gate
+    $liveVerification.Output | ForEach-Object { Write-Host $_ }
+    if (-not $liveVerification.Passed) {
+        Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -NewFileBackupNote $newFileBackupNote -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason 'The post-install dashboard preservation check (verify-live) did not pass: the installed file does not carry the protected site layer, or it could not be re-read.'
+    }
+    $liveVerificationLine = $liveVerification.GateLine
+}
 
 Write-Host 'Running Home Assistant configuration check...'
 $check = Invoke-EccoRemoteCommand -SshHost $SshHost -Command 'ha core check' -Capture
 $check.Output | ForEach-Object { Write-Host $_ }
 
 if ($check.ExitCode -ne 0) {
-    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -HadOriginal $hadOriginal -Reason 'Home Assistant configuration check failed after deployment.'
+    Invoke-EccoDeploymentRollback -SshHost $SshHost -Destination $Destination -BackupPath $backupPath -NewFileBackupNote $newFileBackupNote -HadOriginal $hadOriginal -Dashboard:($dashboardGate.Applies) -DriftRecovery:$driftRecovery -Reason 'Home Assistant configuration check failed after deployment.'
 }
 
 if ($Restart) {
@@ -192,10 +416,21 @@ if ($Restart) {
 
 Write-Host ''
 Write-Host 'ECCO DEPLOYMENT PASSED'
+Write-Host "Target      : $Target ($SshHost)"
 Write-Host "Source      : $relative"
 Write-Host "Destination : $Destination"
-Write-Host "Backup      : $(if ($hadOriginal) { $backupPath } else { 'none (new file)' })"
+Write-Host "Backup      : $(if ($hadOriginal) { $backupPath } else { "none (new file); $newFileBackupNote" })"
 Write-Host "Restart     : $(if ($Restart) { 'requested' } else { 'no' })"
+Write-Host "Dashboard   : $($dashboardGate.GateLine)"
+if ($gatePinLine) {
+    Write-Host $gatePinLine
+}
+if ($driftRecovery) {
+    Write-Host "Drift       : RECOVERED - live differed from the site policy at a protected pointer and now carries the policy's layer; the drifted file is the backup $backupPath"
+}
+if ($liveVerificationLine) {
+    Write-Host "Post-install: $liveVerificationLine (verify-live)"
+}
 
 # Every file under /config/www/ecco/ is a Lovelace resource candidate,
 # whatever the source path (the documented content-addressed deploy copies

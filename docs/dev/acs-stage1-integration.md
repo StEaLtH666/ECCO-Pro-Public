@@ -43,6 +43,14 @@ switching the active slot, inverter clock within 120 s of Home Assistant's (P3);
 (last Sunday of March and of October), for every setting, the target SOC included (P4). The old Stage 0 script ids are **not** kept as
 wrappers (D3); nothing in the repository other than documents referred to them.
 
+**acs1c (2026-10-25; offline, not independently reviewed, not installed, not live-proven).** P3's "strictly ascending" refused every
+start-time Review of the owner's live layout (starts 00:30, 05:30, 12:00, 16:35, 22:00, 00:25: slot 5 runs past midnight), a valid
+24-hour schedule. The post-export entry `acs1c` replaces that ordering rule by a cyclic one (one 24-hour cycle in slot order; the new
+start strictly between its neighbours counted round the clock; the active-slot-now guard in unwrapped minutes), as a SECOND invertible
+transform layered on the Stage 1 text (`home-assistant/prototypes/acs-stage1/acs1c_transform.py`): this document, the acs1 transform,
+its pins and its chain entry are unchanged, and `unrender_cyclic(<installed>)` is the Stage 1 text described here (sha256
+`2e881397...`, the package installed on 2026-10-25). Design, proof, tests and the live-test plan: [acs1c-cyclic-tou.md](acs1c-cyclic-tou.md).
+
 The files:
 
 | File | Role |
@@ -82,7 +90,8 @@ CI checks out most jobs with depth 1, so nothing relies on history.
 - **Future edits of the package.** The record is exact only while the package is `render_stage1()` of the Stage 0 text. Any later edit
   must APPEND pairs to the transform and update its three pins (the transform's `STAGE1_SHA256` / `PAIRS_SHA256`, the Stage 1 suite's
   `S1_SHA` / `PAIRS_SHA`, and `_acs1_scope.py`'s `STAGE1_PACKAGE_SHA256` / `PAIRS_SHA256`), or deliberately retire the mechanism with a
-  new chain entry that says so. An unpinned edit fails the Stage 1 suite.
+  new chain entry that says so. An unpinned edit fails the Stage 1 suite. **Done on 2026-10-25 by the second route:** `acs1c` layers a
+  further invertible transform on the Stage 1 text and declares a new chain entry; the pins named here keep their values and meaning.
 - The Stage 1 suite also proves that everything of the Stage 0 baseline that no pair touches (834 of its 1003 lines wholly outside
   the 40 reviewed pairs, with the 22 follow-up pairs undone exactly first, and the rest of the text in the same places) is byte-identical in the installed package, so the acs0r1 press timing and
   the fresh-evidence code are proven on the installed file; it kills mutants that alter one such line.

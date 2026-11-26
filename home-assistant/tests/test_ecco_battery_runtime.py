@@ -26,7 +26,8 @@ rendered attribute.
   [11] the presentation sensor (what the Energy Flow card reads): lookups only, a model that stops updating is not shown as current
   [12] a second, plain-Python implementation of the documented method agrees with the templates on seeded random traces
   [13] wiring: the manifest deploys the package, the Overview Energy Flow card reads the sensor, the card's status vocabulary
-       equals the package's
+       equals the package's (the dashboard pins as of acs1x, PEX: ovw3 put the 3D card in the 2D card's place); live, the Overview's
+       one flow card, 2D or 3D, reads the sensor and understands the same statuses
   [14] mutation: each named mutant of the package is caught by the scenarios above; equivalent rewrites survive
   [15] the post-export declaration (PEX entry fe1): its place after ovw1, exactly the dashboard and VERSION.yaml frozen and the
        manifest chain-pinned, the files it adds, its fingerprint; undone, the three files are their ovw1 state byte for byte
@@ -1137,7 +1138,13 @@ st_pk = [p for p in man["home_assistant_packages"] if p["source"] == PKG_REL]
 check("the deployment manifest lists the package exactly once (ssh_file_copy to /config/packages, restart required)",
       len(st_pk) == 1 and st_pk[0]["destination"] == "/config/packages/ecco_battery_runtime.yaml"
       and st_pk[0]["method"] == "ssh_file_copy" and st_pk[0]["restart_required"] is True)
-dash = (ROOT / "home-assistant" / "dashboards" / "ecco_pro.yaml").read_text(encoding="utf-8")
+dash_live = (ROOT / "home-assistant" / "dashboards" / "ecco_pro.yaml").read_text(encoding="utf-8")
+sys.path.insert(0, str(ROOT / "registry" / "tests"))
+import _pex  # noqa: E402  (PEX: ovw3 replaced the 2D Energy Flow card these wiring pins read; see below)
+# PEX (ovw3): after acs1x, the Overview's 2D Energy Flow card became the ECCO 3D Energy Flow card. The FE-1 wiring pins below read the
+# dashboard as it stood before that (ovw3 and every later entry undone exactly, sha256-checked at each step); the live checks after them
+# follow the Overview's flow card as it is now.
+dash = _pex.as_of("home-assistant/dashboards/ecco_pro.yaml", "acs1x", dash_live)   # PEX: the dashboard as of acs1x
 flow_at = dash.index("          - type: custom:ecco-energy-flow-card\n")
 flow_end = dash.index("\n\n", dash.index("            card_mod:", flow_at))
 flow = dash[flow_at:flow_end]
@@ -1152,6 +1159,22 @@ card_statuses = set(re.findall(r'"([a-z_]+)"', m.group(1))) if m else set()
 pkg_statuses = set(re.findall(r"set out\.status = '([a-z_]+)'", PKG_TEXT)) | {"insufficient_data"}
 check("the card understands exactly the statuses the package can emit", card_statuses == pkg_statuses == STATUSES,
       f"card {sorted(card_statuses)} package {sorted(pkg_statuses)}")
+# Live (ovw3 and later): whichever flow card the Overview shows, 2D or 3D, it reads the sensor and understands the package's statuses.
+live_views = [v for v in yaml.safe_load(dash_live)["views"] if v.get("title") == "Overview"]
+live_flow = [c for v in live_views for s in v.get("sections", []) for c in s.get("cards", [])
+             if isinstance(c, dict) and c.get("type") in ("custom:ecco-energy-flow-card", "custom:ecco-flow-3d-card")]
+live_bat = ((live_flow[0].get("nodes") or {}).get("battery") or {}) if len(live_flow) == 1 else {}
+check("live: the Overview shows exactly one Energy Flow card (2D or 3D), its battery node reads the sensor with the discharge-positive "
+      "sign, and the sensor is configured nowhere else in the dashboard",
+      len(live_views) == 1 and len(live_flow) == 1 and live_bat.get("time_to_reserve") == "sensor.ecco_battery_time_to_reserve"
+      and live_bat.get("power_sign") == "discharge_positive" and dash_live.count("time_to_reserve:") == 1
+      and dash_live.count("states['sensor.ecco_battery_time_to_reserve']") == 1, str([c.get("type") for c in live_flow]))
+live_src = (ROOT / "frontend" / ("ecco-flow-3d-card/src/core/status.ts" if live_flow and live_flow[0]["type"] == "custom:ecco-flow-3d-card"
+                                 else "ecco-energy-flow-card/src/utils/display.ts")).read_text(encoding="utf-8")
+m = re.search(r"RESERVE_RUNTIME_STATUSES[^=]*=\s*\[([^\]]*)\]", live_src)
+live_statuses = set(re.findall(r'"([a-z_]+)"', m.group(1))) if m else set()
+check("live: the Overview's flow card understands exactly the statuses the package can emit", live_statuses == pkg_statuses == STATUSES,
+      f"card {sorted(live_statuses)} package {sorted(pkg_statuses)}")
 
 # ===========================================================================
 print("")

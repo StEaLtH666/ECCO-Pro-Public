@@ -1,10 +1,30 @@
 [CmdletBinding()]
 param(
-    [switch]$RequireClean
+    [switch]$RequireClean,
+
+    # The Python that runs tools/validate_repo.py (it needs PyYAML).
+    # deploy-ha.ps1 and deploy-ha-kit.ps1 pass their own -Python, so a route
+    # never falls back to the python on PATH without a word (review L3W-5).
+    # Without it: the python on PATH, else the py launcher. The interpreter
+    # used is always printed.
+    [string]$Python
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+# -Python is resolved here, in the caller's location, before this script
+# moves to the repository root: a relative -Python names the same file the
+# route's own `& $Python` calls (the guard, the rebuild) run, never one under
+# the repository root (review DRD-6). An application runs by its full path.
+$givenPython = @()
+$pythonCommand = $Python
+if ($Python) {
+    $givenPython = @(Get-Command -Name $Python -ErrorAction SilentlyContinue)
+    if ($givenPython.Count -gt 0 -and $givenPython[0].CommandType -eq 'Application' -and $givenPython[0].Source) {
+        $pythonCommand = $givenPython[0].Source
+    }
+}
 
 Push-Location $repoRoot
 try {
@@ -55,15 +75,30 @@ try {
     Write-Host "PowerShell scripts parsed: $($psFiles.Count)"
 
     Write-Host '[4/4] repository static validator'
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
-        & python (Join-Path $repoRoot 'tools\validate_repo.py')
-    } else {
-        $py = Get-Command py -ErrorAction SilentlyContinue
-        if (-not $py) {
-            throw 'Python was not found. Install Python or add it to PATH.'
+    $validator = Join-Path $repoRoot 'tools\validate_repo.py'
+    if ($Python) {
+        # Exactly the interpreter the caller named, resolved above as the
+        # caller's own `& $Python` calls resolve it; a name that does not
+        # resolve stops here (never the python on PATH instead).
+        if ($givenPython.Count -eq 0) {
+            throw "The Python given with -Python was not found: $Python"
         }
-        & py -3 (Join-Path $repoRoot 'tools\validate_repo.py')
+        $shown = if ($givenPython[0].Source) { $givenPython[0].Source } else { $Python }
+        Write-Host "Python: $shown (-Python)"
+        & $pythonCommand $validator
+    } else {
+        $pathPython = Get-Command python -ErrorAction SilentlyContinue
+        if ($pathPython) {
+            Write-Host "Python: $($pathPython.Source) (the python on PATH; no -Python given)"
+            & python $validator
+        } else {
+            $py = Get-Command py -ErrorAction SilentlyContinue
+            if (-not $py) {
+                throw 'Python was not found. Install Python or add it to PATH.'
+            }
+            Write-Host 'Python: py -3 (the py launcher; no -Python given)'
+            & py -3 $validator
+        }
     }
 
     if ($LASTEXITCODE -ne 0) {

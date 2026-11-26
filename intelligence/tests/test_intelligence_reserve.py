@@ -6,6 +6,9 @@
   [1] defaults: 40 % is the DEFAULT user reserve, not a project-wide constant; the technical minimum is separate
   [2] the user's reserve is honoured (20 / 30 / 40 / 50 %) in the report, the target, the export advice
   [3] the technical minimum raises the effective minimum and says why; below the user reserve it changes nothing
+  [3b] the raise-only advisory reserve preference (A33, ENG-5): raise-only, named as itself (binding reserve_raise, code
+       PREF_RESERVE_RAISE), never as the HA helper, whose own value the breakdown keeps; without a preference the
+       breakdown is exactly the V1 one
   [4] invalid reserves are refused at construction (negative, > 100, NaN, infinite, bool, str) and impossible ranges too
   [5] advice never crosses the effective minimum (target, pessimistic path, export), at every reserve
   [6] nothing in the package still treats 40 as an immutable floor
@@ -173,6 +176,33 @@ check("a NaN / infinite / negative / bool / non-numeric HA reserve is ignored, n
       all(cfg.effective_reserve(x).effective_pct == 40.0 for x in (float("nan"), float("inf"), float("-inf"), -5.0, None, "high", True)))
 
 # ---------------------------------------------------------------------------------------------------------------
+section("[3b] the raise-only advisory reserve preference (A33, ENG-5)")
+V1_KEYS = {"user_reserve_pct", "technical_min_pct", "ha_reserve_pct", "effective_pct", "binding", "override_code",
+           "override_reason"}
+for ha, rz, want, binding, code in ((20.0, 55.0, 55.0, "reserve_raise", "PREF_RESERVE_RAISE"),
+                                    (60.0, 55.0, 60.0, "ha_reserve", "HA_RESERVE_RAISES_USER_RESERVE"),
+                                    (60.0, 70.0, 70.0, "reserve_raise", "PREF_RESERVE_RAISE"),
+                                    (None, 30.0, 40.0, "user_reserve", None),
+                                    (55.0, 55.0, 55.0, "ha_reserve", "HA_RESERVE_RAISES_USER_RESERVE"),
+                                    (None, 250.0, 100.0, "reserve_raise", "PREF_RESERVE_RAISE"),
+                                    (None, float("nan"), 40.0, "user_reserve", None),
+                                    (None, -5.0, 40.0, "user_reserve", None)):
+    e = cfg.effective_reserve(ha, rz)
+    check(f"helper {ha}, raise preference {rz}: effective {want:g} %, binding {binding}, code {code}; the helper's own value "
+          "is kept (never overwritten by the preference)", e.effective_pct == want and e.binding == binding
+          and e.override_code == code and e.ha_reserve_pct == ha, str(e))
+pr = cfg.effective_reserve(20.0, 55.0)
+check("the override text names the preference, never the Home Assistant reserve", "preference" in pr.override_reason
+      and "Home Assistant (" not in pr.override_reason and "55%" in pr.override_reason, pr.override_reason)
+check("as_dict: without a preference exactly the seven V1 keys (V1 outputs unchanged); with one, reserve_raise_pct too, "
+      "also when it does not bind", set(cfg.effective_reserve(55.0).as_dict()) == V1_KEYS
+      and set(cfg.effective_reserve().as_dict()) == V1_KEYS
+      and cfg.effective_reserve(None, 30.0).as_dict() == dict(cfg.effective_reserve().as_dict(), reserve_raise_pct=30.0)
+      and cfg.effective_reserve(20.0, 55.0).as_dict()["reserve_raise_pct"] == 55.0)
+check("effective_min_soc_pct takes the preference too", cfg.effective_min_soc_pct(20.0, 55.0) == 55.0
+      and cfg.effective_min_soc_pct(20.0) == 40.0)
+
+# ---------------------------------------------------------------------------------------------------------------
 section("[4] invalid reserves and impossible ranges are refused at construction")
 for field in ("user_reserve_soc_pct", "technical_min_soc_pct"):
     for label, val in (("negative", -1.0), ("far negative", -50.0), ("over 100", 100.1), ("200", 200.0), ("NaN", float("nan")),
@@ -253,12 +283,17 @@ def rebuild(self, eff: float, ha=None):
     return EffectiveReserve(self.user_reserve_soc_pct, self.technical_min_soc_pct, ha, eff, "user_reserve", None, None)
 
 
-mutant("ignores the technical minimum", lambda self, ha=None: rebuild(self, float(self.user_reserve_soc_pct), ha))
-mutant("ignores the user reserve (technical minimum only)", lambda self, ha=None: rebuild(self, float(self.technical_min_soc_pct), ha))
-mutant("uses min() instead of max()", lambda self, ha=None: rebuild(self, min(self.user_reserve_soc_pct, self.technical_min_soc_pct), ha))
-mutant("hard-codes 40 again", lambda self, ha=None: rebuild(self, 40.0, ha))
-mutant("ignores a higher run-time reserve", lambda self, ha=None: rebuild(self, max(self.user_reserve_soc_pct, self.technical_min_soc_pct), None))
-mutant("is off by the safety margin", lambda self, ha=None: rebuild(self, max(self.user_reserve_soc_pct, self.technical_min_soc_pct) - 5.0, ha))
+# each mutant takes the raise preference argument too (callers pass it since A33 ENG-5) and ignores it
+mutant("ignores the technical minimum", lambda self, ha=None, rz=None: rebuild(self, float(self.user_reserve_soc_pct), ha))
+mutant("ignores the user reserve (technical minimum only)",
+       lambda self, ha=None, rz=None: rebuild(self, float(self.technical_min_soc_pct), ha))
+mutant("uses min() instead of max()",
+       lambda self, ha=None, rz=None: rebuild(self, min(self.user_reserve_soc_pct, self.technical_min_soc_pct), ha))
+mutant("hard-codes 40 again", lambda self, ha=None, rz=None: rebuild(self, 40.0, ha))
+mutant("ignores a higher run-time reserve",
+       lambda self, ha=None, rz=None: rebuild(self, max(self.user_reserve_soc_pct, self.technical_min_soc_pct), None))
+mutant("is off by the safety margin",
+       lambda self, ha=None, rz=None: rebuild(self, max(self.user_reserve_soc_pct, self.technical_min_soc_pct) - 5.0, ha))
 check("the real logic is restored after the mutation runs", SiteConfig.effective_reserve is orig and not violations(hi_tech, 75.0))
 
 print("")

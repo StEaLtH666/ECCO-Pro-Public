@@ -22,11 +22,20 @@ anomaly context. Every observation is winsorised before it updates anything,
 so one abnormal day moves the estimate by at most alpha x 3 sigma. Uncertainty
 comes from the model's own walk-forward residuals, available immediately from
 history and progressively supplemented by live scorecard residuals.
+
+The module keeps one piece of state between calls: an exact, bounded memo of
+`build_profile` (see there). A SHADOW cycle builds a new UsageModel every
+minute, and without the memo it would rebuild the same few hundred slot
+profiles (today's and the walk-forward days') from the same complete past days
+each time. A memo hit returns exactly what a fresh build would, so no result
+depends on whether the memo is warm.
 """
 
 from __future__ import annotations
 
 import math
+import struct
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Callable
@@ -61,7 +70,10 @@ NOWCAST_HOURS = 4
 
 class DayTable:
     """Per local-day, per local-hour-slot energy for one field. A DST fall-back
-    day's repeated hour is averaged; a spring-forward day simply lacks a slot."""
+    day's repeated hour is averaged; a spring-forward day simply lacks a slot.
+
+    Each day's row is a tuple of 24 values (None where a slot has no data), so a row never changes in place: the profile
+    memo's image of a row (`row_image`) is computed once per table and is checked against the row object itself."""
 
     def __init__(self, history: History, fieldname: str, tz_name: str):
         self.field = fieldname
@@ -73,12 +85,26 @@ class DayTable:
             loc = utc_from_ts(start).astimezone(self.tz)
             slots = acc.setdefault(loc.date(), [[] for _ in range(24)])
             slots[loc.hour].append(rec.e[fieldname])
-        self.days: dict[date, list[float | None]] = {
-            d: [(sum(v) / len(v)) if v else None for v in slots] for d, slots in acc.items()
+        self.days: dict[date, tuple[float | None, ...]] = {
+            d: tuple((sum(v) / len(v)) if v else None for v in slots) for d, slots in acc.items()
         }
+        self._row_images: dict[date, tuple[object, bytes | None]] = {}
 
-    def slots(self, day: date) -> list[float | None] | None:
+    def slots(self, day: date) -> tuple[float | None, ...] | None:
         return self.days.get(day)
+
+    def row_image(self, day: date) -> bytes | None:
+        """The exact image of one day's row for the profile memo key (`_row_image`), or None when it has none. It is
+        kept per table only for a tuple row and only while `days[day]` is that same object, so a replaced row is
+        imaged again."""
+        row = self.days.get(day)
+        kept = self._row_images.get(day)
+        if kept is not None and kept[0] is row:
+            return kept[1]
+        image = _row_image(row)
+        if type(row) is tuple:
+            self._row_images[day] = (row, image)
+        return image
 
     def complete_days(self, before: date, n: int, min_valid: int = 20) -> list[date]:
         """The most recent <= n days strictly before `before` with >= min_valid valid slots, oldest first."""
@@ -110,9 +136,23 @@ class SlotProfile:
     clipped: int
 
 
-def build_profile(table: DayTable, upto: date, alpha: float, lookback: int, k: float,
-                  mode: str = "ewma") -> SlotProfile:
-    days = table.complete_days(upto, lookback)
+# ----------------------------------------------------------------------------
+# Slot profiles, and the exact memo that keeps them between cycles
+# ----------------------------------------------------------------------------
+
+PROFILE_REFERENCE_WINDOW = 28      # robust_ewma clips each observation against the median of this many earlier ones
+# The memo's bound (least recently used entry evicted first). A SHADOW cycle reads about 280 distinct profiles (today's
+# and 90 walk-forward days', three experts each, plus the long baseline), so a bound well above that keeps one cycle's
+# working set whole across cycles; an LRU smaller than the working set would miss on every call.
+PROFILE_MEMO_MAX_ENTRIES = 1024
+
+_SLOTS = 24
+_ROW_BITS = struct.Struct("<24d")
+
+
+def _profile_from_days(table: DayTable, days: list[date], alpha: float, k: float, mode: str) -> SlotProfile:
+    """The profile itself, from the complete days `build_profile` chose (oldest first). It reads nothing but those days'
+    slot values, alpha, k, mode, SLOT_SIGMA_FLOOR_KWH, PROFILE_REFERENCE_WINDOW and stats.MAD_TO_SIGMA."""
     values: list[float | None] = []
     sigmas: list[float] = []
     clipped = 0
@@ -123,11 +163,144 @@ def build_profile(table: DayTable, upto: date, alpha: float, lookback: int, k: f
             values.append(stats.median(v) if v else None)
             sigmas.append(stats.robust_sigma(v, SLOT_SIGMA_FLOOR_KWH) if v else SLOT_SIGMA_FLOOR_KWH)
         else:
-            est, c = stats.robust_ewma(series, alpha, k, 28, SLOT_SIGMA_FLOOR_KWH)
+            est, c = stats.robust_ewma(series, alpha, k, PROFILE_REFERENCE_WINDOW, SLOT_SIGMA_FLOOR_KWH)
             values.append(est)
             sigmas.append(stats.robust_sigma(stats.clean(series), SLOT_SIGMA_FLOOR_KWH))
             clipped += c
     return SlotProfile(values, sigmas, len(days), clipped)
+
+
+def build_profile_uncached(table: DayTable, upto: date, alpha: float, lookback: int, k: float,
+                           mode: str = "ewma") -> SlotProfile:
+    """`build_profile` without the memo: always a fresh build. Every memo hit must equal this (the tests compare)."""
+    return _profile_from_days(table, table.complete_days(upto, lookback), alpha, k, mode)
+
+
+def _row_image(row: object) -> bytes | None:
+    """An exact image of one day row: the IEEE-754 bits of its 24 values (so 0.0 and -0.0 differ) and which of them are
+    missing. Equal images mean bit-identical rows. None (no image) unless the row is a tuple of exactly 24 values, each
+    None or a finite float: such a row is never memoised."""
+    if type(row) is not tuple or len(row) != _SLOTS:
+        return None
+    for x in row:
+        if x is not None and (type(x) is not float or not math.isfinite(x)):
+            return None
+    return _ROW_BITS.pack(*[0.0 if x is None else x for x in row]) + bytes([x is None for x in row])
+
+
+def _scalar_image(x: object) -> tuple | None:
+    """An exact image of one parameter: a finite float by its bits (float.hex), an int or str by type and value. None
+    (no image) for anything else, NaN and infinities included."""
+    if type(x) is float:
+        return ("float", x.hex()) if math.isfinite(x) else None
+    if type(x) is int or type(x) is str:
+        return (type(x).__name__, x)
+    return None
+
+
+def _profile_key(table: DayTable, days: list[date], alpha: float, k: float, mode: str) -> tuple | None:
+    """The memo key: an exact image of every input `_profile_from_days` reads, or None when one has no exact image
+    (the memo is then bypassed). upto and lookback act only through `days`, the dates only through the order of
+    their rows (oldest first), so the rows' images in that order stand for all three."""
+    params = (_scalar_image(mode), _scalar_image(alpha), _scalar_image(k), _scalar_image(SLOT_SIGMA_FLOOR_KWH),
+              _scalar_image(PROFILE_REFERENCE_WINDOW), _scalar_image(stats.MAD_TO_SIGMA))
+    if None in params:
+        return None
+    rows = tuple(table.row_image(d) for d in days)
+    if None in rows:
+        return None
+    return params + (rows,)
+
+
+class _ProfileMemo:
+    """Least-recently-used map from a profile key to a frozen profile (tuples, never handed out), at most
+    `max_entries` entries; 0 keeps nothing.
+
+    The engine may not import threading (the runtime's vendored-engine import rules), so there is no lock. Every step
+    is one call on a C-implemented OrderedDict (get, move_to_end, set, popitem), which the interpreter completes before
+    another thread runs, and the keys hash and compare without Python code. If an overlapping cycle in another thread
+    evicts an entry between two steps, the step only finds it gone (a miss, or nothing left to evict); a value is
+    stored only under its own key. The counters are for tests and profiling, and nothing in a cycle reads them."""
+
+    def __init__(self, max_entries: int) -> None:
+        self.max_entries = max_entries
+        self._entries: OrderedDict[tuple, tuple] = OrderedDict()
+        self.hits = 0
+        self.misses = 0
+        self.bypassed = 0
+
+    def get(self, key: tuple) -> tuple | None:
+        frozen = self._entries.get(key)
+        if frozen is not None:
+            try:
+                self._entries.move_to_end(key)
+            except KeyError:          # evicted by an overlapping cycle in between: the value read is still exact
+                pass
+        return frozen
+
+    def put(self, key: tuple, frozen: tuple) -> None:
+        if self.max_entries <= 0:
+            return
+        self._entries[key] = frozen
+        while len(self._entries) > self.max_entries:
+            try:
+                self._entries.popitem(last=False)
+            except KeyError:          # emptied by an overlapping cycle in between
+                break
+
+    def clear(self) -> None:
+        self._entries.clear()
+        self.hits = self.misses = self.bypassed = 0
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+_PROFILE_MEMO = _ProfileMemo(PROFILE_MEMO_MAX_ENTRIES)
+
+
+def profile_memo_info() -> dict:
+    """Size, bound and counters of the profile memo (tests and profiling)."""
+    m = _PROFILE_MEMO
+    return {"entries": len(m), "max_entries": m.max_entries, "hits": m.hits, "misses": m.misses, "bypassed": m.bypassed}
+
+
+def clear_profile_memo() -> None:
+    """Empty the profile memo and zero its counters. Results never depend on it; tests use it for a cold start."""
+    _PROFILE_MEMO.clear()
+
+
+def build_profile(table: DayTable, upto: date, alpha: float, lookback: int, k: float,
+                  mode: str = "ewma") -> SlotProfile:
+    """The slot profile of the complete days in [upto - lookback, upto) (`DayTable.complete_days`), memoised across
+    calls and cycles.
+
+    Exact: the key (`_profile_key`) is an image of every input the build reads (the chosen days' slot values bit for
+    bit and in order, which are missing; alpha, k, mode, SLOT_SIGMA_FLOOR_KWH, PROFILE_REFERENCE_WINDOW and
+    stats.MAD_TO_SIGMA), so a hit returns exactly what `build_profile_uncached` would, and a revised past day changes
+    the key. Inputs without an exact image (a non-finite value, an unexpected type) bypass the memo. Each call returns
+    a new SlotProfile with its own lists; the memo keeps tuples, so nothing a caller does to a result can reach the
+    memo or another caller. Bounded: at most PROFILE_MEMO_MAX_ENTRIES entries, least recently used evicted first.
+
+    Why: the SHADOW cycle builds a new UsageModel each minute, so its per-model cache (UsageModel._profiles) starts
+    empty, and these profiles (robust_ewma over up to 120 days and 24 slots, a few hundred per cycle) were most of a
+    cycle's CPU. They depend only on complete past local days, which change when a day completes or the history window's
+    oldest partial day loses hours, so nearly every call after the first cycle is a hit."""
+    days = table.complete_days(upto, lookback)
+    key = _profile_key(table, days, alpha, k, mode)
+    memo = _PROFILE_MEMO
+    if key is None:
+        memo.bypassed += 1
+        return _profile_from_days(table, days, alpha, k, mode)
+    frozen = memo.get(key)
+    if frozen is not None:
+        memo.hits += 1
+        values, sigma, n_days, clipped = frozen
+        return SlotProfile(list(values), list(sigma), n_days, clipped)
+    memo.misses += 1
+    p = _profile_from_days(table, days, alpha, k, mode)
+    memo.put(key, (tuple(p.values), tuple(p.sigma), p.n_days, p.clipped))
+    return p
 
 
 def window_sum(values: list[float | None], t0: datetime, t1: datetime, tz) -> float | None:

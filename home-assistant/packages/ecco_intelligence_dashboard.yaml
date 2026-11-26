@@ -1,0 +1,26 @@
+# ECCO Intelligence (SHADOW, advice only) - the dashboard registration: one YAML-mode Lovelace dashboard, and nothing else.
+#
+# It registers the standalone ECCO Intelligence dashboard (home-assistant/dashboards/ecco_intelligence.yaml, deployed to
+# /config/ecco/dashboards/ecco_intelligence.yaml) in the sidebar, for administrators only. It defines no entity, automation,
+# script or service call and changes no other dashboard: the production dashboard and its own registration are untouched.
+#
+# It is a separate file so that a refused registration never takes the pause helper and the watchdog down with it (they live
+# in ecco_intelligence.yaml). Home Assistant merges a package's `lovelace: dashboards:` entries into the configuration's own;
+# the isolated test Home Assistant proves that merge, and the panel, before any production install. A registration that
+# Home Assistant does not accept fails `ha core check`, and the deploy script then puts the previous state back.
+# Fallback if the merge is refused: the owner adds the same entry to configuration.yaml by hand.
+#
+# Listed in deployment/ha-manifest.yaml (post-export entry isp1). Deploy it after the dashboard file, as a separately approved
+# step (the install runbook); like any `lovelace: dashboards:` entry it takes effect at the next Home Assistant restart, which
+# needs its own approval. Removing it removes the sidebar entry only; the dashboard file, the packages and the integration are
+# independent of it.
+
+lovelace:
+  dashboards:
+    ecco-intelligence:
+      mode: yaml
+      title: "ECCO Intelligence"
+      icon: mdi:head-lightbulb-outline
+      show_in_sidebar: true
+      require_admin: true
+      filename: "ecco/dashboards/ecco_intelligence.yaml"

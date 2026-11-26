@@ -15,3 +15,6 @@ frontend/ecco-energy-flow-card/dist/*.js -whitespace
 # card's generated bundle (its HEAD copy already carries that trailing tab;
 # the 2026-09-26 Dump-to-Grid rebuild merely shifted it onto a changed line).
 frontend/ecco-energy-actions-card/dist/*.js -whitespace
+frontend/ecco-flow-3d-card/dist/*.js -whitespace
+# A unified diff keeps a single space on each blank context line; the Ghost diagnostics wiring patch (see its test) is a diff.
+custom_components/ecco_intelligence/tests/ghost_diag_wiring.patch -whitespace

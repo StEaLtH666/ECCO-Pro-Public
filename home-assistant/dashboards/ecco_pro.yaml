@@ -39,6 +39,17 @@
 # tells a new day from a sensor that is not reporting, Battery outlook / Today so far / Coming up cards use existing data to
 # fill the empty space, reserve wording separates the ECCO setting from the modelled need, and the 7-day outlook score reads
 # the entity ids that exist. Display only: no control, firmware, package or automation change.
+# v7.22.0 (ACU1, STAGED / NOT LIVE-PROVEN) replaces the read-only TOU table of section 7 of the Inverter / Advanced view with the
+# ECCO TOU Settings card (frontend/ecco-tou-settings-card, a manual Lovelace resource): the six live slots and a guarded editor for
+# the target SOC, the power and the charge source of one slot, through the installed ACS1 editor scripts only (Review, typed
+# confirmation, Apply; Acknowledge after an UNCERTAIN outcome). The card holds no safety logic and no other write path; start times
+# stay display-only (the site's layout wraps midnight, L1). The heading of section 7 and every other section are unchanged.
+# v7.23.0 (OVW3, STAGED / NOT LIVE-PROVEN) puts the read-only ECCO 3D Energy Flow card (frontend/ecco-flow-3d-card, V2) on the
+# Overview: section S3 shows it in place of the 2D Energy Flow card, with the same nodes, today, format and layout settings (the
+# 2D card's grid voltage, connection and frequency move to nodes.grid, where the 3D card reads them) and the ECCO status, scene
+# and freshness settings of the owner-accepted ECCO 3D Preview. The card reads states only and opens Home Assistant's more-info
+# dialogue; it calls no service. It loads through the Lovelace resource the preview already registered (no new resource, no new
+# bundle copy). Every other section and view is unchanged. Display only: no control, firmware, package or automation change.
 # Built for Home Assistant Sections view + Flexible Horseshoe Card + Sunsynk Power Flow Card (secondary/detail views) + ApexCharts + card-mod
 # Entity IDs matched from the ECCO entity dump captured 2026-09-12.
 
@@ -370,8 +381,18 @@ views:
         column_span: 3
         cards:
           # ---- LIVE ENERGY FLOW — PRIMARY OVERVIEW ----
-          - type: custom:ecco-energy-flow-card
-            title: ECCO Energy Flow
+          # OVW3: the read-only ECCO 3D Energy Flow card (frontend/ecco-flow-3d-card, V2) in place of the 2D Energy Flow card. It
+          # reads states and opens Home Assistant's more-info dialogue only: no service call, no write. Its Lovelace resource is the
+          # one the ECCO 3D Preview dashboard already loads; the scene pack is the local /local/ecco/scenes/ folder. The 2D card's
+          # nodes, today, format and grid layout settings are kept (its card_mod style is not: this card styles its own ha-card); its
+          # grid voltage, connection and frequency are read from nodes.grid.
+          - type: custom:ecco-flow-3d-card
+            title: Energy Flow
+            subtitle: Live power overview
+
+            scene:
+              pack: /local/ecco/scenes/
+              crossfade_ms: 900
 
             nodes:
               solar:
@@ -397,6 +418,74 @@ views:
               grid:
                 power: sensor.ecco_grid_power
                 power_sign: import_positive
+                connected: binary_sensor.ecco_clock_dongle_ecco_grid_connected
+                voltage: sensor.ecco_clock_dongle_ecco_grid_voltage_l1
+                frequency: sensor.ecco_clock_dongle_ecco_grid_frequency
+
+            ecco:
+              telemetry_online: binary_sensor.ecco_clock_dongle_telemetry_online
+              sun: sun.sun
+              weather: weather.forecast_home
+              free_power:
+                active: binary_sensor.ecco_clock_dongle_free_power_active
+                status: sensor.ecco_clock_dongle_free_power_status
+                ends_at: sensor.ecco_clock_dongle_free_power_ends_at
+                schedule_status: sensor.ecco_free_power_schedule_status
+              dump_to_grid:
+                active: binary_sensor.ecco_clock_dongle_dump_to_grid_active
+                status: sensor.ecco_clock_dongle_dump_to_grid_status
+                ends_at: sensor.ecco_clock_dongle_dump_to_grid_ends_at
+                schedule_status: sensor.ecco_dump_to_grid_schedule_status
+                export_power: sensor.ecco_clock_dongle_dump_to_grid_active_export_power
+                stop_soc: sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc
+              tou:
+                slot_start_minutes:
+                  - sensor.ecco_tou_slot_1_start_minute
+                  - sensor.ecco_tou_slot_2_start_minute
+                  - sensor.ecco_tou_slot_3_start_minute
+                  - sensor.ecco_tou_slot_4_start_minute
+                  - sensor.ecco_tou_slot_5_start_minute
+                  - sensor.ecco_tou_slot_6_start_minute
+                slot_target_soc:
+                  - sensor.ecco_clock_dongle_ecco_timezone1_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone2_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone3_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone4_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone5_soc
+                  - sensor.ecco_clock_dongle_ecco_timezone6_soc
+                slot_charge_source:
+                  - sensor.ecco_clock_dongle_ecco_timezone1_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone2_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone3_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone4_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone5_charge
+                  - sensor.ecco_clock_dongle_ecco_timezone6_charge
+                slot_power:
+                  - sensor.ecco_clock_dongle_ecco_timezone1_power
+                  - sensor.ecco_clock_dongle_ecco_timezone2_power
+                  - sensor.ecco_clock_dongle_ecco_timezone3_power
+                  - sensor.ecco_clock_dongle_ecco_timezone4_power
+                  - sensor.ecco_clock_dongle_ecco_timezone5_power
+                  - sensor.ecco_clock_dongle_ecco_timezone6_power
+                valid: binary_sensor.ecco_tou_schedule_valid
+              forecast:
+                today: sensor.ecco_solar_forecast_today
+                remaining: sensor.ecco_solar_forecast_remaining
+                tomorrow: sensor.ecco_solar_forecast_tomorrow
+              health:
+                sensors:
+                  - sensor.ecco_health_communications
+                  - sensor.ecco_health_inverter_telemetry
+                  - sensor.ecco_health_runtime_configuration
+                  - sensor.ecco_health_configuration
+                  - sensor.ecco_health_manual_write_system
+                  - sensor.ecco_health_rtc
+                  - sensor.ecco_health_free_power
+                  - sensor.ecco_health_start_failures
+                  - sensor.ecco_health_supervision
+                  - sensor.ecco_health_fallback
+                attention:
+                  - binary_sensor.ecco_dump_limits_attention
 
             today:
               solar: sensor.ecco_clock_dongle_ecco_day_pv_energy
@@ -407,18 +496,15 @@ views:
               battery_discharge: sensor.ecco_clock_dongle_ecco_day_battery_discharge
 
             inverter_details:
-              grid_voltage: sensor.ecco_clock_dongle_ecco_grid_voltage_l1
               ac_temperature: sensor.ecco_clock_dongle_ecco_temperature_ac_transformer
               dc_temperature: sensor.ecco_clock_dongle_ecco_temperature_dc_transformer
-              grid_connected: binary_sensor.ecco_clock_dongle_ecco_grid_connected
-              frequency: sensor.ecco_clock_dongle_ecco_grid_frequency
+              battery_temperature: sensor.ecco_clock_dongle_ecco_battery_temperature
 
             features:
-              self_sufficiency: false
-              solar_contribution: true
               animate_flow: true
-              compact_today: true
-              show_details_panel: false
+              show_status_panel: true
+              show_details_panel: true
+              stale_after_s: 180
 
             format:
               precision: 2
@@ -428,12 +514,6 @@ views:
             grid_options:
               columns: full
               rows: auto
-            card_mod:
-              style: |
-                ha-card {
-                  border: 1px solid rgba(255,255,255,0.08);
-                  box-shadow: 0 12px 32px rgba(0,0,0,0.22);
-                }
 
 
       # ================= S4 RIGHT COLUMN (span 1): grid status, current plan, next days, tariff =================
@@ -932,6 +1012,10 @@ views:
           - type: custom:ecco-energy-actions-card
             title: Energy Actions
             layout: tabbed
+            show_plan: true
+            plan:
+              entity_prefix: "ecco_clock_dongle"
+              reserve: input_number.ecco_minimum_reserve_soc
 
             free_power:
               active: binary_sensor.ecco_clock_dongle_free_power_active
@@ -997,6 +1081,7 @@ views:
                 last_result: input_text.ecco_dump_to_grid_schedule_last_result
                 status: sensor.ecco_dump_to_grid_schedule_status
                 cancel: script.ecco_dump_to_grid_cancel_schedule
+              guarded_start: script.ecco_dump_to_grid_start_guarded
 
             grid_options:
               columns: full
@@ -1723,6 +1808,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
@@ -1761,6 +1850,63 @@ views:
                 height: 365
                 toolbar:
                   show: false
+                events:
+                  mounted: |
+                    EVAL:(() => {
+                      /* Power Flow tooltip containment. ApexCharts places the shared tooltip from the plot grid only, so with five
+                         rows it can end below the card, where ha-card (overflow hidden) cuts the last row (SOC). After every move
+                         the tooltip is moved the shortest way into the card and the viewport; if that move would put it under the
+                         pointer it is put beside (or above / below) the pointer instead.
+                         fit() is pure. r = tooltip rect {x,y,w,h} where ApexCharts put it, p = pointer {x,y} or null,
+                         b = bounds {l,t,r,b}, g = gap to the pointer. A box larger than the bounds is aligned to their top left. */
+                      const fit = (r, p, b, g) => {
+                        const lim = (v, n, lo, hi) => Math.max(lo, Math.min(v, hi - n));
+                        const hit = (x, y) => p && p.x >= x && p.x <= x + r.w && p.y >= y && p.y <= y + r.h;
+                        let x = lim(r.x, r.w, b.l, b.r), y = lim(r.y, r.h, b.t, b.b);
+                        if (hit(x, y) && !hit(r.x, r.y)) {
+                          const side = [p.x - g - r.w, p.x + g].filter((v) => v >= b.l && v + r.w <= b.r);
+                          const lift = [p.y - g - r.h, p.y + g].filter((v) => v >= b.t && v + r.h <= b.b);
+                          if (x !== r.x && side.length) x = side[side.length > 1 && r.x > p.x ? 1 : 0];
+                          else if (y !== r.y && lift.length) y = lift[lift.length > 1 && r.y > p.y ? 1 : 0];
+                        }
+                        return { x, y };
+                      };
+                      const mounted = (chart) => {
+                        const el = chart.el, drop = chart.destroy, ac = new AbortController();
+                        const on = { signal: ac.signal, capture: true, passive: true };
+                        let p = null;
+                        if (el.__eccoTip) el.__eccoTip.abort();
+                        el.__eccoTip = ac;
+                        const aim = (e) => { const t = e.touches ? e.touches[0] : e; if (t) p = { x: t.clientX, y: t.clientY }; };
+                        const place = () => {
+                          const t = el.querySelector('.apexcharts-tooltip'), card = t && t.closest('ha-card'), host = t && t.offsetParent;
+                          if (!card || !host || !t.classList.contains('apexcharts-active')) return;
+                          const v = window.visualViewport || { offsetLeft: 0, offsetTop: 0, width: innerWidth, height: innerHeight };
+                          const k = card.getBoundingClientRect(), h = host.getBoundingClientRect(), s = t.getBoundingClientRect(), m = 4;
+                          const ox = h.left + host.clientLeft, oy = h.top + host.clientTop;
+                          const r = { x: ox + parseFloat(t.style.left), y: oy + parseFloat(t.style.top), w: s.width, h: s.height };
+                          const q = fit(r, p, {
+                            l: Math.max(k.left, v.offsetLeft) + m, t: Math.max(k.top, v.offsetTop) + m,
+                            r: Math.min(k.right, v.offsetLeft + v.width) - m, b: Math.min(k.bottom, v.offsetTop + v.height) - m
+                          }, 12);
+                          if (isFinite(q.x) && isFinite(q.y) && (Math.abs(q.x - r.x) > 0.5 || Math.abs(q.y - r.y) > 0.5)) {
+                            t.style.left = q.x - ox + 'px';
+                            t.style.top = q.y - oy + 'px';
+                          }
+                        };
+                        const win = () => { if (el.isConnected) place(); else off(); };
+                        const off = () => { window.removeEventListener('scroll', win, true); window.removeEventListener('resize', win, true); };
+                        const seen = new MutationObserver(place);
+                        ['mousemove', 'touchstart', 'touchmove'].forEach((n) => el.addEventListener(n, aim, on));
+                        seen.observe(el, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class'] });
+                        window.addEventListener('scroll', win, true);
+                        window.addEventListener('resize', win, true);
+                        ac.signal.addEventListener('abort', () => { seen.disconnect(); off(); });
+                        chart.destroy = function () { ac.abort(); return drop.apply(this, arguments); };
+                      };
+                      mounted.fit = fit;
+                      return mounted;
+                    })()
               dataLabels:
                 enabled: false
               legend:
@@ -3798,6 +3944,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
@@ -3836,6 +3986,63 @@ views:
                 height: 490
                 toolbar:
                   show: false
+                events:
+                  mounted: |
+                    EVAL:(() => {
+                      /* Power Flow tooltip containment. ApexCharts places the shared tooltip from the plot grid only, so with five
+                         rows it can end below the card, where ha-card (overflow hidden) cuts the last row (SOC). After every move
+                         the tooltip is moved the shortest way into the card and the viewport; if that move would put it under the
+                         pointer it is put beside (or above / below) the pointer instead.
+                         fit() is pure. r = tooltip rect {x,y,w,h} where ApexCharts put it, p = pointer {x,y} or null,
+                         b = bounds {l,t,r,b}, g = gap to the pointer. A box larger than the bounds is aligned to their top left. */
+                      const fit = (r, p, b, g) => {
+                        const lim = (v, n, lo, hi) => Math.max(lo, Math.min(v, hi - n));
+                        const hit = (x, y) => p && p.x >= x && p.x <= x + r.w && p.y >= y && p.y <= y + r.h;
+                        let x = lim(r.x, r.w, b.l, b.r), y = lim(r.y, r.h, b.t, b.b);
+                        if (hit(x, y) && !hit(r.x, r.y)) {
+                          const side = [p.x - g - r.w, p.x + g].filter((v) => v >= b.l && v + r.w <= b.r);
+                          const lift = [p.y - g - r.h, p.y + g].filter((v) => v >= b.t && v + r.h <= b.b);
+                          if (x !== r.x && side.length) x = side[side.length > 1 && r.x > p.x ? 1 : 0];
+                          else if (y !== r.y && lift.length) y = lift[lift.length > 1 && r.y > p.y ? 1 : 0];
+                        }
+                        return { x, y };
+                      };
+                      const mounted = (chart) => {
+                        const el = chart.el, drop = chart.destroy, ac = new AbortController();
+                        const on = { signal: ac.signal, capture: true, passive: true };
+                        let p = null;
+                        if (el.__eccoTip) el.__eccoTip.abort();
+                        el.__eccoTip = ac;
+                        const aim = (e) => { const t = e.touches ? e.touches[0] : e; if (t) p = { x: t.clientX, y: t.clientY }; };
+                        const place = () => {
+                          const t = el.querySelector('.apexcharts-tooltip'), card = t && t.closest('ha-card'), host = t && t.offsetParent;
+                          if (!card || !host || !t.classList.contains('apexcharts-active')) return;
+                          const v = window.visualViewport || { offsetLeft: 0, offsetTop: 0, width: innerWidth, height: innerHeight };
+                          const k = card.getBoundingClientRect(), h = host.getBoundingClientRect(), s = t.getBoundingClientRect(), m = 4;
+                          const ox = h.left + host.clientLeft, oy = h.top + host.clientTop;
+                          const r = { x: ox + parseFloat(t.style.left), y: oy + parseFloat(t.style.top), w: s.width, h: s.height };
+                          const q = fit(r, p, {
+                            l: Math.max(k.left, v.offsetLeft) + m, t: Math.max(k.top, v.offsetTop) + m,
+                            r: Math.min(k.right, v.offsetLeft + v.width) - m, b: Math.min(k.bottom, v.offsetTop + v.height) - m
+                          }, 12);
+                          if (isFinite(q.x) && isFinite(q.y) && (Math.abs(q.x - r.x) > 0.5 || Math.abs(q.y - r.y) > 0.5)) {
+                            t.style.left = q.x - ox + 'px';
+                            t.style.top = q.y - oy + 'px';
+                          }
+                        };
+                        const win = () => { if (el.isConnected) place(); else off(); };
+                        const off = () => { window.removeEventListener('scroll', win, true); window.removeEventListener('resize', win, true); };
+                        const seen = new MutationObserver(place);
+                        ['mousemove', 'touchstart', 'touchmove'].forEach((n) => el.addEventListener(n, aim, on));
+                        seen.observe(el, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class'] });
+                        window.addEventListener('scroll', win, true);
+                        window.addEventListener('resize', win, true);
+                        ac.signal.addEventListener('abort', () => { seen.disconnect(); off(); });
+                        chart.destroy = function () { ac.abort(); return drop.apply(this, arguments); };
+                      };
+                      mounted.fit = fit;
+                      return mounted;
+                    })()
               dataLabels:
                 enabled: false
               legend:
@@ -6902,6 +7109,10 @@ views:
                 type: area
                 color: '#ffbd3d'
                 opacity: 0.22
+                group_by:
+                  func: avg
+                  duration: 5min
+                  fill: last
               - entity: sensor.ecco_house_power
                 name: House
                 yaxis_id: power
@@ -6940,6 +7151,63 @@ views:
                 height: 490
                 toolbar:
                   show: false
+                events:
+                  mounted: |
+                    EVAL:(() => {
+                      /* Power Flow tooltip containment. ApexCharts places the shared tooltip from the plot grid only, so with five
+                         rows it can end below the card, where ha-card (overflow hidden) cuts the last row (SOC). After every move
+                         the tooltip is moved the shortest way into the card and the viewport; if that move would put it under the
+                         pointer it is put beside (or above / below) the pointer instead.
+                         fit() is pure. r = tooltip rect {x,y,w,h} where ApexCharts put it, p = pointer {x,y} or null,
+                         b = bounds {l,t,r,b}, g = gap to the pointer. A box larger than the bounds is aligned to their top left. */
+                      const fit = (r, p, b, g) => {
+                        const lim = (v, n, lo, hi) => Math.max(lo, Math.min(v, hi - n));
+                        const hit = (x, y) => p && p.x >= x && p.x <= x + r.w && p.y >= y && p.y <= y + r.h;
+                        let x = lim(r.x, r.w, b.l, b.r), y = lim(r.y, r.h, b.t, b.b);
+                        if (hit(x, y) && !hit(r.x, r.y)) {
+                          const side = [p.x - g - r.w, p.x + g].filter((v) => v >= b.l && v + r.w <= b.r);
+                          const lift = [p.y - g - r.h, p.y + g].filter((v) => v >= b.t && v + r.h <= b.b);
+                          if (x !== r.x && side.length) x = side[side.length > 1 && r.x > p.x ? 1 : 0];
+                          else if (y !== r.y && lift.length) y = lift[lift.length > 1 && r.y > p.y ? 1 : 0];
+                        }
+                        return { x, y };
+                      };
+                      const mounted = (chart) => {
+                        const el = chart.el, drop = chart.destroy, ac = new AbortController();
+                        const on = { signal: ac.signal, capture: true, passive: true };
+                        let p = null;
+                        if (el.__eccoTip) el.__eccoTip.abort();
+                        el.__eccoTip = ac;
+                        const aim = (e) => { const t = e.touches ? e.touches[0] : e; if (t) p = { x: t.clientX, y: t.clientY }; };
+                        const place = () => {
+                          const t = el.querySelector('.apexcharts-tooltip'), card = t && t.closest('ha-card'), host = t && t.offsetParent;
+                          if (!card || !host || !t.classList.contains('apexcharts-active')) return;
+                          const v = window.visualViewport || { offsetLeft: 0, offsetTop: 0, width: innerWidth, height: innerHeight };
+                          const k = card.getBoundingClientRect(), h = host.getBoundingClientRect(), s = t.getBoundingClientRect(), m = 4;
+                          const ox = h.left + host.clientLeft, oy = h.top + host.clientTop;
+                          const r = { x: ox + parseFloat(t.style.left), y: oy + parseFloat(t.style.top), w: s.width, h: s.height };
+                          const q = fit(r, p, {
+                            l: Math.max(k.left, v.offsetLeft) + m, t: Math.max(k.top, v.offsetTop) + m,
+                            r: Math.min(k.right, v.offsetLeft + v.width) - m, b: Math.min(k.bottom, v.offsetTop + v.height) - m
+                          }, 12);
+                          if (isFinite(q.x) && isFinite(q.y) && (Math.abs(q.x - r.x) > 0.5 || Math.abs(q.y - r.y) > 0.5)) {
+                            t.style.left = q.x - ox + 'px';
+                            t.style.top = q.y - oy + 'px';
+                          }
+                        };
+                        const win = () => { if (el.isConnected) place(); else off(); };
+                        const off = () => { window.removeEventListener('scroll', win, true); window.removeEventListener('resize', win, true); };
+                        const seen = new MutationObserver(place);
+                        ['mousemove', 'touchstart', 'touchmove'].forEach((n) => el.addEventListener(n, aim, on));
+                        seen.observe(el, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class'] });
+                        window.addEventListener('scroll', win, true);
+                        window.addEventListener('resize', win, true);
+                        ac.signal.addEventListener('abort', () => { seen.disconnect(); off(); });
+                        chart.destroy = function () { ac.abort(); return drop.apply(this, arguments); };
+                      };
+                      mounted.fit = fit;
+                      return mounted;
+                    })()
               dataLabels:
                 enabled: false
               legend:
@@ -7342,42 +7610,15 @@ views:
             grid_options:
               columns: 48
               rows: auto
-          - type: markdown
+          # ACU1: the six live slots and the guarded editor (frontend/ecco-tou-settings-card, a manual Lovelace resource). The card
+          # calls only the installed ACS1 editor scripts (Review, typed confirmation, Apply, Acknowledge) and reads the editor's
+          # helpers back; it has no write path of its own, holds no safety logic, and leaves start times display-only (L1).
+          - type: custom:ecco-tou-settings-card
+            title: Slots and guarded editor (ACS1)
+            entity_prefix: "ecco_clock_dongle"
             grid_options:
               columns: 48
-              rows: 2
-            content: |
-              {% if is_state('sensor.ecco_clock_dongle_ecco_load_limit_exp_ess_non_ess', 'Zero Export') %}
-              ℹ️ Load Limit = **Zero Export** — the **Discharge limit** column below caps battery discharge per slot; grid supplies any load above it.
-              {% elif is_state('sensor.ecco_clock_dongle_ecco_load_limit_exp_ess_non_ess', 'Allow Export') %}
-              ℹ️ Load Limit = **Allow Export** — the **Export limit** column below caps export power per slot.
-              {% else %}
-              ℹ️ Load Limit = **{{ states('sensor.ecco_clock_dongle_ecco_load_limit_exp_ess_non_ess') }}** — the Power column's exact effect in this mode is not confirmed; shown as informational only.
-              {% endif %}
-            card_mod: *ecco_card_mod
-          - type: markdown
-            grid_options:
-              columns: 48
-              rows: 6
-            content: >
-              {% set label = 'Discharge limit' if is_state('sensor.ecco_clock_dongle_ecco_load_limit_exp_ess_non_ess', 'Zero Export') else 'Export limit' if is_state('sensor.ecco_clock_dongle_ecco_load_limit_exp_ess_non_ess', 'Allow Export') else 'Power' %}
-
-              | Slot | Time window | {{ label }} | Target SOC | Charge from |
-
-              |:---:|:---|---:|---:|:---|
-
-              | **1** | {{ states('sensor.ecco_clock_dongle_ecco_timezone1_time') }}–{{ states('sensor.ecco_clock_dongle_ecco_timezone2_time') }} | {{ states('sensor.ecco_clock_dongle_ecco_timezone1_power')|float(0)|round(0)|int }} W | {{ states('sensor.ecco_clock_dongle_ecco_timezone1_soc')|float(0)|round(0)|int }}% | {{ states('sensor.ecco_clock_dongle_ecco_timezone1_charge') }} |
-
-              | **2** | {{ states('sensor.ecco_clock_dongle_ecco_timezone2_time') }}–{{ states('sensor.ecco_clock_dongle_ecco_timezone3_time') }} | {{ states('sensor.ecco_clock_dongle_ecco_timezone2_power')|float(0)|round(0)|int }} W | {{ states('sensor.ecco_clock_dongle_ecco_timezone2_soc')|float(0)|round(0)|int }}% | {{ states('sensor.ecco_clock_dongle_ecco_timezone2_charge') }} |
-
-              | **3** | {{ states('sensor.ecco_clock_dongle_ecco_timezone3_time') }}–{{ states('sensor.ecco_clock_dongle_ecco_timezone4_time') }} | {{ states('sensor.ecco_clock_dongle_ecco_timezone3_power')|float(0)|round(0)|int }} W | {{ states('sensor.ecco_clock_dongle_ecco_timezone3_soc')|float(0)|round(0)|int }}% | {{ states('sensor.ecco_clock_dongle_ecco_timezone3_charge') }} |
-
-              | **4** | {{ states('sensor.ecco_clock_dongle_ecco_timezone4_time') }}–{{ states('sensor.ecco_clock_dongle_ecco_timezone5_time') }} | {{ states('sensor.ecco_clock_dongle_ecco_timezone4_power')|float(0)|round(0)|int }} W | {{ states('sensor.ecco_clock_dongle_ecco_timezone4_soc')|float(0)|round(0)|int }}% | {{ states('sensor.ecco_clock_dongle_ecco_timezone4_charge') }} |
-
-              | **5** | {{ states('sensor.ecco_clock_dongle_ecco_timezone5_time') }}–{{ states('sensor.ecco_clock_dongle_ecco_timezone6_time') }} | {{ states('sensor.ecco_clock_dongle_ecco_timezone5_power')|float(0)|round(0)|int }} W | {{ states('sensor.ecco_clock_dongle_ecco_timezone5_soc')|float(0)|round(0)|int }}% | {{ states('sensor.ecco_clock_dongle_ecco_timezone5_charge') }} |
-
-              | **6** | {{ states('sensor.ecco_clock_dongle_ecco_timezone6_time') }}–{{ states('sensor.ecco_clock_dongle_ecco_timezone1_time') }} | {{ states('sensor.ecco_clock_dongle_ecco_timezone6_power')|float(0)|round(0)|int }} W | {{ states('sensor.ecco_clock_dongle_ecco_timezone6_soc')|float(0)|round(0)|int }}% | {{ states('sensor.ecco_clock_dongle_ecco_timezone6_charge') }} |
-            card_mod: *ecco_card_mod
+              rows: auto
 
       # ================= 8. PV STRINGS =================
       - type: grid

@@ -1,0 +1,35 @@
+{
+  "schema": "ecco-dashboard-protection/1",
+  "gate": "EXAMPLE_SITE_PRESERVE_GATE",
+  "note": "FICTIONAL EXAMPLE with made-up values. A site's real policy lives only on its host at /config/ecco/site-local/dashboard-protection.json (never in a repository); make it with tools/ecco_dashboard_guard.py make-policy. See docs/user/site-render.md, Dashboard preservation gate.",
+  "dashboards": [
+    {
+      "destination": "/config/ecco/dashboards/ecco_pro.yaml",
+      "protect": [
+        {
+          "pointer": "/views/0/sections/2/cards/0",
+          "sha256": "6b20738e4a1c1edaa582badf3d0bafe4631411e97b22275dd41121bbe51e3252"
+        }
+      ],
+      "overlay": [
+        {
+          "pointer": "/views/0/sections/2/cards/0/type",
+          "value": "custom:example-site-card"
+        },
+        {
+          "pointer": "/views/0/sections/2/cards/0/scene/pack",
+          "value": "media-source://media_source/local/example/scene"
+        },
+        {
+          "pointer": "/views/0/sections/2/cards/0/scene/variant",
+          "value": "example-variant"
+        }
+      ],
+      "require_resources": [
+        {
+          "url": "/local/example/example-site-card.js"
+        }
+      ]
+    }
+  ]
+}

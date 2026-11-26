@@ -1,0 +1,36 @@
+# ECCO Intelligence (SHADOW, advice only) - preferences: the raise-only advisory reserve helper, and nothing else.
+#
+# One owner-editable helper. The ECCO Intelligence integration (custom_components/ecco_intelligence) reads it every cycle only
+# when the owner's site file maps it as `pref.advisory_reserve_raise_pct` (docs/intelligence/INTELLIGENCE_HA_RUNTIME.md,
+# section 4.1); while it is not mapped it is never read and raises nothing.
+#
+#   input_number.ecco_advisory_reserve_raise_pct   a raise-only advisory reserve preference, 0-100 % (the contract's range of
+#                                                  pref.advisory_reserve_raise_pct). The advisory planning floor is the
+#                                                  highest of the I-D1 floor, the technical minimum, the Home Assistant reserve
+#                                                  helper's value (when one is supplied) and this value: it can only RAISE the
+#                                                  floor, never lower it (INFO PREF_RESERVE_RAISE when it binds). It is a
+#                                                  preference: never a decision, never copied into the site file, never an I-D6
+#                                                  key, and it does not age.
+#
+# No `initial:`. Home Assistant restores the owner's last value at every start; a new helper starts at its minimum, 0 %, which
+# raises nothing. A configured `initial` would overwrite the owner's value at every start.
+# Fail closed: once mapped, a helper that is missing, unavailable, not a number or outside 0-100 BLOCKs every item I-D1 gates
+# (PREF_RESERVE_RAISE_UNKNOWN), with no number. So map it only once this package is installed.
+#
+# It is not the Home Assistant reserve helper of the core package (the user's own battery reserve) and reads, writes or replaces
+# nothing: no automation, script, template, service call or other entity. Nothing in ECCO writes this helper; the owner edits it
+# in Home Assistant. Advice only: nothing reaches the inverter or the dongle.
+#
+# Listed in deployment/ha-manifest.yaml (post-export entry isp1). Install it with the presentation package
+# (ecco_intelligence.yaml), before the integration, under its own approval (the install runbook, section 4); nothing deploys it
+# automatically.
+
+input_number:
+  ecco_advisory_reserve_raise_pct:
+    name: "ECCO Intel Advisory Reserve Raise"
+    icon: mdi:battery-arrow-up-outline
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+    unit_of_measurement: "%"

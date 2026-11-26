@@ -51,6 +51,7 @@ class DumpInputs:
     in_charge_window: bool | None = None          # None = unknown = refused
     saving_sessions: tuple[tuple[datetime, datetime], ...] = field(default_factory=tuple)
     ha_reserve_pct: float | None = None
+    reserve_raise_pct: float | None = None        # the raise-only advisory reserve preference (SHADOW), never the helper
 
 
 def advise_dump(cfg: SiteConfig, inp: DumpInputs) -> Advice:
@@ -85,7 +86,7 @@ def advise_dump(cfg: SiteConfig, inp: DumpInputs) -> Advice:
     if bl:
         return blocked(KIND, bl, inputs, assumptions=_ASSUMPTIONS)
 
-    reserve = cfg.effective_reserve(inp.ha_reserve_pct)
+    reserve = cfg.effective_reserve(inp.ha_reserve_pct, inp.reserve_raise_pct)
     floor = reserve.effective_pct
     desired = floor + cfg.soc_safety_margin_pct
     cap = cfg.battery_capacity_kwh

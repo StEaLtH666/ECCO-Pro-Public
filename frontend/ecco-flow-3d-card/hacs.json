@@ -1,0 +1,7 @@
+{
+  "name": "ECCO 3D Energy Flow",
+  "render_readme": true,
+  "content_in_root": false,
+  "filename": "ecco-flow-3d-card.js",
+  "homeassistant": "2024.8.0"
+}

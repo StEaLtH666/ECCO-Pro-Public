@@ -752,7 +752,7 @@ adders = {"home-assistant/packages/ecco_canonical_telemetry.yaml": F.add_hd1_can
           "registry/system_health_checks.yaml": F.add_hd1_health}
 check("undone exactly, each file is its fcc1 state with no trace of hd1, and re-applying hd1's pairs gives the live file",
       all("hd1" not in t for t in pre.values())
-      and all(adders[rel](pre[rel]) == _pex.read(rel) for rel in FROZEN_FILES))   # PEX: round trip
+      and all(adders[rel](pre[rel]) == _pex.as_of(rel, "hd1", _pex.read(rel)) for rel in FROZEN_FILES))   # PEX: round trip to the file as of hd1 (acu1 edits the dashboard after hd1)
 added = [l for l in F.OUTLOOK_0_NEW.splitlines() if l not in F.OUTLOOK_0_OLD.splitlines()]
 check("the learning task's only change is comment lines and the one 0 W filter (the read, the profile and the write are as before)",
       bool(added) and all(l.startswith("//") for l in added[:-1]) and added[-1].strip() == "|> filter(fn: (r) => r._value > 0.0)",
