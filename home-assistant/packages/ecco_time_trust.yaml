@@ -6,7 +6,10 @@
 # dongle ends every lease and checks every start against ITS NTP time; the inverter switches its TOU slots on its own clock, which the
 # dongle corrects against NTP about twice an hour and which stalls for 60 s about 85 times a day. If trustworthy time cannot be
 # established, anything that depends on it must fail safely. This package turns what the dongle already publishes into that input. It
-# BUILDS THE INPUT ONLY: nothing reads it yet (wiring it into the start gates is a separate step, with its own approval).
+# BUILDS THE INPUT ONLY: it reads none of its own consumers and writes nothing, and only the packages of the READERS allow-list of its suite
+# (home-assistant/tests/test_ecco_time_trust.py) may read them: the start gate and the Free Power time guard of the next step (ecco_start_gate.yaml and
+# ecco_lease_guard_free_power_time.yaml, post-export entry sgt1; neither is installed, neither is live-proven). Any other package that mentions this
+# one fails that suite until it is added to the list; wiring the input anywhere else is a separate step, with its own approval.
 #
 # WHAT IT PROVIDES (eleven template entities; no helper, no automation, no script, no service call, no action, no trigger):
 #   sensor.ecco_time_trust_ha_clock         TRUSTED / DEGRADED / UNTRUSTED / UNKNOWN   Home Assistant's clock against the dongle's NTP time
@@ -100,7 +103,8 @@
 #
 # HOW A CONSUMER MUST READ IT. Test for the good state: is_state('binary_sensor.ecco_time_trusted_for_leases', 'on'). Never test "not off"
 # or "!= 'unavailable'": an entity that does not exist yet, or is unavailable, is not on. The overall sensor and the per-clock sensors take
-# the four values above; anything else (unavailable, unknown) means UNKNOWN. Nothing here is wired to a gate yet.
+# the four values above; anything else (unavailable, unknown) means UNKNOWN. This package wires nothing to a gate itself: the two listed readers
+# (see the top of this header) are the only ones, and each only reads.
 #
 # LIMITS, stated plainly (nothing here is a lock; the saved replay and the numbers are in home-assistant/packages/README.md).
 #   - It measures nothing itself: it classifies what the dongle publishes. It checks that two clocks AGREE, not that either is true: a dongle

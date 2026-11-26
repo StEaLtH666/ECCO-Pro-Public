@@ -12,7 +12,7 @@ installation differs, render a site copy with `tools/ecco_site_render.py` (see `
 `ecco_time_trust.yaml` (read only; offline, NOTHING INSTALLED) turns what the dongle already publishes into one explicit timing-safety input. ECCO acts on time on three clocks: Home Assistant
 starts schedules on its clock, the dongle ends every lease and checks every start against its NTP time, and the inverter switches its TOU slots on its own clock, which the dongle corrects
 against NTP about twice an hour and which stalls for 60 s about 85 times a day. If trustworthy time cannot be established, anything that depends on it must fail safely. This package
-builds the input only: nothing reads it yet (wiring it into the start gates is a separate step with its own approval), and it writes nothing.
+builds the input only: it writes nothing and reads none of its own consumers, and only the packages of the READERS allow-list of its suite (`home-assistant/tests/test_ecco_time_trust.py`) may read them: the start gate and the Free Power time guard of the next step (`ecco_start_gate.yaml` and `ecco_lease_guard_free_power_time.yaml`, post-export entry `sgt1`; neither is installed nor live-proven). Any other package that mentions this one fails that suite until it is added to the list; wiring the input anywhere else is a separate step with its own approval.
 
 | Entity | Values | Meaning |
 |---|---|---|
