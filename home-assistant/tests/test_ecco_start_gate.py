@@ -2201,14 +2201,26 @@ check("the limits the headers state about other packages are true: the start byp
       and "script.ecco_free_power_start_scheduled" in SMR_TEXT and "ecco_free_power_start_guarded" not in SMR_TEXT and "r.startswith('STARTED')" in FREE_TEXT and "ecco_free_power_start_guarded" not in FREE_TEXT)
 
 # the manifest, the README, the CHANGELOG and the chain entry
+sys.path.append(str(ROOT / "registry" / "tests"))
+import _sgt1_scope as _sgt1  # noqa: E402
+import _scope_chain as _sc  # noqa: E402
+
+_post = [e.id for e in _sc.POST_EXPORT_ENTRIES]
+# The manifest as sgt1 left it: the edit of every LATER chain entry undone, newest first (a reverter that cannot apply raises, so a later entry that does not undo exactly fails this suite loudly). The pins
+# below that say "the last five stanzas" and "the entry pins the manifest as it is" are about sgt1's own state, so they are read as of sgt1 and keep passing after a later entry (exc1) is appended.
+MANIFEST_AT_SGT1 = MANIFEST_TEXT
+for _later in reversed(_sc.POST_EXPORT_ENTRIES[_post.index("sgt1") + 1:]):
+    if _sc.HA_MANIFEST in _later.reverts:
+        MANIFEST_AT_SGT1 = _later.reverts[_sc.HA_MANIFEST](MANIFEST_AT_SGT1)
 man = yaml.safe_load(MANIFEST_TEXT)
+man_sgt1 = yaml.safe_load(MANIFEST_AT_SGT1)
 stanzas = [p for p in man["home_assistant_packages"] if p["source"] in (GATE_REL,) + GUARDS_REL]
 check("the deployment manifest lists the gate and each of the three guard files exactly once, to /config/packages, by ssh_file_copy, with restart_required false (a reload installs each: the input_number "
       "helpers, the template entities and the scripts; the automations), after the time trust stanza, and its comment blocks say not installed, soft, the card is not changed, that each guard needs the "
       "owner's separate authorisation, and that the Free Power press is the operator's End",
       stanzas == [{"source": GATE_REL, "destination": "/config/packages/ecco_start_gate.yaml", "method": "ssh_file_copy", "restart_required": False}]
       + [{"source": rel, "destination": "/config/packages/" + rel.rsplit("/", 1)[1], "method": "ssh_file_copy", "restart_required": False} for rel in GUARDS_REL]
-      and [p["source"] for p in man["home_assistant_packages"]][-5:] == ["home-assistant/packages/ecco_time_trust.yaml", GATE_REL, *GUARDS_REL]
+      and [p["source"] for p in man_sgt1["home_assistant_packages"]][-5:] == ["home-assistant/packages/ecco_time_trust.yaml", GATE_REL, *GUARDS_REL]
       and all(s in re.sub(r"\s*\n\s*#\s*", " ", MANIFEST_TEXT) for s in ("Start gate - sgt1 (NOT installed, NOT LIVE-PROVEN)", "THE GATE IS SOFT", "the Energy Actions card is NOT changed in this step",
                                                                       "reload the input_number helpers first, then the template entities, then the scripts",
                                                                       "Lease guard, Dump to Grid - sgt1 (NOT installed, NOT LIVE-PROVEN). THIS GUARD NEEDS THE OWNER'S SEPARATE INSTALL AUTHORISATION",
@@ -2239,19 +2251,15 @@ check("the CHANGELOG has one bullet for it that says offline, nothing installed,
                                                   "item N2", "Energy Actions card is NOT changed", "no initial value", "NOT_CONFIGURED", "IMPORT_CEILING_UNREADABLE", "never a target", "no charger-loss factor", "separate install authorisation",
                                                   "operator's End", "ACTIVE - VERIFIED OK", "at most once per lease", "restart_required: false", "start bypass detector (pinned)", "smr1", "put back",
                                                   "Recalled from Home Assistant core, not verified live", "follow-ups", "test_ecco_start_gate.py", "`sgt1`")) and BULLET.isascii())
-sys.path.append(str(ROOT / "registry" / "tests"))
-import _sgt1_scope as _sgt1  # noqa: E402
-import _scope_chain as _sc  # noqa: E402
-
 _entry = next((e for e in _sc.POST_EXPORT_ENTRIES if e.id == "sgt1"), None)
-_post = [e.id for e in _sc.POST_EXPORT_ENTRIES]
 check("the chain entry sgt1 follows ttr1 exactly as ttr1 followed bpd1: its scope module holds the manifest edit as an exact round-trip pair and the seven added files (all present), the entry pins the manifest after the edit and "
-      "declares no other file, and it is sealed after ttr1",
-      _entry is not None and _post[-2:] == ["ttr1", "sgt1"] and _sgt1.add_sgt1_manifest(_sgt1.pre_sgt1_manifest(MANIFEST_TEXT)) == MANIFEST_TEXT and _sgt1.pre_sgt1_manifest(MANIFEST_TEXT) != MANIFEST_TEXT
+      "declares no other file, and it is sealed after ttr1 (read as of sgt1: a later entry's edit is undone first, so a later entry can follow)",
+      _entry is not None and _post[_post.index("sgt1") - 1:_post.index("sgt1") + 1] == ["ttr1", "sgt1"] and _sgt1.add_sgt1_manifest(_sgt1.pre_sgt1_manifest(MANIFEST_AT_SGT1)) == MANIFEST_AT_SGT1
+      and _sgt1.pre_sgt1_manifest(MANIFEST_AT_SGT1) != MANIFEST_AT_SGT1
       and _sgt1.ADDED_FILES == frozenset({GATE_REL, *GUARDS_REL, "home-assistant/tests/_start_gate_sim.py", "home-assistant/tests/test_ecco_start_gate.py", "registry/tests/_sgt1_scope.py"})
       and all((ROOT / f).is_file() for f in _sgt1.ADDED_FILES) and _entry.added_files == _sgt1.ADDED_FILES and set(_entry.reverts) == {"deployment/ha-manifest.yaml"}
       and not _entry.frozen_reverts and not _entry.deltas and not _entry.op_paths_changed and not _entry.includes_added
-      and _entry.checkpoints == {"deployment/ha-manifest.yaml": __import__("hashlib").sha256(MANIFEST_TEXT.encode("utf-8")).hexdigest()}, str(_post[-3:]))
+      and _entry.checkpoints == {"deployment/ha-manifest.yaml": __import__("hashlib").sha256(MANIFEST_AT_SGT1.encode("utf-8")).hexdigest()}, str(_post[-3:]))
 
 print("[1] gate")
 pg = Problems()
