@@ -156,6 +156,16 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: true
 
+  # Time trust - ttr1 (READ-ONLY; NOT installed, NOT LIVE-PROVEN). Template entities only: a trust state for each of three clocks (Home Assistant, the dongle's NTP time, the inverter's),
+  # the worst of the three, and three yes/no consumers (lease ends and schedule starts, Home Assistant schedules, slot-time edits), each failing safe (an unreadable input is never TRUSTED).
+  # It reads eight entities the dongle already publishes and writes nothing: no automation, helper, script or service call, and nothing is wired to a gate yet. Install = copy the
+  # file, check the configuration and RELOAD the template entities (Developer tools, YAML): no restart and no other package, which is why restart_required is false here (the packages that
+  # carry helpers, automations or a start-time capture are installed with a restart). Delete the file and reload to remove it.
+  - source: home-assistant/packages/ecco_time_trust.yaml
+    destination: /config/packages/ecco_time_trust.yaml
+    method: ssh_file_copy
+    restart_required: false
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml
