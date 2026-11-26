@@ -3,7 +3,7 @@
  "view_id": "intelligence",
  "contract": "ecco-intel-entities/1",
  "id_rule": "a source row id is the catalogue source id; an attribute row id is '<source id>#<attribute name>'",
- "catalogue_sha256": "0614de5e21426e46bcdb2b9a1ea2e50a461191a6046167d419d8331cfb5b6316",
+ "catalogue_sha256": "216176548250d3a8cc0f13fbd11e2dc31cce84c041a805955b081a3ead355a38",
  "live_shape_sha256": "630dc50807acb5395761c3b9a691188e229a1cb8c41500f06b6155cd23285527",
  "fixtures_sha256": {
   "healthy": "d4e66a95b0bb1b73b4d3e575b163a310a06c3511b7b72a1b774d1bb7d897f515",
@@ -387,6 +387,7 @@
  ],
  "exceptions": [
   {"id": "device_registry", "what": "The device record (name, manufacturer, model, software version) of the ECCO Intelligence device", "reason": "not_exposed_in_states", "note": "The registry is read through a websocket call. The software version is also published as the status attribute integration_version."},
+  {"id": "diag.advice_incidents", "what": "Diagnostics download section 'advice_incidents'", "reason": "not_exposed_in_states", "note": "Incidents of Intelligence's advice log: each time writing its advice failed or could not be read back (when, attempts, cycles missed, kind of error). Only the newest are kept; one open at a restart is lost, so an empty list is no proof of a complete log. Nothing is applied. Not in any state or attribute: showing it would need a new read-only diagnostic entity (a contract change request)."},
   {"id": "diag.busy", "what": "Diagnostics download section 'busy'", "reason": "not_exposed_in_states", "note": "Whether a cycle is running right now. Not in any state or attribute: showing it would need a new read-only diagnostic entity (a contract change request)."},
   {"id": "diag.cadence", "what": "Diagnostics download section 'cadence'", "reason": "not_exposed_in_states", "note": "The scheduling state: refresh rules, retries, backoff, poll tracking and timers. Not in any state or attribute: showing it would need a new read-only diagnostic entity (a contract change request)."},
   {"id": "diag.counters", "what": "Diagnostics download section 'counters'", "reason": "not_exposed_in_states", "note": "How many cycles of each kind have run and how many were refused or failed. Not in any state or attribute: showing it would need a new read-only diagnostic entity (a contract change request)."},
@@ -441,8 +442,8 @@
   "sources": 17,
   "attributes": 344,
   "covered": 361,
-  "exceptions": 28,
-  "exceptions_by_reason": {"secret": 0, "privacy": 5, "unsupported_source": 0, "not_exposed_in_states": 23},
+  "exceptions": 29,
+  "exceptions_by_reason": {"secret": 0, "privacy": 5, "unsupported_source": 0, "not_exposed_in_states": 24},
   "attributes_withheld_by_redaction": 2,
   "production_reads": 163,
   "live": {"PRESENT_LIVE": 309, "NOT_PRESENT_LIVE": 42, "NOT_CHECKED_LIVE": 1, "UNDECLARED": 0}

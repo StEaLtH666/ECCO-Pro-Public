@@ -26,7 +26,7 @@ inverter, InfluxDB or restart is involved.
 | Pinned artefact (the same at every commit of this branch) | Size and sha256 |
 |---|---|
 | the card, file name `ecco-mode-shell.17410163.js` (sha8 `17410163`) | 155,843 bytes, `17410163c016578f73428900087dc714f89336bbc55cc77ec5cbfc2e240d5775` |
-| the generated dashboard text | 147,178 bytes, `4abf3b1e8eca72a6a1bebb0a22eaa535ba5bcf705ab8e9ba745059bfdbd82167` |
+| the generated dashboard text | 147,801 bytes, `e961c119a076b1abd8f630d24ca9356dcd35dba54d4c4ad39e78a7f456288daa` |
 
 ## 2. What is installed, what is read, and what is not touched
 

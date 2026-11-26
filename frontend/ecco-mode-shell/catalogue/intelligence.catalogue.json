@@ -855,6 +855,12 @@
    "note": "The registry is read through a websocket call. The software version is also published as the status attribute integration_version."
   },
   {
+   "id": "diag.advice_incidents",
+   "what": "Diagnostics download section 'advice_incidents'",
+   "reason": "not_exposed_in_states",
+   "note": "Incidents of Intelligence's advice log: each time writing its advice failed or could not be read back (when, attempts, cycles missed, kind of error). Only the newest are kept; one open at a restart is lost, so an empty list is no proof of a complete log. Nothing is applied. Not in any state or attribute: showing it would need a new read-only diagnostic entity (a contract change request)."
+  },
+  {
    "id": "diag.busy",
    "what": "Diagnostics download section 'busy'",
    "reason": "not_exposed_in_states",

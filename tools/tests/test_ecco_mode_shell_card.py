@@ -58,14 +58,14 @@ PKG_REL = f"{SHELL}/package.json"
 # --- THE PINS: the reviewed bytes. Changing any of them is a deliberate edit of this file, in the same commit as the change it reviews. ---
 CARD_SIZE = 155843
 CARD_SHA256 = "17410163c016578f73428900087dc714f89336bbc55cc77ec5cbfc2e240d5775"
-CAT_SIZE = 93873
-CAT_SHA256 = "0614de5e21426e46bcdb2b9a1ea2e50a461191a6046167d419d8331cfb5b6316"
-LEDGER_SIZE = 228099
-LEDGER_SHA256_PREFIX = "8ebfc3867b447276"
+CAT_SIZE = 94420
+CAT_SHA256 = "216176548250d3a8cc0f13fbd11e2dc31cce84c041a805955b081a3ead355a38"
+LEDGER_SIZE = 228630
+LEDGER_SHA256_PREFIX = "704407abd9f364eb"
 EXAMPLE_SIZE = 6852
 EXAMPLE_SHA256 = "c891e8fbf22d95eb9cf9a2e166629af84fdaeddfdc1532544aaf5b0308fa035c"
-CONFIG_SIZE = 147178
-CONFIG_SHA256 = "4abf3b1e8eca72a6a1bebb0a22eaa535ba5bcf705ab8e9ba745059bfdbd82167"
+CONFIG_SIZE = 147801
+CONFIG_SHA256 = "e961c119a076b1abd8f630d24ca9356dcd35dba54d4c4ad39e78a7f456288daa"
 CAT_COUNTS = {"sources": 17, "attribute_rows": 344, "alerts": 19, "ledger_rows": 361}
 
 FAILURES: list[str] = []

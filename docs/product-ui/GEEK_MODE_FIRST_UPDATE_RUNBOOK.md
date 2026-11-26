@@ -164,8 +164,8 @@ guard, and any repin of it needs a review of the full diff of the card, never on
 | Artefact | Source | Pinned by |
 |---|---|---|
 | the card | `frontend/ecco-mode-shell/ecco-mode-shell.js` (155,843 bytes, ASCII, LF) | size and sha256; the forbidden-API list; the exact surface |
-| the catalogue | `frontend/ecco-mode-shell/catalogue/intelligence.catalogue.json` (93,873 bytes; 17 sources, 344 attribute rows, 19 alerts) | size and sha256; counts; a privacy scan |
-| the generated dashboard configuration | `tools/geek_mode_dashboard_config.py` (the example's cards with the catalogue inline; JSON, ASCII, LF; 147,178 bytes) | size and sha256; equality with the committed catalogue |
+| the catalogue | `frontend/ecco-mode-shell/catalogue/intelligence.catalogue.json` (94,420 bytes; 17 sources, 344 attribute rows, 19 alerts) | size and sha256; counts; a privacy scan |
+| the generated dashboard configuration | `tools/geek_mode_dashboard_config.py` (the example's cards with the catalogue inline; JSON, ASCII, LF; 147,801 bytes) | size and sha256; equality with the committed catalogue |
 | the resource plan | `tools/geek_mode_dashboard_config.py --resource-plan` | read by the real `verify-resource` in its suite |
 
 ## 3. Go / no-go before any live step
