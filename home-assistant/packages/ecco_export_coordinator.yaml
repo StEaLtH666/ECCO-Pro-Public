@@ -18,17 +18,20 @@
 # (LEASE_ORIGIN_UNKNOWN), never judged against the schedule's numbers. The latched Stop SOC is also compared with the proposal and used for the END NOW rule (6).
 #
 # READ-ONLY SHADOW. The file defines template sensors and nothing else: no automation, no script, no helper (no input_number, no input_boolean), no trigger, no action, no service call, no
-# persistent notification, no write of any kind to the dongle, the inverter or any entity. NOTHING READS THESE SENSORS YET: no card, script or automation is wired to them, and a
+# persistent notification, no write of any kind to the dongle, the inverter or any entity. ONLY THE CONTROL STATE READ MODEL (ecco_control_state.yaml, a display) READS THESE SENSORS: no card, script or automation is wired to them, and a
 # re-target is only ever REPORTED here, never made. THE HOME ASSISTANT GATES ARE SOFT: the dongle's own Start button (button.ecco_clock_dongle_start_dump_to_grid_now) still starts a lease
 # from Home Assistant or by an assistant, past every check in this file, until a firmware gate binds it (a flash, approved separately; item N6). A VALID proposal is not permission to
-# start. THE START GATE AND THE TIME TRUST INPUT ARE NOT READ HERE AND ARE NOT WIRED: both packages pin who may read them (the start gate suite allows no other package to mention the gate; the time trust
-# suite has a READERS allow-list of two), so combining this proposal with the gate and gating the re-target on time trust is a separate, deliberate step with its own approval (a widened pin is the owner's
-# decision); until then a consumer must itself require the Export start gate to read on, and the re-target is gated only on the freshness of the dongle's own telemetry (below).
+# start. THE START GATE AND THE TIME TRUST INPUT ARE READ HERE, ONLY AS FAR AS THE PINS ALLOW (slice S-A2 of the shared control integration; the pins of the start gate suite, its READERS list, and of the time trust
+# suite, its READERS allow-list, were widened deliberately, design decision D-PIN, in the control state commits): binary_sensor.ecco_export_start_allowed (its state and its blocked_by list) turns a VALID proposal into NOT ALLOWED
+# while it does not allow a start and gives the proposal its `actionable` flag, and binary_sensor.ecco_time_trusted_for_leases (the leases consumer ONLY) lets the re-target shadow reach ALLOWED. Both are only read, both are SOFT, and
+# neither counts before it has read on for GATE_SETTLE_S = 60 s: at a Home Assistant restart the template entities exist with their restored state for a few milliseconds before their first render (lab D2), so a state that young is never
+# trusted. `actionable` is information for a consumer, never permission to start.
 #
 # WHAT IT PROVIDES (nine template sensors; every number is MEASURED or a documented constant, never a forecast):
 #   sensor.ecco_export_coordinator_model        internal: computes everything once (attribute `model`); the other eight are lookups of it. State is the constant "model"
-#   sensor.ecco_export_proposal                 VALID | INVALID | UNVERIFIED | HOLD, with `reasons` (every blocking cause named with the entity and what it reads), `blocked_by` (the codes), `notes`, the
-#                                               raw requirement, what limited it, the schedule window end and, labelled as what the dongle's own loop would do, `loop_battery_power_w` and `loop_duration_min`
+#   sensor.ecco_export_proposal                 VALID | INVALID | UNVERIFIED | HOLD | NOT ALLOWED, with `reasons` (every blocking cause named with the entity and what it reads), `blocked_by` (the codes; for NOT ALLOWED the
+#                                               start gate's own), `actionable` (true only for a VALID proposal while the start gate is open and settled), `notes`, the raw requirement, what limited it, the schedule window end and, labelled
+#                                               as what the dongle's own loop would do, `loop_battery_power_w` and `loop_duration_min`
 #   sensor.ecco_export_proposal_floor           % : the proposed Stop SOC
 #   sensor.ecco_export_proposal_energy          kWh : the usable energy above that floor
 #   sensor.ecco_export_proposal_power           W : the expected battery AC power while the export holds the net target at the meter (never above the proven level)
@@ -36,8 +39,11 @@
 #   sensor.ecco_export_proposal_duration        min : the proposed duration (bounded by the schedule's own window)
 #   sensor.ecco_export_retarget                 while a lease runs: NOT RUNNING | UNKNOWN | NO CHANGE | WAIT | ALLOWED | END NOW (would a change be allowed now), with what it would change and why
 #   sensor.ecco_export_shadow_comparison        while a lease runs: IN LINE | DIFFERS | UNKNOWN, the proposal against the lease's latched Stop SOC, target export and end time
-# Every numeric proposal sensor is UNAVAILABLE (never 0) unless the state is VALID or UNVERIFIED. A consumer tests is_state('sensor.ecco_export_proposal', 'VALID') and never "not INVALID".
-# No attribute carries a time that moves with the clock (the proposal's end is now plus its duration): the proposal, the re-target and the comparison publish a new state only when a number or a text changes.
+# Every numeric proposal sensor is UNAVAILABLE (never 0) unless the proposal itself is VALID or UNVERIFIED (its state is then VALID, UNVERIFIED or, while the start gate does not allow a start, NOT ALLOWED: the numbers describe the proposal, they are not a permission).
+# A consumer tests is_state('sensor.ecco_export_proposal', 'VALID') and never "not INVALID".
+# No attribute carries a time that moves with the clock (the proposal's end is now plus its duration): the proposal, the re-target and the comparison publish a new state only when a number or a text changes. THE MODEL NO LONGER
+# CARRIES THE TIME OF ITS EVALUATION EITHER (decision D-C04a, route a: the lab measured 393 rows an hour from that one attribute): with unchanged inputs it publishes nothing at all, so a quiet system writes no row; it still
+# publishes when a measured number it holds changes, and a lookup judges a model it cannot read (not a dict) as unreadable, never its age.
 #
 # THE AUTHORISED WINDOW. The Export schedule authorises a run only inside its window: start = input_datetime.ecco_dump_to_grid_schedule_start, end = that start plus input_number.ecco_dump_to_grid_schedule_duration
 # minutes; it caps a run at min(requested, floor((window end - now + 20 s) / 60 s)) minutes and nothing runs after the window end (ecco_dump_to_grid_schedule.yaml). THE PROPOSED DURATION AND END ARE BOUNDED BY THE
@@ -77,13 +83,18 @@
 #       the Stop SOC, the limits, the telemetry, the request, its window, the PV surplus or the energy cannot support a proposal); UNVERIFIED when holding the configured export would need more battery power than the
 #       proven level AND the dongle's Power Ceiling lets its loop go above that level (nobody has proven what it does there); otherwise VALID (a ceiling at or below the proven level only limits
 #       the export, and says so in the notes). The dongle's limits must read VALID (sensor.ecco_dump_limits_state) and the Max Grid Export must be configured, or the dongle would refuse the start.
+#       NOT ALLOWED replaces VALID (and only VALID) while binary_sensor.ecco_export_start_allowed does not allow a start now: it reads off, its blocked_by list names a cause, it cannot be read (GATE_UNREADABLE),
+#       its state and its list disagree (GATE_INCONSISTENT) or it turned on less than GATE_SETTLE_S ago (GATE_SETTLING); `blocked_by` then names the gate's own codes, the numbers stay available (they describe the
+#       VALID proposal) and `actionable` is false. A lease the dongle runs closes the gate (DUMP_ACTIVE), so the proposal reads NOT ALLOWED for as long as a lease runs; the re-target and the comparison judge the
+#       proposal itself and are not affected.
 #   (6) RE-TARGET (shadow). While a Dump to Grid lease is running, sensor.ecco_export_retarget says whether a change to the proposal beyond a documented deadband WOULD be allowed now, what it
 #       would change (the Stop SOC, the net export target, the end time) and why. A re-target could ONLY EVER BE the END of the lease plus a guarded re-START of a new one, at most one per
 #       30 minutes, bounded by the schedule's own window; Home Assistant never writes anything into a running lease. It is judged only for a lease the SCHEDULE started: the scheduled start script last ran at most
 #       ORIGIN_RUN_WINDOW_S before the lease turned on, the lease turned on no earlier than ORIGIN_WINDOW_START_TOLERANCE_S before the window start, and it ends no later than ORIGIN_WINDOW_END_TOLERANCE_S after the window end.
 #       Any other lease (manual, guarded, the dongle's own button, or one that cannot be matched to the schedule any more, for example after a restart) is UNKNOWN with LEASE_ORIGIN_UNKNOWN, and so is its comparison.
 #       A change is not allowed within RETARGET_MIN_AGE_S of the lease start, nor within RETARGET_MIN_GAP_S of the previous would-change (the model remembers it in its own attribute), nor until that memory is itself
-#       RETARGET_MIN_GAP_S old (a template reload or a restart starts it afresh, and the previous would-change is then not known), nor while the telemetry is not fresh. The deviations that count: the floor is
+#       RETARGET_MIN_GAP_S old (a template reload starts it afresh, and the previous would-change is then not known; a restart does not: lab D3, decision D-C04d), nor while the telemetry is not fresh, nor unless
+#       binary_sensor.ecco_time_trusted_for_leases reads on and has read on for GATE_SETTLE_S (WAIT with TIME_NOT_TRUSTED: the dongle ends a lease on its own NTP time). The deviations that count: the floor is
 #       RETARGET_STOP_DEADBAND or more above the Stop SOC the lease latched (a raise: the floor is never below it), the net export target differs by RETARGET_EXPORT_DEADBAND_W or more in either direction, or the energy would last RETARGET_END_DEADBAND_MIN
 #       or more beyond the lease's end, inside the window (a lease that would end by its Stop SOC before its end time needs no change). FOR A LEASE THE SCHEDULE STARTED THE END RULE NEVER FIRES: its proposed end is
 #       bounded by min(window end, the lease's own latched end) + 20 s (see THE AUTHORISED WINDOW), which is under the deadband, so the END part of a re-target can only keep the end or shorten it; the rule stays as
@@ -122,7 +133,8 @@
 #   ORIGIN_WINDOW_START_TOLERANCE_S = 60   and it must not have turned on earlier than this before the window start
 #   ORIGIN_WINDOW_END_TOLERANCE_S = 120    and must end no later than this after the window end (the dongle's clock may differ from Home Assistant's by up to the 90 s freshness bound)
 #   PHYSICAL_MAX_W = 30000          the plausibility bound of a power reading (the canonical adapters use the same); a bound on garbage, not a rating
-#   MODEL_MAX_AGE_S = 180           a lookup sensor withholds everything when the model has not been evaluated this recently (three missed minutes); the re-target memory is continuous only while the evaluations are at most this far apart
+#   GATE_SETTLE_S = 60              the start gate (for actionable) and the leases consumer (for ALLOWED) count only after they have read on this long: at a restart the template entities exist with their restored state for a few
+#                                   milliseconds (lab D2: 43 and 74 ms), and their last_changed is then new
 #
 # LIMITS, stated plainly (nothing here is a lock).
 #   - Soft: see above. The dongle's Start button, a Home Assistant administrator or an assistant can start and change anything regardless of this proposal.
@@ -133,10 +145,10 @@
 #     recomputed at every update and is a START proposal, not a forecast of the lease.
 #   - PV is the DC-side measurement (registers 186-189) and is credited 1:1 against the AC power; the AC share is a few percent lower, so the expected battery power can be a few percent low and the duration a few percent long.
 #     The Stop SOC, which the dongle enforces every 15 s, is what keeps the reserve; the duration only bounds the lease in time.
-#   - The re-target memory (the time of the previous would-change, and since when the memory has existed) lives in the model's own attribute. A template reload or a restart starts it afresh: for RETARGET_MIN_GAP_S nothing is
-#     allowed (MEMORY_YOUNG), whatever `this` returns after it (none, undefined, or a state object with no attributes), and a pause of more than MODEL_MAX_AGE_S in the evaluations starts it afresh too. After a restart the
-#     lease flag's last_changed is new as well (Home Assistant resets it), so a lease that runs through a restart more than 15 minutes after its start can no longer be matched to the scheduled start and reads UNKNOWN (LEASE_ORIGIN_UNKNOWN) until it ends.
-#     No effect on any lease: nothing acts.
+#   - The re-target memory (the time of the previous would-change, and since when the memory has existed) lives in the model's own attribute. A template reload starts it afresh: for RETARGET_MIN_GAP_S nothing is
+#     allowed (MEMORY_YOUNG), whatever `this` returns after it (none, undefined, or a state object with no attributes). A RESTART does not: the model's state and attribute are restored (lab D3; decision D-C04d, documented
+#     here and not reset), so the 30 minute rules continue across it. After a restart the lease flag's last_changed is new (Home Assistant resets it), so the lease is judged young again for 30 minutes (LEASE_TOO_YOUNG) and a lease that
+#     runs through a restart more than 15 minutes after its start can no longer be matched to the scheduled start and reads UNKNOWN (LEASE_ORIGIN_UNKNOWN) until it ends. No effect on any lease: nothing acts.
 #   - The origin of a lease is INFERRED, not recorded: a manual or guarded start that turns on within ORIGIN_RUN_WINDOW_S after a run of the scheduled start script that started no lease (it was blocked, failed or
 #     cancelled), inside the window and ending by its end, would be taken for the schedule's lease and compared with the schedule's numbers (shadow only: nothing acts). The schedule's last-result helper would tell;
 #     it is not read here.
@@ -145,8 +157,9 @@
 #     start taken for the schedule's lease (above) is bounded by its own end as if it were the schedule's.
 #   - The poll text is the dongle's LOCAL time with no offset and is read as local time in Home Assistant's own zone, as in the gate and in R9: if the zones differ the text is hours away and
 #     the proposal is INVALID (TELEMETRY_STALE), never VALID. The lease's end text is read the same way and refused when it lies in a skipped or a repeated hour.
-#   - The model carries a few kB of attributes and its attribute changes at every render (every poll, about every 10 s: it holds the time of the evaluation, which the lookups need). Exclude
-#     sensor.ecco_export_coordinator_model from the recorder (see INSTALL). The other eight sensors publish only when a number or a text changes.
+#   - The model carries a few kB of attributes and, since D-C04a route a, no time of its evaluation: with unchanged inputs it publishes nothing. It still publishes whenever a measured number it holds changes (the
+#     expected power and the duration follow the house load and the PV), so on a house with a moving load it writes a row for each such change; excluding it from the recorder is optional. The other eight sensors
+#     publish only when a number or a text changes. A model that cannot be read (not a dict) makes every lookup withhold everything (MODEL_UNREADABLE); the age of the model is no longer judged, because it is no longer published.
 #   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the offline model of them is in the suite): that a template entity can read its own previous state through `this`
 #     (the re-target is held at WAIT, never ALLOWED, while the memory is not RETARGET_MIN_GAP_S old), that `this` is a state object with no attributes, never none, before the entity has published and after a
 #     template reload (both are modelled, and so is none), that `states['<entity id>'].last_changed` is the time of the last change of the state and is new on a restart, that a script's `last_triggered` attribute is
@@ -159,13 +172,13 @@
 # which the Export schedule's press-time recheck reads and fails closed on: a hold or a reserve that is momentarily unknown ends a waiting run as BLOCKED and disarms the schedule for that night
 # (ecco_dump_to_grid_schedule.yaml). Then one file copy to /config/packages/ecco_export_coordinator.yaml, a configuration check, then reload the template entities (Developer tools, YAML, Template entities, or the
 # template.reload service): no restart, no helper to create, no other file. It needs ecco_plan_helpers.yaml, ecco_dump_limits.yaml, ecco_dump_to_grid_schedule.yaml, ecco_canonical_telemetry.yaml and
-# ecco_battery_runtime.yaml (without them the proposal reads INVALID and says which input is missing). It changes no existing entity. Exclude sensor.ecco_export_coordinator_model from the recorder (recorder: exclude:
-# entities:): its attribute changes at every render and is a few kB. Remove: delete the file and reload the template entities (the same cautions). Nothing here is meant to be exposed to a voice assistant.
+# ecco_battery_runtime.yaml (without them the proposal reads INVALID and says which input is missing). It changes no existing entity. Exclude sensor.ecco_export_coordinator_model from the recorder if its rows matter (optional now: it no longer changes
+# at every render; the exclusion takes effect only after a Core restart, lab D6): recorder: exclude: entities:. Remove: delete the file and reload the template entities (the same cautions). Nothing here is meant to be exposed to a voice assistant.
 
 template:
   - sensor:
-      # The model: every input is read and checked ONCE here, and every other sensor of this file is a lookup of what this one publishes. The attribute is a dict; `evaluated_ts` lets a lookup
-      # withhold everything when the model stops updating. The re-target remembers its previous would-change, and since when it remembers, through `this` (the model's own previous attribute).
+      # The model: every input is read and checked ONCE here, and every other sensor of this file is a lookup of what this one publishes. The attribute is a dict and carries no time of its evaluation
+      # (a lookup withholds everything when it cannot read the dict). The re-target remembers its previous would-change, and since when it remembers, through `this` (the model's own previous attribute).
       - name: ECCO Export Coordinator Model
         unique_id: ecco_export_coordinator_model
         icon: mdi:calculator-variant-outline
@@ -182,8 +195,7 @@ template:
             {%- set prev = this.attributes.get('model') if mem_ok else none -%}
             {%- set pm = prev if prev is mapping else {} -%}
             {%- set pm_since = pm.get('mem_since_ts') -%}
-            {%- set pm_eval = pm.get('evaluated_ts') -%}
-            {%- set mem_cont = pm_since is number and pm_eval is number and (now_ts - pm_eval) >= -5 and (now_ts - pm_eval) <= 180 and (now_ts - pm_since) >= -5 -%}
+            {%- set mem_cont = pm_since is number and (now_ts - pm_since) >= -5 -%}
             {%- set mem_since = pm_since if mem_cont else now_ts -%}
             {%- set mem_age = now_ts - mem_since -%}
             {%- set tel = states('binary_sensor.ecco_clock_dongle_telemetry_online') -%}
@@ -214,6 +226,21 @@ template:
             {%- set prov = rng(states('input_number.ecco_dump_supervised_proven_w'), 500, 30000) | float(none) -%}
             {%- set mx = rng(states('number.ecco_clock_dongle_dump_to_grid_max_grid_export'), 0, 30000) | float(none) -%}
             {%- set lim = states('sensor.ecco_dump_limits_state') -%}
+            {%- set egs = states('binary_sensor.ecco_export_start_allowed') -%}
+            {%- set egb = state_attr('binary_sensor.ecco_export_start_allowed', 'blocked_by') -%}
+            {%- set egl = (egb | list) if (egb is iterable and egb is not string and egb is not mapping) else none -%}
+            {%- set eg_obj = states['binary_sensor.ecco_export_start_allowed'] -%}
+            {%- set eg_age = (now_ts - as_timestamp(eg_obj.last_changed, none)) if (eg_obj is not none and eg_obj.last_changed is defined) else none -%}
+            {%- set tls = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set tl_obj = states['binary_sensor.ecco_time_trusted_for_leases'] -%}
+            {%- set tl_age = (now_ts - as_timestamp(tl_obj.last_changed, none)) if (tl_obj is not none and tl_obj.last_changed is defined) else none -%}
+            {%- set time_ok = tls == 'on' and tl_age is not none and tl_age >= 60 -%}
+            {%- set g_read = egs in ['on', 'off'] and egl is not none -%}
+            {%- set g_incons = g_read and ((egs == 'on') != ((egl | length) == 0)) -%}
+            {%- set g_open = g_read and egs == 'on' and (egl | length) == 0 -%}
+            {%- set gn = namespace(c=[]) -%}
+            {%- for c in (egl if egl is not none else []) if c is string -%}{%- set gn.c = gn.c + [c[:40]] -%}{%- endfor -%}
+            {%- set gcodes = ['GATE_UNREADABLE'] if not g_read else (gn.c + (['GATE_INCONSISTENT'] if g_incons else []) + (['GATE_SETTLING'] if (g_open and not (eg_age is not none and eg_age >= 60)) else [])) -%}
             {%- set lease = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
             {%- set lease_on = lease == 'on' -%}
             {%- set l_stop = rng(states('sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc'), 0, 100) | float(none) -%}
@@ -291,6 +318,8 @@ template:
             {%- endfor -%}
             {%- set verdict = 'HOLD' if 'OVERRIDE_ACTIVE' in ns.c else ('INVALID' if (ns.c | length) > 0 else ('UNVERIFIED' if (raw_p > prov and pceil > prov) else 'VALID')) -%}
             {%- set num = verdict in ['VALID', 'UNVERIFIED'] -%}
+            {%- set pub = 'NOT ALLOWED' if (verdict == 'VALID' and (gcodes | length) > 0) else verdict -%}
+            {%- set actionable = verdict == 'VALID' and (gcodes | length) == 0 -%}
             {%- for code, hit, text in [
             ('TARGET_LIMITED_BY_EXPORT_LIMIT', num and tgt > net, 'the configured target (' ~ tgt ~ ' W) is above the Max Grid Export less the START headroom, so the proposal holds ' ~ net ~ ' W'),
             ('LOW_BATTERY_POWER', num and raw_p < 500, 'holding ' ~ net ~ ' W at the meter needs only ' ~ raw_p_i ~ ' W from the battery (PV and the load nearly cover it): the dongle never commands less than 500 W, so the duration is worked out at 500 W'),
@@ -327,7 +356,7 @@ template:
             {%- set prev_entry = pm.get('rt_entry') if pm.get('rt_entry') is number else none -%}
             {%- set cont = pm.get('rt_state') == 'ALLOWED' -%}
             {%- set recent = prev_entry is not none and not cont and (now_ts - prev_entry) < 1800 -%}
-            {%- set rt = 'NOT RUNNING' if lease == 'off' else ('UNKNOWN' if not lease_on else ('END NOW' if end_now else ('UNKNOWN' if (verdict != 'VALID' or not complete or age is none or not origin) else ('NO CHANGE' if not dev else ('WAIT' if (age < 1800 or recent or mem_age < 1800) else 'ALLOWED'))))) -%}
+            {%- set rt = 'NOT RUNNING' if lease == 'off' else ('UNKNOWN' if not lease_on else ('END NOW' if end_now else ('UNKNOWN' if (verdict != 'VALID' or not complete or age is none or not origin) else ('NO CHANGE' if not dev else ('WAIT' if (age < 1800 or recent or mem_age < 1800 or not time_ok) else 'ALLOWED'))))) -%}
             {%- set rtr = namespace(l=[]) -%}
             {%- for code, hit, text in [
             ('LEASE_UNREADABLE', lease not in ['on', 'off'], 'binary_sensor.ecco_clock_dongle_dump_to_grid_active reads ' ~ lease ~ ', so it is not known whether a lease is running'),
@@ -341,7 +370,8 @@ template:
             ('LEASE_TOO_YOUNG', rt == 'WAIT' and age >= 0 and age < 1800, 'the lease is ' ~ age_min_i ~ ' minutes old; a change is not allowed within 30 minutes of its start'),
             ('RECENT_CHANGE', rt == 'WAIT' and recent, 'a change would have been allowed less than 30 minutes ago'),
             ('MEMORY_UNAVAILABLE', rt == 'WAIT' and not mem_ok, 'the model cannot read its own previous state, so it cannot tell whether a change was allowed in the last 30 minutes'),
-            ('MEMORY_YOUNG', rt == 'WAIT' and mem_ok and mem_age < 1800, 'the re-target memory is only ' ~ ((mem_age / 60) | round(0, 'floor')) ~ ' minutes old (a template reload, a restart or a pause in the evaluations starts it afresh): a change is not allowed until it is 30 minutes old')
+            ('MEMORY_YOUNG', rt == 'WAIT' and mem_ok and mem_age < 1800, 'the re-target memory is only ' ~ ((mem_age / 60) | round(0, 'floor')) ~ ' minutes old (a template reload starts it afresh): a change is not allowed until it is 30 minutes old'),
+            ('TIME_NOT_TRUSTED', rt == 'WAIT' and not time_ok, 'binary_sensor.ecco_time_trusted_for_leases reads ' ~ tls ~ (', but it turned on less than 60 s ago' if tls == 'on' else ' (it must read on)') ~ ': the dongle ends a lease on its own NTP time, so a change is not allowed until time is trusted for leases')
             ] if hit -%}
             {%- set rtr.l = rtr.l + [code ~ ': ' ~ text] -%}
             {%- endfor -%}
@@ -354,11 +384,13 @@ template:
             {%- set w_age = (l_start_ts + 1800) if (age is not none and age < 1800) else 0 -%}
             {%- set w_rec = (prev_entry + 1800) if recent else 0 -%}
             {%- set w_mem = (mem_since + 1800) if mem_age < 1800 else 0 -%}
-            {%- set wait_until = ([w_age, w_rec, w_mem] | max) if rt == 'WAIT' else none -%}
+            {%- set wait_until = (([w_age, w_rec, w_mem] | max) if ([w_age, w_rec, w_mem] | max) > 0 else none) if rt == 'WAIT' else none -%}
             {%- set model = {
-                  'state': verdict,
-                  'reasons': (ns.b + ns.n) if (ns.c | length) > 0 or verdict == 'UNVERIFIED' else (['VALID: a proposal from measured values'] + ns.n),
-                  'blocked_by': ns.c,
+                  'state': pub,
+                  'verdict': verdict,
+                  'actionable': actionable,
+                  'reasons': (['NOT ALLOWED: the proposal itself is VALID, but binary_sensor.ecco_export_start_allowed does not allow a start now (' ~ (gcodes | join(', ')) ~ ')'] + ns.n) if pub == 'NOT ALLOWED' else ((ns.b + ns.n) if (ns.c | length) > 0 or verdict == 'UNVERIFIED' else (['VALID: a proposal from measured values'] + ns.n)),
+                  'blocked_by': gcodes if pub == 'NOT ALLOWED' else ns.c,
                   'notes': ns.n,
                   'floor_pct': (floor | round(0)) if num else none,
                   'energy_kwh': (energy | round(3)) if num else none,
@@ -391,60 +423,54 @@ template:
                   'rt_entry': now_ts if (rt == 'ALLOWED' and not cont) else prev_entry,
                   'rt_wait_until_ts': wait_until,
                   'lease_age_min': age_min_i if lease_on else none,
-                  'mem_since_ts': (mem_since | round(0, 'floor')),
-                  'evaluated_ts': now_ts | round(0)
+                  'mem_since_ts': (mem_since | round(0, 'floor'))
                 } -%}
             {{ model }}
 
-      # The eight lookups. Each reads the model, withholds everything when the model has not been evaluated in the last 180 s (or cannot be read), and repeats the same four-line check.
+      # The eight lookups. Each reads the model, withholds everything when it cannot be read (it is not a dict), and repeats the same two-line check.
       - name: ECCO Export Proposal
         unique_id: ecco_export_proposal
         icon: mdi:transmission-tower-export
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-          {{ m.get('state') if (ok and m.get('state') in ['VALID', 'INVALID', 'UNVERIFIED', 'HOLD']) else 'INVALID' }}
+          {%- set ok = m is mapping -%}
+          {{ m.get('state') if (ok and m.get('state') in ['VALID', 'INVALID', 'UNVERIFIED', 'HOLD', 'NOT ALLOWED']) else 'INVALID' }}
         attributes:
           reasons: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-            {{ m.get('reasons') if (ok and m.get('reasons') is iterable) else ['MODEL_NOT_UPDATING: sensor.ecco_export_coordinator_model has not been evaluated in the last 180 s or cannot be read, so no proposal is made'] }}
+            {%- set ok = m is mapping -%}
+            {{ m.get('reasons') if (ok and m.get('reasons') is iterable) else ['MODEL_UNREADABLE: sensor.ecco_export_coordinator_model cannot be read, so no proposal is made'] }}
           blocked_by: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-            {{ m.get('blocked_by') if (ok and m.get('blocked_by') is iterable) else ['MODEL_NOT_UPDATING'] }}
+            {%- set ok = m is mapping -%}
+            {{ m.get('blocked_by') if (ok and m.get('blocked_by') is iterable) else ['MODEL_UNREADABLE'] }}
+          actionable: >-
+            {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
+            {%- set ok = m is mapping -%}
+            {{ ok and m.get('actionable') is sameas true }}
           notes: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('notes') if (ok and m.get('notes') is iterable) else [] }}
           raw_battery_power_w: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('raw_battery_power_w') if ok else none }}
           loop_battery_power_w: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('loop_power_w') if ok else none }}
           loop_duration_min: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('loop_duration_min') if ok else none }}
           limited_by: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('limited_by') if ok else '' }}
           window_end_ts: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('window_end_ts') if ok else none }}
 
       - name: ECCO Export Proposal Floor
@@ -453,9 +479,8 @@ template:
         unit_of_measurement: "%"
         availability: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-          {{ ok and m.get('state') in ['VALID', 'UNVERIFIED'] and m.get('floor_pct') is number }}
+          {%- set ok = m is mapping -%}
+          {{ ok and m.get('verdict') in ['VALID', 'UNVERIFIED'] and m.get('floor_pct') is number }}
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
           {{ m.get('floor_pct') if m is mapping else 'unknown' }}
@@ -467,9 +492,8 @@ template:
         device_class: energy_storage
         availability: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-          {{ ok and m.get('state') in ['VALID', 'UNVERIFIED'] and m.get('energy_kwh') is number }}
+          {%- set ok = m is mapping -%}
+          {{ ok and m.get('verdict') in ['VALID', 'UNVERIFIED'] and m.get('energy_kwh') is number }}
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
           {{ m.get('energy_kwh') if m is mapping else 'unknown' }}
@@ -481,9 +505,8 @@ template:
         device_class: power
         availability: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-          {{ ok and m.get('state') in ['VALID', 'UNVERIFIED'] and m.get('battery_power_w') is number }}
+          {%- set ok = m is mapping -%}
+          {{ ok and m.get('verdict') in ['VALID', 'UNVERIFIED'] and m.get('battery_power_w') is number }}
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
           {{ m.get('battery_power_w') if m is mapping else 'unknown' }}
@@ -495,9 +518,8 @@ template:
         device_class: power
         availability: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-          {{ ok and m.get('state') in ['VALID', 'UNVERIFIED'] and m.get('net_export_w') is number }}
+          {%- set ok = m is mapping -%}
+          {{ ok and m.get('verdict') in ['VALID', 'UNVERIFIED'] and m.get('net_export_w') is number }}
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
           {{ m.get('net_export_w') if m is mapping else 'unknown' }}
@@ -509,9 +531,8 @@ template:
         device_class: duration
         availability: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-          {{ ok and m.get('state') in ['VALID', 'UNVERIFIED'] and m.get('duration_min') is number }}
+          {%- set ok = m is mapping -%}
+          {{ ok and m.get('verdict') in ['VALID', 'UNVERIFIED'] and m.get('duration_min') is number }}
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
           {{ m.get('duration_min') if m is mapping else 'unknown' }}
@@ -523,39 +544,32 @@ template:
         icon: mdi:swap-horizontal-bold
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+          {%- set ok = m is mapping -%}
           {{ m.get('rt_state') if (ok and m.get('rt_state') in ['NOT RUNNING', 'UNKNOWN', 'NO CHANGE', 'WAIT', 'ALLOWED', 'END NOW']) else 'UNKNOWN' }}
         attributes:
           reasons: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
-            {{ m.get('rt_reasons') if (ok and m.get('rt_reasons') is iterable) else ['MODEL_NOT_UPDATING: sensor.ecco_export_coordinator_model has not been evaluated in the last 180 s or cannot be read'] }}
+            {%- set ok = m is mapping -%}
+            {{ m.get('rt_reasons') if (ok and m.get('rt_reasons') is iterable) else ['MODEL_UNREADABLE: sensor.ecco_export_coordinator_model cannot be read'] }}
           changes: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('rt_changes') if (ok and m.get('rt_changes') is iterable) else [] }}
           wait_until_ts: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('rt_wait_until_ts') if ok else none }}
           last_would_change_ts: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('rt_entry') if ok else none }}
           lease_age_min: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('lease_age_min') if ok else none }}
           lease_origin: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('lease_origin') if ok else '' }}
           rule: "A re-target could only ever be the END of the lease plus a guarded re-START, at most one per 30 minutes, bounded by the schedule's own window; Home Assistant never writes into a running lease. END NOW reports the lease guard rule (a hold, or the effective reserve above the Stop SOC the lease latched) outside the 30 minute rules. This sensor only reports."
 
@@ -565,72 +579,58 @@ template:
         icon: mdi:compare-horizontal
         state: >-
           {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-          {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-          {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+          {%- set ok = m is mapping -%}
           {{ m.get('cmp_state') if (ok and m.get('cmp_state') in ['NOT RUNNING', 'UNKNOWN', 'IN LINE', 'DIFFERS']) else 'UNKNOWN' }}
         attributes:
           stop_soc_proposed: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('stop_soc_proposed') if ok else none }}
           stop_soc_lease: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('stop_soc_lease') if ok else none }}
           stop_soc_difference: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('stop_soc_difference') if ok else none }}
           export_w_proposed: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('export_w_proposed') if ok else none }}
           export_w_lease: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('export_w_lease') if ok else none }}
           export_w_difference: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('export_w_difference') if ok else none }}
           battery_w_proposed: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('battery_w_proposed') if ok else none }}
           battery_w_loop: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('battery_w_loop') if ok else none }}
           battery_w_commanded: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('battery_w_commanded') if ok else none }}
           battery_w_difference: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('battery_w_difference') if ok else none }}
           battery_w_loop_difference: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('battery_w_loop_difference') if ok else none }}
           end_lease_ts: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('end_lease_ts') if ok else none }}
           end_difference_min: >-
             {%- set m = state_attr('sensor.ecco_export_coordinator_model', 'model') -%}
-            {%- set age = (as_timestamp(now()) - m.get('evaluated_ts')) if (m is mapping and m.get('evaluated_ts') is number) else none -%}
-            {%- set ok = age is not none and age >= -5 and age <= 180 -%}
+            {%- set ok = m is mapping -%}
             {{ m.get('end_difference_min') if ok else none }}
