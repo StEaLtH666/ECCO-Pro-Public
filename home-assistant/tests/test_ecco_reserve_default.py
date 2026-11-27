@@ -416,7 +416,7 @@ for fname, doc in packages.items():
             elif could_be_reserve(t):
                 dynamic.append(f"{fname}:{label}:{t.strip()[:50]}")
 check("no input_number write uses a templated entity id that could resolve to the reserve (so the scan below is sound)", not dynamic, str(dynamic))
-check("exactly one writer of the reserve exists: the first-run automation", found == [("ecco_pro.yaml", AUTOMATION_ID)], str(found))
+check("exactly two writers of the reserve exist: the first-run automation and the guarded reserve set script", sorted(found) == sorted([("ecco_pro.yaml", AUTOMATION_ID), ("ecco_reserve_control.yaml", "ecco_reserve_set")]), str(found))
 
 WRITE_NEAR = re.compile(r"callService|perform-action|call-service|action:\s*input_number\.|service:\s*input_number\.")
 SCAN_DIRS = [ROOT / "home-assistant" / "dashboards", ROOT / "home-assistant" / "prototypes"] + sorted((ROOT / "frontend").glob("*/src"))
