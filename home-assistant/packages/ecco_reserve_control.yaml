@@ -1,0 +1,236 @@
+# ECCO Pro - reserve control: ONE guarded script that sets the owner's battery reserve (it writes only the reserve helper)
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Reserve control").
+#
+# WHY. The owner's reserve (input_number.ecco_minimum_reserve_soc, 0 to 80 percent, whole) can today be changed only in Home Assistant's helper
+# settings, so ECCO's own panel cannot edit it. This package is the one writer a panel control will call: a guarded script that validates the
+# request, asks for a confirmation when the request LOWERS the reserve, writes the helper, reads it back and leaves a result text a card can show.
+# The panel's editing control is NOT part of this package (it is a later card change); until it exists the script can be run from Developer tools.
+#
+# WHAT IT PROVIDES
+#   script.ecco_reserve_set            fields: value (a whole percent from 0 to 80) and confirm (a boolean)
+#   input_text.ecco_reserve_set_result the last result, in words: OK ..., REFUSED <CODE> ..., FAILED <CODE> ... or WRITING <stamp> <value> ...; NO initial value (a new
+#                                      helper reads empty). WRITING is written BEFORE the one write and replaced by OK or FAILED after it: a text that still reads WRITING
+#                                      means the run did not finish (see THE WRITE below), never that the reserve was changed
+#
+# WHAT IT WRITES, AND WHAT IT NEVER WRITES. The ONLY service calls in this file are: input_number.set_value on input_number.ecco_minimum_reserve_soc (the
+# one write that changes anything), input_text.set_value on the result text, and persistent_notification.create / dismiss. It never writes an
+# inverter, dongle, TOU, number, select, switch or button entity, never starts or ends a lease, never touches a plan override or the plan helpers,
+# and never writes a register: the inverter's own floor registers are NOT changed by this script (the reserve floor read-back package only reads them).
+# Changing the owner's reserve changes what ECCO's own plan uses (the effective reserve below) and the lower bound of the TOU editor; nothing else.
+#
+# KNOWN CONFLICT, STATED HERE AND NOT HIDDEN. This script is a SECOND writer of the owner's reserve helper (the first is the first-run seed automation of ecco_pro.yaml). The existing
+# suite home-assistant/tests/test_ecco_reserve_default.py pins "exactly one writer of the reserve exists" (its section [4], the owner's earlier decision that no card, script or other
+# automation writes the helper) and it FAILS on this package by design (the owner's decision of 27 Nov, the reserve editable from the panel, is what makes the second writer necessary). Widening a pinned rule is an OWNER DECISION: it is NOT part of this package's commits. On the branch that carries
+# this package it is ONE LAST SEPARATE COMMIT, marked "OWNER DECISION REQUIRED", whose only change is the pinned line widened to exactly the two named writers (the first-run seed of
+# ecco_pro.yaml and this script, file and key); without that commit the suite fails on this package, and that commit must not be merged without the owner's approval. Nothing else
+# in that suite conflicts.
+#
+# THE RULES (every refusal writes nothing but the result text; each has a stable code)
+#   NOT_A_NUMBER        the value is missing, empty, a boolean, text that is not a number, nan, or anything that is not a single number
+#   OUT_OF_RANGE        below 0 or above 80, or outside the reserve helper's OWN minimum and maximum (its state attributes min and max: a helper whose range was narrowed
+#                       refuses what the helper itself would refuse, before the write), infinity included
+#   NOT_WHOLE           not a whole percent (5.5)
+#   HELPER_UNREADABLE   input_number.ecco_minimum_reserve_soc is missing, unavailable, unknown or not a number from 0 to 100, or its min or max attribute cannot be read: the script
+#                       cannot tell a raise from a lowering (or cannot know the range it must keep to)
+#   RESERVE_UNREADABLE  sensor.ecco_plan_effective_reserve cannot be read (the plan package is not installed, or no reserve is known) and the request would LOWER the owner's
+#                       reserve: it never lowers on an unreadable reserve, whatever confirm says. A raise and a value equal to the owner's reserve do not need the plan's reserve and go on.
+#   CONFIRM_NEEDED      the value is below the reserve the plan uses now (the effective reserve) OR below the owner's own current reserve, and confirm is not the boolean true.
+#                       Two different cases ask, and the text says which: (a) a real lowering of the owner's reserve (value below the owner's own: "your reserve 5 -> 3 is a
+#                       lowering ... call again with confirm true to lower it"); (b) a RAISE of the owner's reserve that stays below the effective reserve, which can only happen
+#                       while a Prepare for power cut reserve is running ("your reserve 5 -> 20 is below the effective reserve 80: nothing was written; call again with confirm true to
+#                       set your own reserve to 20 (the plan keeps 80 until the power-cut reserve ends)"). Note: a raise to or above the effective reserve never asks. Call again with confirm true.
+# A value equal to the owner's current reserve is NO CHANGE: nothing is written (and nothing is asked). It is compared as a NUMBER: 5, 5.0, " 5 ", "+5" and "5e0" are all the same
+# value as a reserve of 5.
+# A second request while one runs is dropped (mode single: Home Assistant logs a warning and the result text is the first request's).
+# The effective reserve is the larger of the owner's reserve and a running Prepare for power cut reserve (ecco_plan_helpers.yaml). While a power cut reserve is
+# running, changing the OWNER's reserve to a value below it needs confirm (a raise that stays below it asks too) and does NOT lower the effective reserve, and the
+# result text says so: the plan keeps using the larger value until the power cut reserve ends. The script never pretends otherwise: an OK text for a raise never calls it a lowering.
+#
+# THE WRITE. Before the one write the result text is set to "WRITING <stamp> - writing <value> percent ..." so that any end of the run before the final text leaves a stamped text
+# that is NOT an OK (an earlier OK can never stay up as if it were this request's result). After the write the helper is read back (for up to 5 s) and the result is OK only when it
+# reads exactly the requested value; otherwise the result is FAILED WRITE_NOT_CONFIRMED with a notification, nothing is retried and nothing is written to compensate. A write that
+# RAISES a Home Assistant error is continued on (continue_on_error) and judged by the same read-back. A write that raises a VALIDATION error (vol.Invalid, which Home Assistant's
+# input_number raises for a value outside its own minimum and maximum) is NOT continued on: the run ends there with the text still reading WRITING. The pre-check against the
+# helper's own min and max above exists so that this cannot happen for a value the helper would refuse.
+# A refusal other than CONFIRM_NEEDED and every failure also raises ONE persistent notification (fixed id ecco_reserve_set_refused), which a success dismisses.
+# CONFIRM_NEEDED is the normal question of a lowering, so it raises no notification.
+#
+# HARD RULES (each is a static check in home-assistant/tests/test_ecco_reserve_control.py).
+#   - The write vocabulary above is the whole of it (the result text is written twice per accepted request: WRITING, then the result). No template entity, no automation, no trigger in this file.
+#   - It reads no forecast, no Solcast and no Intelligence entity, and no dongle or inverter entity: only the owner's reserve helper and the plan's effective
+#     reserve sensor.
+#   - Every template is total: any value, of any type, ends in a result text and never in a template error. The result text is always shorter than the helper's 255 characters.
+#
+# LIMITS, stated plainly.
+#   - It does not coordinate with a TOU editor Apply in flight: the editor re-reads the reserve for its own bound each time, so a change in the middle of an Apply can make
+#     that Apply stop and lock (the safe outcome). It does not coordinate with a running lease either (a lease latches its Stop SOC at its start).
+#   - The helper is a plain helper: anyone with Home Assistant access can write it directly. This script is the panel's guarded path, not a lock.
+#   - A script reload while the script is running stops it if its definition changed (measured on a real core): do not reload scripts while a request runs.
+#   - Recalled from Home Assistant core, NOT verified on a real instance: that input_number.set_value raises vol.Invalid for a value outside the helper's range, that
+#     continue_on_error continues only on a HomeAssistantError and not on that (so the run would end with WRITING as the last text: the helper's min and max are checked first), and that a
+#     script field passed as a JSON boolean arrives as a boolean.
+#
+# RECORDER FOOTPRINT (ESTIMATE, not measured). Five rows at most per request (the helper, the result text twice: WRITING and then the result, the script's own on and off); a refusal writes
+# two; no request, no rows. The live
+# count needs the row-counting tools extended with these entity ids.
+#
+# INSTALL. One file copy to /config/packages/ecco_reserve_control.yaml, a configuration check, then reload two domains in Developer tools, YAML: Input texts and
+# Scripts (never "reload all"; never while the script runs). No restart. It needs ecco_pro.yaml (the reserve helper) and ecco_plan_helpers.yaml (the effective
+# reserve sensor) installed. Remove: delete the file and reload the same two. Nothing here is meant to be exposed to a voice assistant.
+
+input_text:
+  ecco_reserve_set_result:
+    name: ECCO reserve set, last result
+    max: 255
+
+script:
+  ecco_reserve_set:
+    alias: "ECCO - Set your battery reserve (guarded; writes only the reserve helper)"
+    description: >-
+      Sets the owner's battery reserve (input_number.ecco_minimum_reserve_soc) to a whole percent from 0 to 80, after checking it. A value below the reserve the plan
+      uses now, or below your own current reserve, is refused unless confirm is true (a raise of your own reserve that stays below the plan's reserve while a Prepare for power cut
+      reserve runs asks too; a raise to or above the plan's reserve does not). It reads the helper back and writes the result in input_text.ecco_reserve_set_result. It never writes
+      an inverter, dongle, TOU, number, switch or button entity.
+    mode: single
+    fields:
+      value:
+        description: "Your reserve in whole percent, 0 to 80"
+        example: 10
+      confirm:
+        description: "true to confirm a value below your current reserve, or below the reserve the plan uses now (a lowering, or a raise that stays below the plan reserve while a power cut reserve runs)"
+        example: false
+    sequence:
+      - variables:
+          owner_now: >-
+            {%- set v = states('input_number.ecco_minimum_reserve_soc') | float(none) -%}
+            {{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}
+          eff_now: >-
+            {%- set v = states('sensor.ecco_plan_effective_reserve') | float(none) -%}
+            {{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}
+          hmin: >-
+            {%- set v = state_attr('input_number.ecco_minimum_reserve_soc', 'min') | float(none) -%}
+            {{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}
+          hmax: >-
+            {%- set v = state_attr('input_number.ecco_minimum_reserve_soc', 'max') | float(none) -%}
+            {{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}
+          stamp: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - variables:
+          lo: "{{ ([0, hmin] | max) if (hmin >= 0 and hmax >= 0) else 0 }}"
+          hi: "{{ ([80, hmax] | min) if (hmin >= 0 and hmax >= 0) else 80 }}"
+      - variables:
+          code: >-
+            {%- set x = value | default('') -%}
+            {%- set cf = confirm | default(false) -%}
+            {%- set f = (x | float(none)) if (x is not boolean and x is not none) else none -%}
+            {%- if f is none or f != f -%}NOT_A_NUMBER
+            {%- elif f < lo or f > hi -%}OUT_OF_RANGE
+            {%- elif f != (f | round(0)) -%}NOT_WHOLE
+            {%- elif owner_now < 0 or hmin < 0 or hmax < 0 -%}HELPER_UNREADABLE
+            {%- elif f == owner_now -%}
+            {%- elif eff_now < 0 and f < owner_now -%}RESERVE_UNREADABLE
+            {%- elif eff_now >= 0 and (f < owner_now or f < eff_now) and not (cf is boolean and cf) -%}CONFIRM_NEEDED
+            {%- endif -%}
+          want: >-
+            {%- set x = value | default('') -%}
+            {%- set f = (x | float(none)) if (x is not boolean and x is not none) else none -%}
+            {{ (f | round(0) | int) if (f is not none and f == f and f >= 0 and f <= 80) else -1 }}
+      - choose:
+          # A refusal: nothing is written but the result text (and, except for the question of a lowering, one notification).
+          - conditions:
+              - condition: template
+                value_template: "{{ code | string | trim != '' }}"
+            sequence:
+              - variables:
+                  result: >-
+                    {%- set c = code | string | trim -%}
+                    {%- if c == 'NOT_A_NUMBER' -%}REFUSED NOT_A_NUMBER {{ stamp }} - the value must be one number; nothing was written
+                    {%- elif c == 'OUT_OF_RANGE' -%}REFUSED OUT_OF_RANGE {{ stamp }} - the value must be from {{ lo | int }} to {{ hi | int }} percent; nothing was written
+                    {%- elif c == 'NOT_WHOLE' -%}REFUSED NOT_WHOLE {{ stamp }} - the value must be a whole percent; nothing was written
+                    {%- elif c == 'HELPER_UNREADABLE' -%}REFUSED HELPER_UNREADABLE {{ stamp }} - your reserve helper (or its range) cannot be read, so a change cannot be judged; nothing was written
+                    {%- elif c == 'RESERVE_UNREADABLE' -%}REFUSED RESERVE_UNREADABLE {{ stamp }} - the plan reserve cannot be read, so a lowering cannot be judged; nothing was written
+                    {%- elif want < owner_now -%}REFUSED CONFIRM_NEEDED {{ stamp }} - your reserve {{ owner_now | int }} -> {{ want }} is a lowering{{ ('; the plan keeps ' ~ (eff_now | int) ~ ' until the power-cut reserve ends') if eff_now > owner_now else '' }}; nothing was written; call again with confirm true to lower it
+                    {%- else -%}REFUSED CONFIRM_NEEDED {{ stamp }} - your reserve {{ owner_now | int }} -> {{ want }} is below the effective reserve {{ eff_now | int }}: nothing was written; call again with confirm true to set your own reserve to {{ want }} (the plan keeps {{ eff_now | int }} until the power-cut reserve ends)
+                    {%- endif -%}
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_reserve_set_result
+                data:
+                  value: "{{ result[:250] }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ code | string | trim != 'CONFIRM_NEEDED' }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ecco_reserve_set_refused
+                      title: "ECCO: your reserve was not changed"
+                      message: "{{ result[:250] }}"
+              - stop: "refused"
+          # The value already is the owner's reserve: nothing to write.
+          - conditions:
+              - condition: template
+                value_template: "{{ want == owner_now }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_reserve_set_result
+                data:
+                  value: "OK {{ stamp }} - NO CHANGE: your reserve already is {{ want }} percent; nothing was written"
+              - stop: "no change"
+      # Before the one write: a stamped text that is not an OK, so that any end of the run before the final text cannot leave an earlier OK standing as this request's result.
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.ecco_reserve_set_result
+        data:
+          value: "WRITING {{ stamp }} - writing {{ want }} percent; if this text stays, the run did not finish and your reserve may or may not have changed (it was {{ owner_now | int }})"
+      # The one write. A Home Assistant error from the call does not end the run: the read-back below decides what happened. A validation error (a value outside the helper's own
+      # range) would end it; the range is checked above, before this call.
+      - action: input_number.set_value
+        continue_on_error: true
+        target:
+          entity_id: input_number.ecco_minimum_reserve_soc
+        data:
+          value: "{{ want }}"
+      - wait_template: "{{ states('input_number.ecco_minimum_reserve_soc') | float(-1) == want }}"
+        timeout: "00:00:05"
+        continue_on_timeout: true
+      - variables:
+          after: >-
+            {%- set v = states('input_number.ecco_minimum_reserve_soc') | float(none) -%}
+            {{ v if (v is number and v == v) else -1 }}
+          eff_after: >-
+            {%- set v = states('sensor.ecco_plan_effective_reserve') | float(none) -%}
+            {{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}
+      - variables:
+          okmsg: >-
+            OK {{ stamp }} - your reserve is now {{ want }} percent (it was {{ owner_now | int }}).
+            {{ 'The plan reserve cannot be read now.' if eff_after < 0 else ('The plan keeps using ' ~ (eff_after | int) ~ ' percent until the Prepare for power cut reserve ends: your reserve ' ~ (owner_now | int) ~ ' -> ' ~ want ~ ' does not change that.' if eff_after > want else 'The plan reserve is now ' ~ (eff_after | int) ~ ' percent.') }}
+            Nothing was written to the inverter or the dongle.
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ after == want }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.ecco_reserve_set_result
+                data:
+                  value: "{{ okmsg[:250] }}"
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: ecco_reserve_set_refused
+        default:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.ecco_reserve_set_result
+            data:
+              value: >-
+                FAILED WRITE_NOT_CONFIRMED {{ stamp }} - the helper reads {{ (after | int) if after >= 0 else 'nothing' }} after the write of {{ want }} percent; nothing was retried and nothing else was written
+          - action: persistent_notification.create
+            data:
+              notification_id: ecco_reserve_set_refused
+              title: "ECCO: your reserve may not have been changed"
+              message: >-
+                The reserve helper does not read {{ want }} percent after the write (it reads {{ (after | int) if after >= 0 else 'nothing' }}). Nothing was retried and
+                nothing else was written. Check the helper in Home Assistant's settings.
