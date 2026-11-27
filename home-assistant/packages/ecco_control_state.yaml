@@ -1,0 +1,891 @@
+# ECCO Pro - CONTROL STATE: ONE READ MODEL for Charge Battery (Free Power) and Export to Grid (Dump to Grid), DISPLAY ONLY
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Control state").
+#
+# WHY. Two functions, one spine. Charge Battery (the dongle's Free Power lease) and Export to Grid (its Dump to Grid lease) share one start gate, one time trust, one effective reserve, one lease discipline and
+# one END; only their policies differ. Today a person (or the Energy Actions card) has to piece together what each function is doing, why it cannot start and what to do next from a dozen entities. This package reads
+# those entities and says it once, in the same words for both functions: a lifecycle state, why, the next action, what blocks a start and what the lease holds. It is the read model of the shared control
+# architecture (slice S-A1 of the integration design); the card panel and the Geek Mode catalogue are built on it later.
+#
+# DISPLAY, NEVER A GATE. THE READ MODEL WRITES NOTHING: the file defines three template sensors and nothing else - no automation, no script, no helper, no trigger, no action, no service call, no persistent
+# notification, no write of any kind to the dongle, the inverter or any entity - and NO PACKAGE MAY READ IT (the suite pins that no other package mentions these three entities), so it cannot become a second decision
+# path. A start is allowed or refused by the start gate (ecco_start_gate.yaml) and by the dongle's own firmware, never by this file. THE GATES ARE SOFT: the dongle's own Start buttons can still be pressed from
+# Home Assistant or by an assistant, past every check here, until a firmware gate binds them (a flash, approved separately; item N6). A state of IDLE with start_allowed true is not permission, it is what the
+# gate says.
+#
+# WHAT IT PROVIDES (three template sensors):
+#   sensor.ecco_charge_control_state   IDLE | PLANNED | ARMED | ASSISTED | RUNNING | ENDING | FAULT | UNKNOWN for Charge Battery; attributes why, next_action, blocked_by, start_allowed, start_path, end_path, lease, notes
+#   sensor.ecco_export_control_state   the same for Export to Grid, plus proposal, retarget and facts (the export coordinator's proposal and re-target, the hold, the reserve, the limits)
+#   sensor.ecco_control_owner          NONE | CHARGE | EXPORT | MANUAL_WRITE | RESTORE_OWED | UNKNOWN: who holds the inverter settings; attributes live_match (the saved profile against the live inverter) and note
+#
+# THE STATES (first match wins, in this order: UNKNOWN, FAULT, ENDING, RUNNING, ARMED, ASSISTED, PLANNED, IDLE; the dongle's lease flags decide, its status text refines):
+#   UNKNOWN   an input the state needs cannot be read (missing, unavailable, unknown, not on or off, or a status text this model does not know): never shown as ready, the first one is named in why
+#   FAULT     needs the owner: a saved snapshot waits for a restore and nothing runs (restore owed), the status text says a restore or recovery is blocked, failed or waiting for a decision, both leases read active
+#             at once (the one-lease rule), or the lease reads active but the status does not confirm that it is running normally
+#   ENDING    the lease is being ended and the saved inverter settings restored (an operation in progress, or a status text of the End and restore family)
+#   RUNNING   the lease is active and the dongle's status says ACTIVE - VERIFIED OK (Charge Battery: the rate was fixed at the START; Export to Grid: the dongle loop holds the net export target above the latched Stop SOC)
+#   ARMED     a start is under way: the write enable is on, or a start script (the scheduled one or the guarded one) is running, or the dongle reports a start in progress
+#   ASSISTED  Export to Grid only today: the start gate is open, nothing is under way and the export coordinator's proposal is VALID and actionable: one guarded press would start it. Charge Battery has no proposal yet
+#             and never reads ASSISTED
+#   PLANNED   its schedule is armed for a later start and the start gate is open or not (see start_allowed)
+#   IDLE      no lease, nothing owed, nothing under way
+# start_allowed is true ONLY when the function's start gate reads on with an empty blocked_by list AND the time trust reading for leases reads on AND the state is IDLE, PLANNED or ASSISTED. It is never true while
+# the gate is off, while time is not trusted, while any input is unreadable or while the state is anything else, and why says so in plain words ("Not ready: ..."). Every sentence is fixed and from a closed list: a
+# measured number never appears in a sentence.
+#
+# WHAT IT COMBINES (read only; each is an entity that already exists and is already live or in a reviewed package):
+#   both gates          binary_sensor.ecco_charge_start_allowed and binary_sensor.ecco_export_start_allowed (state and the blocked_by list of codes; the gates' number-bearing reasons are NOT copied)
+#   time trust          binary_sensor.ecco_time_trusted_for_leases (the leases consumer ONLY: the pin of the time trust suite names exactly that one for this package)
+#   the dongle          the lease, operation-in-progress and saved-snapshot flags of both functions, the manual write flag, both status texts, both end-time texts, both write enables, the Charge request numbers,
+#                       the Export request numbers, the Stop SOC the running Dump lease latched, and the saved profile's Live Match text (only its m= field; entity absent = NOT_READ)
+#   the plan            sensor.ecco_plan_export_hold (and its held_by list), sensor.ecco_plan_effective_reserve, input_number.ecco_grid_import_ceiling_w (a readable 0 = none configured, a note)
+#   the schedules       both schedule status sensors, both armed helpers and both scheduled and both guarded start scripts (their state: on while running)
+#   the Dump limits     sensor.ecco_dump_limits_state and sensor.ecco_dump_ceiling_assessment (words, no numbers)
+#   the coordinator     sensor.ecco_export_proposal, its floor and net export, and sensor.ecco_export_retarget (all OPTIONAL: while they do not exist, or are unavailable or unknown, the proposal reads
+#                       NOT_INSTALLED and a note says so; never an error). Their live figures (energy, duration, power) are NOT copied: they move with the measurements, and the coordinator publishes them itself
+# Not read, on purpose: any forecast or advice entity (the Intelligence outputs stay shadow), the detector helpers, the card, anything measured live (battery power, SOC, house load, PV, the grid reading).
+#
+# THE INPUTS THAT MAKE IT UNKNOWN. The gate (state on or off and a blocked_by list), the leases consumer, the three flags of each function, the manual write flag, the function's status text (a text this model
+# does not know counts as unreadable), its write enable, its two start scripts and its schedule armed helper. Every other input only fills in an attribute (NOT_READ when it cannot be read) and never makes the
+# state UNKNOWN. blocked_by lists UNREADABLE_<INPUT> for each unreadable input first, then the gate's own codes, then TIME_LEASES when the consumer reads off and the gate does not say so, and GATE_INCONSISTENT when the
+# gate's state and its list disagree (on with a cause, off with none): such a gate is never "open".
+#
+# THE STATUS TEXTS. The dongle's own texts are classified by prefix into families: ACTIVE (ACTIVE - VERIFIED OK), FAULT (a recovery or restore blocked, failed, refused or waiting for a decision, and a lease that
+# a reboot left with its recovery pending), ENDING (RESTORING, END REQUESTED, END DEFERRED, a verified restore whose durable record is still pending ...), STARTING (STARTING, the snapshot committed) and DONE (nothing
+# under way: Inactive, restored OK, a refused or failed start). The suite reads every literal the firmware can publish as these two statuses and requires each to land in exactly one family; a text that matches none
+# is UNKNOWN, never ready. A stale text never decides alone: with every flag off a DONE or STARTING text is just IDLE; only a FAULT text is held against the owner until the dongle publishes another.
+#
+# THE ONE-LEASE RULE. Both functions never read RUNNING together: if both lease flags read on, both read FAULT (the firmware refuses a second function, so this is a contradiction, not a state), the owner reads
+# UNKNOWN, and nothing is startable.
+#
+# NO LIVE NUMBERS, NO MOVING TIME. Attributes carry only words, codes and settings that change when a person changes them (the staged request numbers, the Stop SOC a lease latched, the effective reserve, a lease's
+# end-time text): no measurement and no number a gate prints in its reasons, no sentence with a number in it, no time that moves with the clock. The templates never call now(), so nothing is rendered at the
+# start of a minute and a sensor publishes a new state or attribute only when its inputs really change it: the same inputs rendered twice give the same state and attributes and write no recorder row (the suite proves
+# it, also while the gates' reasons and the dongle's status text move with every poll). The Dump status text carries live figures while a lease runs; only its family is used.
+#
+# RESTART, RELOAD AND FIRST STATE (lab facts, 27 Nov, a real Home Assistant core 2026.11.0; recalled here, the suite models them): a template reload re-creates every template entity and, for 13 to 27 s (bound about
+# 70 s), the time trust consumers and both gates read OFF: the read model then shows not ready with the gate's own codes, never a start. At a RESTART the template entities exist with their RESTORED state for tens of
+# milliseconds (consumers and gates ON) before their first render: for that moment this file shows what the gate shows, and nothing may act on it, which is why nothing reads this file; anything that ever acts on a
+# gate or a consumer must itself wait 60 s after a start (lab D2). The dongle's texts are parsed in the Core process time zone; this file parses none (it shows an end-time text as it is, after a check that it is a time in the
+# firmware's form), so a wrong container zone cannot change it. `this` is not used (after a reload it has no attributes).
+#
+# THE NOTES (closed codes; each says something true of the wiring at the base of this file, and the slice that changes the wiring removes its note in the same commit): SOFT_GATE (the dongle's own Start button is not
+# bound by the gate), CARD_START_NOT_GATED (the card's Start Now presses the dongle's Start directly), GUARDED_START_NOT_GATED (the guarded Dump start does not read the gate), SCHEDULE_NOT_GATED (a schedule presses the
+# Start without reading the gate), RATE_FIXED_AT_START and NO_TARGET_REACHED_END (Charge Battery: nothing adapts the rate inside a lease and nothing ends it at a target), NO_END_GUARD (no guard ends an Export lease),
+# IMPORT_NOT_CONFIGURED and IMPORT_CEILING_NOT_READ (the grid import ceiling is 0 = none, or cannot be read), PROPOSAL_NOT_INSTALLED, SCHEDULE_LAST_RUN_FAILED.
+#
+# LIMITS, stated plainly (nothing here is a lock).
+#   - It shows what the entities say; it cannot know more. A dongle that is alive but wrong, a gate that is wrong, a status text that is stale are shown as they are. It is display, never proof.
+#   - The lifecycle comes from flags and status families, not from the inverter registers; a drift of the inverter settings is the saved profile's Live Match (the owner sensor shows it), not a state here.
+#   - The owner sensor shows who holds the inverter settings NOW, from the flags; a persisted owner (a record that survives a reboot) comes with the firmware work F1, not here.
+#   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the model of them is in the suite): that a template entity that renders to the same state and attributes writes no new state change
+#     (no recorder row), that the state of a template entity is restored at a restart for a moment, that a list attribute arrives as a list and a dict as a dict, that strptime(text, format, default) is Python's, that
+#     states('x') of an entity that does not exist reads unknown and state_attr of it reads none, and that a Jinja startswith with a tuple works in the template sandbox. Nothing here has run on a real Home Assistant,
+#     dongle or inverter.
+#
+# INSTALL (needs the owner's go; not part of this step). One file copy to /config/packages/ecco_control_state.yaml, a configuration check, then reload the template entities (Developer tools, YAML, Template entities, or
+# the template.reload service): no restart, no helper to create, no other file. Install ONLY with NO Dump to Grid or Free Power lease running and OUTSIDE any armed scheduled Export or charge run, from its start until
+# its window end plus 10 minutes: template.reload re-creates EVERY template entity of Home Assistant, the plan's hold and effective reserve sensors included, which the Export schedule's press-time recheck reads and fails
+# closed on. It needs ecco_time_trust.yaml, ecco_start_gate.yaml, ecco_plan_helpers.yaml and both schedule packages for its inputs (without them it reads UNKNOWN and says which input is missing); the export
+# coordinator is optional. It changes no existing entity. Remove: delete the file and reload the template entities (the same cautions).
+
+template:
+  - sensor:
+      - name: ECCO Charge Control State
+        unique_id: ecco_charge_control_state
+        icon: mdi:battery-charging-high
+        state: >-
+          {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+          {%- set g = states('binary_sensor.ecco_charge_start_allowed') -%}
+          {%- set gb = state_attr('binary_sensor.ecco_charge_start_allowed', 'blocked_by') -%}
+          {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+          {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+          {%- set la = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+          {%- set lo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+          {%- set ls = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+          {%- set ya = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+          {%- set yo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+          {%- set ys = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+          {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+          {%- set t = states('sensor.ecco_clock_dongle_free_power_status') -%}
+          {%- set ar = states('switch.ecco_clock_dongle_free_power_write_enable') -%}
+          {%- set sc = states('script.ecco_free_power_start_scheduled') -%}
+          {%- set gd = states('script.ecco_free_power_start_guarded') -%}
+          {%- set sa = states('input_boolean.ecco_free_power_schedule_armed') -%}
+          {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+          else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+          else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+          else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+          else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+          {%- set ns = namespace(u=[], c=[]) -%}
+          {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+          {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+          {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+          {%- endfor -%}
+          {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+          {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+          {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+          {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+          {%- set unk = (ns.u | length) > 0 -%}
+          {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+          {%- set conflict = la == 'on' and ya == 'on' -%}
+          {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+          {%- set assisted = false -%}
+          {%- set st = 'UNKNOWN' if unk
+          else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+          else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+          else ('ENDING' if lo == 'on'
+          else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+          else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+          else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+          {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+          {#- RULES END -#}
+          {{ st }}
+        attributes:
+          why: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_charge_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_charge_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_free_power_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_free_power_write_enable') -%}
+            {%- set sc = states('script.ecco_free_power_start_scheduled') -%}
+            {%- set gd = states('script.ecco_free_power_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_free_power_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set assisted = false -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {%- set UL = {
+            'GATE': 'The start gate',
+            'TIME': 'The time trust reading for leases',
+            'ACTIVE': 'The lease flag of Free Power',
+            'OPERATION': 'The operation-in-progress flag of Free Power',
+            'SNAPSHOT': 'The saved-snapshot flag of Free Power',
+            'OTHER_ACTIVE': 'The lease flag of Dump to Grid',
+            'OTHER_OPERATION': 'The operation-in-progress flag of Dump to Grid',
+            'OTHER_SNAPSHOT': 'The saved-snapshot flag of Dump to Grid',
+            'MANUAL_WRITE': 'The manual-write flag',
+            'WRITE_ENABLE': 'The write enable switch of Free Power',
+            'START_SCRIPT': 'The scheduled start script of Free Power',
+            'GUARDED_SCRIPT': 'The guarded start script of Free Power',
+            'SCHEDULE_ARMED': 'The schedule armed helper of Free Power',
+            'STATUS': 'The status text of Free Power (missing, or not one this model knows)'
+            } -%}
+            {%- set GS = {
+            'TIME_LEASES': 'Time is not trusted for leases: the Home Assistant clock and the dongle clock are not shown to agree.',
+            'TIME_SCHEDULES': 'Time is not trusted for Home Assistant schedules: the Home Assistant clock is not shown to be right.',
+            'TELEMETRY_OFFLINE': 'The inverter telemetry is not arriving.',
+            'CONFIGURATION_OFFLINE': 'The inverter configuration readback is not arriving.',
+            'TELEMETRY_STALE': 'The inverter data are not fresh.',
+            'FREE_POWER_ACTIVE': 'A Charge Battery (Free Power) lease is running.',
+            'FREE_POWER_OPERATION': 'A Charge Battery (Free Power) start or restore is in progress.',
+            'FREE_POWER_SNAPSHOT': 'A saved Charge Battery (Free Power) snapshot is waiting to be restored.',
+            'DUMP_ACTIVE': 'An Export to Grid (Dump to Grid) lease is running.',
+            'DUMP_OPERATION': 'An Export to Grid (Dump to Grid) start or restore is in progress.',
+            'DUMP_SNAPSHOT': 'A saved Export to Grid (Dump to Grid) snapshot is waiting to be restored.',
+            'MANUAL_WRITE': 'A manual inverter write is in progress.',
+            'OVERRIDE_ACTIVE': 'A Hold battery, Skip tonight or Prepare for power cut is active.',
+            'OVERRIDE_UNREADABLE': 'The override records cannot be read.',
+            'RESERVE_UNKNOWN': 'The effective reserve cannot be read.',
+            'RESERVE_INVALID': 'The effective reserve is not a valid percentage.',
+            'STOP_SOC_UNREADABLE': 'The staged Stop SOC cannot be read.',
+            'STOP_SOC_BELOW_RESERVE': 'The staged Stop SOC is below the effective reserve.',
+            'REVISION_UNREADABLE': 'The plan revision cannot be read.',
+            'IMPORT_CEILING_UNREADABLE': 'The grid import ceiling cannot be read.',
+            'IMPORT_CEILING_INVALID': 'The grid import ceiling is not a usable value.',
+            'IMPORT_UNREADABLE': 'The grid import reading cannot be read.',
+            'REQUEST_UNREADABLE': 'The staged charge request cannot be read.',
+            'IMPORT_HEADROOM': 'The staged charge request does not fit under the grid import ceiling.',
+            'GATE_INCONSISTENT': 'The start gate state and its blocked_by list disagree.'
+            } -%}
+            {%- set RS = {
+            'IDLE': 'Nothing is running and the start gate is open.',
+            'PLANNED': 'A scheduled start is armed and the start gate is open.',
+            'ASSISTED': 'ECCO has a valid proposal and the start gate is open.',
+            'RUNNING': 'Charge Battery is running: the dongle holds the charge rate fixed since the start until the lease ends.',
+            'ENDING': 'The dongle is ending the lease and restoring the saved inverter settings.',
+            'ARMED': 'A start is under way: the write enable is on or a start script is running.',
+            'FAULT_CONFLICT': 'Both leases read active at once, which the one-lease rule forbids.',
+            'FAULT_TEXT': 'The dongle status says a restore or recovery is blocked, failed or waiting for a decision.',
+            'FAULT_OWED': 'A saved snapshot of the inverter settings is waiting for a restore and nothing is running.',
+            'FAULT_UNCONFIRMED': 'The lease reads active but the dongle status does not confirm that it is running normally.'
+            } -%}
+            {%- set code0 = (ns.c[0] if (ns.c | length) > 0 else '') -%}
+            {%- set nr = GS['TIME_LEASES'] if tl == 'off' else (GS['GATE_INCONSISTENT'] if incons else (GS[code0] if code0 in GS else 'the start gate is closed (' ~ code0 ~ ').')) -%}
+            {%- if unk -%}{{ UL[ns.u[0][11:]] ~ ' cannot be read, so nothing is shown as ready.' }}
+            {%- elif conflict -%}{{ RS['FAULT_CONFLICT'] }}
+            {%- elif fam == 'FAULT' -%}{{ RS['FAULT_TEXT'] }}
+            {%- elif owed -%}{{ RS['FAULT_OWED'] }}
+            {%- elif st == 'FAULT' -%}{{ RS['FAULT_UNCONFIRMED'] }}
+            {%- elif st in ['ENDING', 'RUNNING', 'ARMED'] -%}{{ RS[st] }}
+            {%- elif ok -%}{{ RS[st] }}
+            {%- else -%}{{ 'Not ready: ' ~ nr }}
+            {%- endif -%}
+          next_action: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_charge_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_charge_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_free_power_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_free_power_write_enable') -%}
+            {%- set sc = states('script.ecco_free_power_start_scheduled') -%}
+            {%- set gd = states('script.ecco_free_power_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_free_power_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set assisted = false -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {%- if st == 'UNKNOWN' -%}Wait for the unreadable inputs to return; nothing can be shown as ready until then.
+            {%- elif st == 'FAULT' -%}Needs you: read the dongle status text and recover with its End and recovery controls; do not start anything.
+            {%- elif st == 'ENDING' -%}Wait for the restore to finish; do not start anything.
+            {%- elif st == 'RUNNING' -%}Let it run, or press End and Restore to stop it.
+            {%- elif st == 'ARMED' -%}Wait for the start to finish, or switch the write enable off.
+            {%- elif not ok -%}Clear the cause named in why; the start gate must read on first.
+            {%- elif st == 'ASSISTED' -%}Start it with the guarded Start when you want it: one press.
+            {%- elif st == 'PLANNED' -%}Nothing to do: the scheduled start runs at its time; cancel the schedule to stop it.
+            {%- else -%}Start it when you want, or arm a schedule.
+            {%- endif -%}
+          blocked_by: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_charge_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_charge_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_free_power_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_free_power_write_enable') -%}
+            {%- set sc = states('script.ecco_free_power_start_scheduled') -%}
+            {%- set gd = states('script.ecco_free_power_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_free_power_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set assisted = false -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {{ ns.u + ns.c }}
+          start_allowed: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_charge_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_charge_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_free_power_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_free_power_write_enable') -%}
+            {%- set sc = states('script.ecco_free_power_start_scheduled') -%}
+            {%- set gd = states('script.ecco_free_power_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_free_power_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set assisted = false -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {{ ok }}
+          start_path: GUARDED_SCRIPT
+          end_path: END_BUTTON
+          lease: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set ea = states('sensor.ecco_clock_dongle_free_power_ends_at') -%}
+            {%- set edt = strptime(ea, '%Y-%m-%d %H:%M:%S', none) if ea not in bad else none -%}
+            {%- set ends = ea if edt is not none else ('NONE' if ea == 'Inactive' else ('UNAVAILABLE' if ea.startswith('Active - end time') else 'NOT_READ')) -%}
+            {%- set p = states('number.ecco_clock_dongle_free_power_max_charge_power') | float(none) -%}
+            {%- set d = states('number.ecco_clock_dongle_free_power_duration') | float(none) -%}
+            {%- set pw = (p | round(0) | int) if (p is number and p == p and p >= 0 and p <= 1000000) else 'NOT_READ' -%}
+            {%- set dm = (d | round(0) | int) if (d is number and d == d and d >= 0 and d <= 1000000) else 'NOT_READ' -%}
+            {{ {'ends_at': ends, 'power_w': pw, 'duration_min': dm} }}
+          notes: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set ss = states('sensor.ecco_free_power_schedule_status') -%}
+            {%- set cr = states('input_number.ecco_grid_import_ceiling_w') -%}
+            {%- set cf = cr | float(none) -%}
+            {{ ['SOFT_GATE', 'CARD_START_NOT_GATED', 'SCHEDULE_NOT_GATED', 'RATE_FIXED_AT_START', 'NO_TARGET_REACHED_END'] + (['IMPORT_NOT_CONFIGURED'] if (cr not in bad and cf is number and cf == 0) else []) + (['IMPORT_CEILING_NOT_READ'] if cr in bad else []) + (['SCHEDULE_LAST_RUN_FAILED'] if ss == 'FAILED' else []) }}
+
+      - name: ECCO Export Control State
+        unique_id: ecco_export_control_state
+        icon: mdi:transmission-tower-export
+        state: >-
+          {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+          {%- set g = states('binary_sensor.ecco_export_start_allowed') -%}
+          {%- set gb = state_attr('binary_sensor.ecco_export_start_allowed', 'blocked_by') -%}
+          {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+          {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+          {%- set la = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+          {%- set lo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+          {%- set ls = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+          {%- set ya = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+          {%- set yo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+          {%- set ys = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+          {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+          {%- set t = states('sensor.ecco_clock_dongle_dump_to_grid_status') -%}
+          {%- set ar = states('switch.ecco_clock_dongle_dump_to_grid_write_enable') -%}
+          {%- set sc = states('script.ecco_dump_to_grid_start_scheduled') -%}
+          {%- set gd = states('script.ecco_dump_to_grid_start_guarded') -%}
+          {%- set sa = states('input_boolean.ecco_dump_to_grid_schedule_armed') -%}
+          {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+          else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+          else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+          else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+          else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+          {%- set ns = namespace(u=[], c=[]) -%}
+          {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+          {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+          {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+          {%- endfor -%}
+          {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+          {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+          {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+          {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+          {%- set unk = (ns.u | length) > 0 -%}
+          {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+          {%- set conflict = la == 'on' and ya == 'on' -%}
+          {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+          {%- set ps = states('sensor.ecco_export_proposal') -%}
+          {%- set pa = state_attr('sensor.ecco_export_proposal', 'actionable') -%}
+          {%- set assisted = open and ps == 'VALID' and pa is sameas true -%}
+          {%- set st = 'UNKNOWN' if unk
+          else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+          else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+          else ('ENDING' if lo == 'on'
+          else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+          else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+          else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+          {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+          {#- RULES END -#}
+          {{ st }}
+        attributes:
+          why: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_export_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_export_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_dump_to_grid_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_dump_to_grid_write_enable') -%}
+            {%- set sc = states('script.ecco_dump_to_grid_start_scheduled') -%}
+            {%- set gd = states('script.ecco_dump_to_grid_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_dump_to_grid_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set ps = states('sensor.ecco_export_proposal') -%}
+            {%- set pa = state_attr('sensor.ecco_export_proposal', 'actionable') -%}
+            {%- set assisted = open and ps == 'VALID' and pa is sameas true -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {%- set UL = {
+            'GATE': 'The start gate',
+            'TIME': 'The time trust reading for leases',
+            'ACTIVE': 'The lease flag of Dump to Grid',
+            'OPERATION': 'The operation-in-progress flag of Dump to Grid',
+            'SNAPSHOT': 'The saved-snapshot flag of Dump to Grid',
+            'OTHER_ACTIVE': 'The lease flag of Free Power',
+            'OTHER_OPERATION': 'The operation-in-progress flag of Free Power',
+            'OTHER_SNAPSHOT': 'The saved-snapshot flag of Free Power',
+            'MANUAL_WRITE': 'The manual-write flag',
+            'WRITE_ENABLE': 'The write enable switch of Dump to Grid',
+            'START_SCRIPT': 'The scheduled start script of Dump to Grid',
+            'GUARDED_SCRIPT': 'The guarded start script of Dump to Grid',
+            'SCHEDULE_ARMED': 'The schedule armed helper of Dump to Grid',
+            'STATUS': 'The status text of Dump to Grid (missing, or not one this model knows)'
+            } -%}
+            {%- set GS = {
+            'TIME_LEASES': 'Time is not trusted for leases: the Home Assistant clock and the dongle clock are not shown to agree.',
+            'TIME_SCHEDULES': 'Time is not trusted for Home Assistant schedules: the Home Assistant clock is not shown to be right.',
+            'TELEMETRY_OFFLINE': 'The inverter telemetry is not arriving.',
+            'CONFIGURATION_OFFLINE': 'The inverter configuration readback is not arriving.',
+            'TELEMETRY_STALE': 'The inverter data are not fresh.',
+            'FREE_POWER_ACTIVE': 'A Charge Battery (Free Power) lease is running.',
+            'FREE_POWER_OPERATION': 'A Charge Battery (Free Power) start or restore is in progress.',
+            'FREE_POWER_SNAPSHOT': 'A saved Charge Battery (Free Power) snapshot is waiting to be restored.',
+            'DUMP_ACTIVE': 'An Export to Grid (Dump to Grid) lease is running.',
+            'DUMP_OPERATION': 'An Export to Grid (Dump to Grid) start or restore is in progress.',
+            'DUMP_SNAPSHOT': 'A saved Export to Grid (Dump to Grid) snapshot is waiting to be restored.',
+            'MANUAL_WRITE': 'A manual inverter write is in progress.',
+            'OVERRIDE_ACTIVE': 'A Hold battery, Skip tonight or Prepare for power cut is active.',
+            'OVERRIDE_UNREADABLE': 'The override records cannot be read.',
+            'RESERVE_UNKNOWN': 'The effective reserve cannot be read.',
+            'RESERVE_INVALID': 'The effective reserve is not a valid percentage.',
+            'STOP_SOC_UNREADABLE': 'The staged Stop SOC cannot be read.',
+            'STOP_SOC_BELOW_RESERVE': 'The staged Stop SOC is below the effective reserve.',
+            'REVISION_UNREADABLE': 'The plan revision cannot be read.',
+            'IMPORT_CEILING_UNREADABLE': 'The grid import ceiling cannot be read.',
+            'IMPORT_CEILING_INVALID': 'The grid import ceiling is not a usable value.',
+            'IMPORT_UNREADABLE': 'The grid import reading cannot be read.',
+            'REQUEST_UNREADABLE': 'The staged charge request cannot be read.',
+            'IMPORT_HEADROOM': 'The staged charge request does not fit under the grid import ceiling.',
+            'GATE_INCONSISTENT': 'The start gate state and its blocked_by list disagree.'
+            } -%}
+            {%- set RS = {
+            'IDLE': 'Nothing is running and the start gate is open.',
+            'PLANNED': 'A scheduled start is armed and the start gate is open.',
+            'ASSISTED': 'ECCO has a valid proposal and the start gate is open.',
+            'RUNNING': 'Export to Grid is running: the dongle loop holds the net export target above the latched Stop SOC until the lease ends.',
+            'ENDING': 'The dongle is ending the lease and restoring the saved inverter settings.',
+            'ARMED': 'A start is under way: the write enable is on or a start script is running.',
+            'FAULT_CONFLICT': 'Both leases read active at once, which the one-lease rule forbids.',
+            'FAULT_TEXT': 'The dongle status says a restore or recovery is blocked, failed or waiting for a decision.',
+            'FAULT_OWED': 'A saved snapshot of the inverter settings is waiting for a restore and nothing is running.',
+            'FAULT_UNCONFIRMED': 'The lease reads active but the dongle status does not confirm that it is running normally.'
+            } -%}
+            {%- set code0 = (ns.c[0] if (ns.c | length) > 0 else '') -%}
+            {%- set nr = GS['TIME_LEASES'] if tl == 'off' else (GS['GATE_INCONSISTENT'] if incons else (GS[code0] if code0 in GS else 'the start gate is closed (' ~ code0 ~ ').')) -%}
+            {%- if unk -%}{{ UL[ns.u[0][11:]] ~ ' cannot be read, so nothing is shown as ready.' }}
+            {%- elif conflict -%}{{ RS['FAULT_CONFLICT'] }}
+            {%- elif fam == 'FAULT' -%}{{ RS['FAULT_TEXT'] }}
+            {%- elif owed -%}{{ RS['FAULT_OWED'] }}
+            {%- elif st == 'FAULT' -%}{{ RS['FAULT_UNCONFIRMED'] }}
+            {%- elif st in ['ENDING', 'RUNNING', 'ARMED'] -%}{{ RS[st] }}
+            {%- elif ok -%}{{ RS[st] }}
+            {%- else -%}{{ 'Not ready: ' ~ nr }}
+            {%- endif -%}
+          next_action: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_export_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_export_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_dump_to_grid_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_dump_to_grid_write_enable') -%}
+            {%- set sc = states('script.ecco_dump_to_grid_start_scheduled') -%}
+            {%- set gd = states('script.ecco_dump_to_grid_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_dump_to_grid_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set ps = states('sensor.ecco_export_proposal') -%}
+            {%- set pa = state_attr('sensor.ecco_export_proposal', 'actionable') -%}
+            {%- set assisted = open and ps == 'VALID' and pa is sameas true -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {%- if st == 'UNKNOWN' -%}Wait for the unreadable inputs to return; nothing can be shown as ready until then.
+            {%- elif st == 'FAULT' -%}Needs you: read the dongle status text and recover with its End and recovery controls; do not start anything.
+            {%- elif st == 'ENDING' -%}Wait for the restore to finish; do not start anything.
+            {%- elif st == 'RUNNING' -%}Let it run, or press End and Restore to stop it.
+            {%- elif st == 'ARMED' -%}Wait for the start to finish, or switch the write enable off.
+            {%- elif not ok -%}Clear the cause named in why; the start gate must read on first.
+            {%- elif st == 'ASSISTED' -%}Start it with the guarded Start when you want it: one press.
+            {%- elif st == 'PLANNED' -%}Nothing to do: the scheduled start runs at its time; cancel the schedule to stop it.
+            {%- else -%}Start it when you want, or arm a schedule.
+            {%- endif -%}
+          blocked_by: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_export_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_export_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_dump_to_grid_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_dump_to_grid_write_enable') -%}
+            {%- set sc = states('script.ecco_dump_to_grid_start_scheduled') -%}
+            {%- set gd = states('script.ecco_dump_to_grid_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_dump_to_grid_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set ps = states('sensor.ecco_export_proposal') -%}
+            {%- set pa = state_attr('sensor.ecco_export_proposal', 'actionable') -%}
+            {%- set assisted = open and ps == 'VALID' and pa is sameas true -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {{ ns.u + ns.c }}
+          start_allowed: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_export_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_export_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_dump_to_grid_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_dump_to_grid_write_enable') -%}
+            {%- set sc = states('script.ecco_dump_to_grid_start_scheduled') -%}
+            {%- set gd = states('script.ecco_dump_to_grid_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_dump_to_grid_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set ps = states('sensor.ecco_export_proposal') -%}
+            {%- set pa = state_attr('sensor.ecco_export_proposal', 'actionable') -%}
+            {%- set assisted = open and ps == 'VALID' and pa is sameas true -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {{ ok }}
+          start_path: GUARDED_SCRIPT
+          end_path: END_BUTTON
+          lease: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set ea = states('sensor.ecco_clock_dongle_dump_to_grid_ends_at') -%}
+            {%- set edt = strptime(ea, '%Y-%m-%d %H:%M:%S', none) if ea not in bad else none -%}
+            {%- set ends = ea if edt is not none else ('NONE' if ea == 'Inactive' else ('UNAVAILABLE' if ea.startswith('Active - end time') else 'NOT_READ')) -%}
+            {%- set p = states('number.ecco_clock_dongle_dump_to_grid_export_power') | float(none) -%}
+            {%- set d = states('number.ecco_clock_dongle_dump_to_grid_duration') | float(none) -%}
+            {%- set sx = states('number.ecco_clock_dongle_dump_to_grid_stop_soc') | float(none) -%}
+            {%- set pw = (p | round(0) | int) if (p is number and p == p and p >= 0 and p <= 1000000) else 'NOT_READ' -%}
+            {%- set dm = (d | round(0) | int) if (d is number and d == d and d >= 0 and d <= 1000000) else 'NOT_READ' -%}
+            {%- set sp = (sx | round(0) | int) if (sx is number and sx == sx and sx >= 0 and sx <= 100) else 'NOT_READ' -%}
+            {{ {'ends_at': ends, 'export_w': pw, 'duration_min': dm, 'stop_soc': sp} }}
+          notes: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set ss = states('sensor.ecco_dump_to_grid_schedule_status') -%}
+            {%- set pe = states('sensor.ecco_export_proposal') -%}
+            {{ ['SOFT_GATE', 'GUARDED_START_NOT_GATED', 'SCHEDULE_NOT_GATED', 'NO_END_GUARD'] + (['PROPOSAL_NOT_INSTALLED'] if pe in bad else []) + (['SCHEDULE_LAST_RUN_FAILED'] if ss == 'FAILED' else []) }}
+          proposal: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set g = states('binary_sensor.ecco_export_start_allowed') -%}
+            {%- set gb = state_attr('binary_sensor.ecco_export_start_allowed', 'blocked_by') -%}
+            {%- set gl = (gb | list) if (gb is iterable and gb is not string and gb is not mapping) else none -%}
+            {%- set tl = states('binary_sensor.ecco_time_trusted_for_leases') -%}
+            {%- set la = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set lo = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ls = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set ya = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set yo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set ys = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set t = states('sensor.ecco_clock_dongle_dump_to_grid_status') -%}
+            {%- set ar = states('switch.ecco_clock_dongle_dump_to_grid_write_enable') -%}
+            {%- set sc = states('script.ecco_dump_to_grid_start_scheduled') -%}
+            {%- set gd = states('script.ecco_dump_to_grid_start_guarded') -%}
+            {%- set sa = states('input_boolean.ecco_dump_to_grid_schedule_armed') -%}
+            {%- set fam = 'ACTIVE' if t.startswith('ACTIVE - VERIFIED OK')
+            else ('FAULT' if t.startswith(('OPERATOR DECISION REQUIRED', 'RECOVERY BLOCKED', 'RECOVERY REQUIRED', 'RESTORE BLOCKED', 'RESTORE WRITE FAILED', 'RESTORE VERIFY ', 'ACTIVATION VERIFY TIMEOUT', 'ACTIVATION VERIFY REFUSED', 'ACTIVATION VERIFY ERROR', 'END BLOCKED', 'FORCE RESTORE REFUSED', 'FORCE RESTORE FAILED', 'FORCE RESTORE ORIGINAL FAILED', 'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))
+            else ('ENDING' if (t.startswith(('RESTORING', 'END REQUESTED', 'END DEFERRED', 'FORCE RESTORE - ', 'RESTORE VERIFIED', 'RESTORE DEFERRED', 'Retrying durable', 'RECOVERY RESOLVED - ', 'RECOVERY OBLIGATION RESOLVED', 'ACTIVATION WRITE FAILED', 'ACTIVATION VERIFY FAILED', 'FORCE RESTORE ORIGINAL SUCCESS - hardware', 'ACCEPT CURRENT STATE SUCCESS - accepted')) or (t.startswith('RESTORED OK - ') and t != 'RESTORED OK - original inverter settings verified'))
+            else ('STARTING' if t.startswith(('STARTING', 'Snapshot durably committed', 'SNAPSHOT DURABLY COMMITTED'))
+            else ('DONE' if (t.startswith(('Inactive', 'RECOVERY RESOLVED OK', 'FORCE RESTORE ORIGINAL SUCCESS - original', 'ACCEPT CURRENT STATE SUCCESS - current', 'END IGNORED', 'REJECTED', 'START FAILED')) or t == 'RESTORED OK - original inverter settings verified') else 'OTHER')))) -%}
+            {%- set ns = namespace(u=[], c=[]) -%}
+            {%- if g not in ['on', 'off'] or gl is none -%}{%- set ns.u = ns.u + ['UNREADABLE_GATE'] -%}{%- endif -%}
+            {%- for code, v in [('TIME', tl), ('ACTIVE', la), ('OPERATION', lo), ('SNAPSHOT', ls), ('OTHER_ACTIVE', ya), ('OTHER_OPERATION', yo), ('OTHER_SNAPSHOT', ys), ('MANUAL_WRITE', mw), ('WRITE_ENABLE', ar), ('START_SCRIPT', sc), ('GUARDED_SCRIPT', gd), ('SCHEDULE_ARMED', sa)] if v not in ['on', 'off'] -%}
+            {%- set ns.u = ns.u + ['UNREADABLE_' ~ code] -%}
+            {%- endfor -%}
+            {%- if t in bad or fam == 'OTHER' -%}{%- set ns.u = ns.u + ['UNREADABLE_STATUS'] -%}{%- endif -%}
+            {%- for c in (gl if gl is not none else []) if c is string -%}{%- set ns.c = ns.c + [c[:40]] -%}{%- endfor -%}
+            {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on') != ((gl | length) == 0)) -%}
+            {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
+            {%- set unk = (ns.u | length) > 0 -%}
+            {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
+            {%- set conflict = la == 'on' and ya == 'on' -%}
+            {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
+            {%- set ps = states('sensor.ecco_export_proposal') -%}
+            {%- set pa = state_attr('sensor.ecco_export_proposal', 'actionable') -%}
+            {%- set assisted = open and ps == 'VALID' and pa is sameas true -%}
+            {%- set st = 'UNKNOWN' if unk
+            else ('FAULT' if (conflict or fam == 'FAULT' or owed)
+            else ('ARMED' if (lo == 'on' and fam == 'STARTING')
+            else ('ENDING' if lo == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
+            else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
+            {%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
+            {#- RULES END -#}
+            {%- set pb = state_attr('sensor.ecco_export_proposal', 'blocked_by') -%}
+            {%- set pf = states('sensor.ecco_export_proposal_floor') | float(none) -%}
+            {%- set pn = states('sensor.ecco_export_proposal_net_export') | float(none) -%}
+            {%- set pstate = 'NOT_INSTALLED' if ps in bad else (ps if ps in ['VALID', 'INVALID', 'UNVERIFIED', 'HOLD', 'NOT ALLOWED'] else 'UNKNOWN') -%}
+            {%- set pcodes = namespace(l=[]) -%}
+            {%- for c in ((pb | list) if (pb is iterable and pb is not string and pb is not mapping) else []) if c is string -%}{%- set pcodes.l = pcodes.l + [c[:40]] -%}{%- endfor -%}
+            {{ {'state': pstate, 'actionable': st == 'ASSISTED', 'blocked_by': pcodes.l, 'floor_pct': ((pf | round(0) | int) if (pf is number and pf == pf and pf >= 0 and pf <= 100) else none), 'net_export_w': ((pn | round(0) | int) if (pn is number and pn == pn and pn >= 0 and pn <= 30000) else none)} }}
+          retarget: >-
+            {%- set bad = ['unknown', 'unavailable', 'none', ''] -%}
+            {%- set rs = states('sensor.ecco_export_retarget') -%}
+            {%- set rr = state_attr('sensor.ecco_export_retarget', 'reasons') -%}
+            {%- set rc = state_attr('sensor.ecco_export_retarget', 'changes') -%}
+            {%- set rstate = 'NOT_INSTALLED' if rs in bad else (rs if rs in ['NOT RUNNING', 'UNKNOWN', 'NO CHANGE', 'WAIT', 'ALLOWED', 'END NOW'] else 'UNKNOWN') -%}
+            {%- set rn = namespace(codes=[], kinds=[]) -%}
+            {%- for r in ((rr | list) if (rr is iterable and rr is not string and rr is not mapping) else []) if r is string -%}
+            {%- set k = r.split(':')[0] -%}
+            {%- if k.isupper() and k.replace('_', '').isalpha() and (k | length) <= 40 -%}{%- set rn.codes = rn.codes + [k] -%}{%- endif -%}
+            {%- endfor -%}
+            {%- for r in ((rc | list) if (rc is iterable and rc is not string and rc is not mapping) else []) if r is string -%}
+            {%- set k = r.split(' ')[0] -%}
+            {%- if k in ['STOP_SOC', 'EXPORT_TARGET', 'END'] -%}{%- set rn.kinds = rn.kinds + [k] -%}{%- endif -%}
+            {%- endfor -%}
+            {{ {'state': rstate, 'changes': rn.kinds, 'codes': rn.codes, 'message': ('ECCO would end this export; no END guard is installed: press END.' if rstate == 'END NOW' else '')} }}
+          facts: >-
+            {%- set la = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set hs = states('sensor.ecco_plan_export_hold') -%}
+            {%- set hb = state_attr('sensor.ecco_plan_export_hold', 'held_by') -%}
+            {%- set rv = states('sensor.ecco_plan_effective_reserve') | float(none) -%}
+            {%- set lv = states('sensor.ecco_clock_dongle_dump_to_grid_active_stop_soc') | float(none) -%}
+            {%- set lim = states('sensor.ecco_dump_limits_state') -%}
+            {%- set cas = states('sensor.ecco_dump_ceiling_assessment') -%}
+            {%- set rvn = (rv | round(0) | int) if (rv is number and rv == rv and rv >= 0 and rv <= 100) else none -%}
+            {%- set lvn = (lv | round(0) | int) if (lv is number and lv == lv and lv >= 0 and lv <= 100) else none -%}
+            {%- set held = ((hb.split(',') | select('in', ['hold_battery', 'skip_tonight', 'prepare_power_cut']) | list) if (hb is string) else []) -%}
+            {{ {'hold': (hs if hs in ['clear', 'held'] else 'NOT_READ'), 'held_by': held, 'reserve_pct': (rvn if rvn is not none else 'NOT_READ'), 'stop_soc_latched': ('NONE' if la == 'off' else (lvn if lvn is not none else 'NOT_READ')), 'floor': ('NO_LEASE' if la == 'off' else ('NOT_READ' if (lvn is none or rvn is none) else ('OK' if lvn >= rvn else 'BELOW_RESERVE'))), 'limits': (lim if lim in ['VALID', 'NOT CONFIGURED', 'INVALID', 'AWAITING CONFIRMATION', 'UNKNOWN', 'UNAVAILABLE'] else 'NOT_READ'), 'ceiling': (cas if cas in ['ABOVE PROVEN LEVEL', 'AT PROVEN LEVEL', 'BELOW PROVEN LEVEL', 'UNAVAILABLE'] else 'NOT_READ')} }}
+
+      - name: ECCO Control Owner
+        unique_id: ecco_control_owner
+        icon: mdi:shield-account-outline
+        state: >-
+          {%- set fa = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+          {%- set fo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+          {%- set fs = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+          {%- set da = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+          {%- set dq = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+          {%- set ds = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+          {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+          {%- set unk = (fa not in ['on', 'off']) or (fo not in ['on', 'off']) or (fs not in ['on', 'off']) or (da not in ['on', 'off']) or (dq not in ['on', 'off']) or (ds not in ['on', 'off']) or (mw not in ['on', 'off']) -%}
+          {%- set own = 'UNKNOWN' if unk else ('UNKNOWN' if ((fa == 'on' or fo == 'on') and (da == 'on' or dq == 'on')) else ('RESTORE_OWED' if ((fs == 'on' and fa == 'off' and fo == 'off') or (ds == 'on' and da == 'off' and dq == 'off')) else ('CHARGE' if (fa == 'on' or fo == 'on') else ('EXPORT' if (da == 'on' or dq == 'on') else ('MANUAL_WRITE' if mw == 'on' else 'NONE'))))) -%}
+          {#- RULES END -#}
+          {{ own }}
+        attributes:
+          live_match: >-
+            {%- set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') -%}
+            {%- set mm = (lm.split('m=')[1].split(';')[0]) if ('m=' in lm) else 'UNKNOWN' -%}
+            {{ 'NOT_READ' if lm in ['unknown', 'unavailable', 'none', ''] else (mm if mm in ['MATCH', 'DRIFT', 'NO_PROFILE', 'PAUSED', 'PAUSED_IO', 'OUT_OF_DOMAIN', 'EXPORT', 'CONTEXT'] else 'UNKNOWN') }}
+          note: >-
+            {%- set fa = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
+            {%- set fo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
+            {%- set fs = states('binary_sensor.ecco_clock_dongle_free_power_snapshot_valid') -%}
+            {%- set da = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
+            {%- set dq = states('binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress') -%}
+            {%- set ds = states('binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid') -%}
+            {%- set mw = states('binary_sensor.ecco_clock_dongle_manual_write_in_progress') -%}
+            {%- set unk = (fa not in ['on', 'off']) or (fo not in ['on', 'off']) or (fs not in ['on', 'off']) or (da not in ['on', 'off']) or (dq not in ['on', 'off']) or (ds not in ['on', 'off']) or (mw not in ['on', 'off']) -%}
+            {%- set own = 'UNKNOWN' if unk else ('UNKNOWN' if ((fa == 'on' or fo == 'on') and (da == 'on' or dq == 'on')) else ('RESTORE_OWED' if ((fs == 'on' and fa == 'off' and fo == 'off') or (ds == 'on' and da == 'off' and dq == 'off')) else ('CHARGE' if (fa == 'on' or fo == 'on') else ('EXPORT' if (da == 'on' or dq == 'on') else ('MANUAL_WRITE' if mw == 'on' else 'NONE'))))) -%}
+            {#- RULES END -#}
+            {%- set NOTES = {
+            'NONE': 'No lease and no manual write holds the inverter settings. Only the firmware refusal keeps two functions apart; a persisted owner needs a later firmware step.',
+            'CHARGE': 'Charge Battery (Free Power) holds the inverter settings; the firmware refuses Export to Grid while it does.',
+            'EXPORT': 'Export to Grid (Dump to Grid) holds the inverter settings; the firmware refuses Charge Battery while it does.',
+            'MANUAL_WRITE': 'A manual inverter write holds the inverter write mutex; the firmware refuses a lease start while it does.',
+            'RESTORE_OWED': 'A saved snapshot of the inverter settings is waiting for a restore: the owner has to see it through before anything starts.',
+            'UNKNOWN': 'A flag cannot be read, or both functions claim the inverter settings at once: nobody is shown as the owner.'
+            } -%}
+            {{ NOTES[own] }}
