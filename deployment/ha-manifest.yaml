@@ -219,6 +219,19 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: false
 
+  # Control state - csm1 (READ-ONLY DISPLAY; NOT installed, NOT LIVE-PROVEN). Slice S-A1 of the shared control integration. Three template sensors and nothing else: sensor.ecco_charge_control_state and
+  # sensor.ecco_export_control_state (a lifecycle state IDLE / PLANNED / ARMED / ASSISTED / RUNNING / ENDING / FAULT / UNKNOWN, why, the next action, what blocks a start and what the lease holds, all in fixed sentences) and
+  # sensor.ecco_control_owner (who holds the inverter settings), read from the two start gates, the leases consumer of the time trust package, the dongle's lease flags and status texts, the plan's hold and reserve, the
+  # schedules and, when it is installed, the export coordinator (optional: while it is absent the proposal reads NOT_INSTALLED). A display, never a gate: no automation, script, helper, trigger or service call, nothing may read them
+  # (the suites pin it), no measurement and no moving time in an attribute, so it writes no row without a real change. THE GATES ARE SOFT: the dongle's own Start button bypasses them. Install = copy the file, check the
+  # configuration and reload the template entities (Developer tools, YAML): no restart, which is why restart_required is false; it needs the owner's go, and ONLY with NO Dump to Grid or Free Power lease running and outside any
+  # armed scheduled Export or charge run (from its start to its window end plus 10 minutes): the reload re-creates every template entity, the plan's hold and effective reserve sensors included, which the Export schedule's
+  # press-time recheck reads. It needs ecco_time_trust.yaml, ecco_start_gate.yaml, ecco_plan_helpers.yaml and both schedule packages. Delete the file and reload to remove it.
+  - source: home-assistant/packages/ecco_control_state.yaml
+    destination: /config/packages/ecco_control_state.yaml
+    method: ssh_file_copy
+    restart_required: false
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml
