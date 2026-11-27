@@ -16,7 +16,7 @@
 # WHAT IT PROVIDES (three template sensors):
 #   sensor.ecco_charge_control_state   IDLE | PLANNED | ARMED | ASSISTED | RUNNING | ENDING | FAULT | UNKNOWN for Charge Battery; attributes why, next_action, blocked_by, start_allowed, start_path, end_path, lease, notes
 #   sensor.ecco_export_control_state   the same for Export to Grid, plus proposal, retarget and facts (the export coordinator's proposal and re-target, the hold, the reserve, the limits)
-#   sensor.ecco_control_owner          NONE | CHARGE | EXPORT | MANUAL_WRITE | RESTORE_OWED | UNKNOWN: who holds the inverter settings; attributes live_match (the saved profile against the live inverter) and note
+#   sensor.ecco_control_owner          NONE | CHARGE | EXPORT | MANUAL_WRITE | RESTORE_OWED | UNKNOWN: who holds the inverter settings; attributes live_match (always NOT_READ: the saved profile's Live Match is not read here, see LIMITS) and note
 #
 # THE STATES (first match wins, in this order: UNKNOWN, FAULT, ENDING, RUNNING, ARMED, ASSISTED, PLANNED, IDLE; the dongle's lease flags decide, its status text refines):
 #   UNKNOWN   an input the state needs cannot be read (missing, unavailable, unknown, not on or off, or a status text this model does not know): never shown as ready, the first one is named in why
@@ -37,7 +37,7 @@
 #   both gates          binary_sensor.ecco_charge_start_allowed and binary_sensor.ecco_export_start_allowed (state and the blocked_by list of codes; the gates' number-bearing reasons are NOT copied)
 #   time trust          binary_sensor.ecco_time_trusted_for_leases (the leases consumer ONLY: the pin of the time trust suite names exactly that one for this package)
 #   the dongle          the lease, operation-in-progress and saved-snapshot flags of both functions, the manual write flag, both status texts, both end-time texts, both write enables, the Charge request numbers,
-#                       the Export request numbers, the Stop SOC the running Dump lease latched, and the saved profile's Live Match text (only its m= field; entity absent = NOT_READ)
+#                       the Export request numbers and the Stop SOC the running Dump lease latched
 #   the plan            sensor.ecco_plan_export_hold (and its held_by list), sensor.ecco_plan_effective_reserve, input_number.ecco_grid_import_ceiling_w (a readable 0 = none configured, a note)
 #   the schedules       both schedule status sensors, both armed helpers and both scheduled and both guarded start scripts (their state: on while running)
 #   the Dump limits     sensor.ecco_dump_limits_state and sensor.ecco_dump_ceiling_assessment (words, no numbers)
@@ -76,7 +76,9 @@
 #
 # LIMITS, stated plainly (nothing here is a lock).
 #   - It shows what the entities say; it cannot know more. A dongle that is alive but wrong, a gate that is wrong, a status text that is stale are shown as they are. It is display, never proof.
-#   - The lifecycle comes from flags and status families, not from the inverter registers; a drift of the inverter settings is the saved profile's Live Match (the owner sensor shows it), not a state here.
+#   - The lifecycle comes from flags and status families, not from the inverter registers; a drift of the inverter settings is the saved profile's Live Match, which is not a state here and is NOT
+#     READ here either: the pin on who may name that entity (registry/tests/test_fallback_live_match.py) allows only the fallback status package, the dashboard and the HA package suites, and a
+#     third reader would be a pin widening that the design does not name, so `live_match` is always NOT_READ and the dashboard shows the Live Match itself.
 #   - The owner sensor shows who holds the inverter settings NOW, from the flags; a persisted owner (a record that survives a reboot) comes with the firmware work F1, not here.
 #   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the model of them is in the suite): that a template entity that renders to the same state and attributes writes no new state change
 #     (no recorder row), that the state of a template entity is restored at a restart for a moment, that a list attribute arrives as a list and a dict as a dict, that strptime(text, format, default) is Python's, that
@@ -865,10 +867,7 @@ template:
           {#- RULES END -#}
           {{ own }}
         attributes:
-          live_match: >-
-            {%- set lm = states('sensor.ecco_clock_dongle_ecco_fallback_profile_live_match') -%}
-            {%- set mm = (lm.split('m=')[1].split(';')[0]) if ('m=' in lm) else 'UNKNOWN' -%}
-            {{ 'NOT_READ' if lm in ['unknown', 'unavailable', 'none', ''] else (mm if mm in ['MATCH', 'DRIFT', 'NO_PROFILE', 'PAUSED', 'PAUSED_IO', 'OUT_OF_DOMAIN', 'EXPORT', 'CONTEXT'] else 'UNKNOWN') }}
+          live_match: NOT_READ
           note: >-
             {%- set fa = states('binary_sensor.ecco_clock_dongle_free_power_active') -%}
             {%- set fo = states('binary_sensor.ecco_clock_dongle_free_power_operation_in_progress') -%}
