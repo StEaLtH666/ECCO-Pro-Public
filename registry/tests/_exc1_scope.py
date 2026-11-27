@@ -77,12 +77,14 @@ dashboard:
   # Export coordinator - exc1 (READ-ONLY SHADOW; NOT installed, NOT LIVE-PROVEN). Item N3 of the architecture reconciliation. Nine template sensors and nothing else: from MEASURED values (no forecast entity is read)
   # a proposal for an Export to Grid start on the schedule path (the Stop SOC floor, the usable energy above it, the expected battery power, the net export target and the duration, bounded by the schedule's own window (a running lease gets no time past the end of the window it runs in), with a
   # state VALID / INVALID / UNVERIFIED / HOLD and every blocking cause named), a re-target shadow (would a change be allowed now: an END plus a guarded re-START, at most one per 30 minutes, only reported, only for a lease the
-  # schedule started, whose END it can only keep or shorten; END NOW is the lease guard's rule) and a comparison with that lease's latched values. No automation, script, helper, trigger or service call, and nothing reads the sensors yet. THE GATES ARE SOFT: the
-  # dongle's own Start button bypasses them. It does not read the start gate or the time trust input and is not wired to them (both packages pin who may read them: that wiring is a separate step with its own approval).
+  # schedule started, whose END it can only keep or shorten; END NOW is the lease guard's rule) and a comparison with that lease's latched values. No automation, script, helper, trigger or service call; only the control state read model (a display) reads the sensors. THE GATES ARE SOFT: the
+  # dongle's own Start button bypasses them. Slice S-A2: it reads the Export start gate (a VALID proposal the gate does not allow is NOT ALLOWED with the gate's own codes, and `actionable` needs the gate open for 60 s) and the leases consumer of the
+  # time trust package (a re-target is ALLOWED only while it has read on for 60 s, else WAIT with TIME_NOT_TRUSTED), only as far as the two pinned reader lists allow (widened deliberately, design decision D-PIN); the model carries no time of its
+  # evaluation, so with unchanged inputs it writes no row (D-C04a, route a).
   # Install = copy the file, check the configuration and reload the template entities (Developer tools, YAML): no restart, which is why restart_required is false; it needs the owner's go, and ONLY with NO Dump to Grid or
   # Free Power lease running and outside any armed scheduled Export or charge run (from its start to its window end plus 10 minutes): the reload re-creates every template entity, the plan's hold and effective reserve
   # sensors included, which the Export schedule's press-time recheck reads. Exclude the model sensor from the recorder. It needs ecco_plan_helpers.yaml, ecco_dump_limits.yaml, ecco_dump_to_grid_schedule.yaml,
-  # ecco_canonical_telemetry.yaml and ecco_battery_runtime.yaml. Delete the file and reload to remove it.
+  # ecco_canonical_telemetry.yaml, ecco_battery_runtime.yaml, ecco_start_gate.yaml and ecco_time_trust.yaml (the gate and the consumer it reads). Delete the file and reload to remove it.
   - source: home-assistant/packages/ecco_export_coordinator.yaml
     destination: /config/packages/ecco_export_coordinator.yaml
     method: ssh_file_copy

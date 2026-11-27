@@ -1556,20 +1556,22 @@ SGT1 = Entry(
 # exc1 (the EXPORT COORDINATOR v0: a READ-ONLY SHADOW proposal for Export to Grid, item N3 of the architecture reconciliation; offline, nothing installed, the gates are SOFT; _exc1_scope.py): made on the export after
 # sgt1. ADDED: the package, its suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path;
 # ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; no existing package, card or dashboard is edited (the start gate and the time trust package, whose suites pin who may read them,
-# are neither edited nor mentioned). ONE existing suite is edited, home-assistant/tests/test_ecco_start_gate.py, only so that its two pins on sgt1's own state (the last five manifest stanzas, and the entry's
+# are not edited; since slice S-A2 of the shared control integration this package mentions exactly two of their entities, whole, the Export start gate and the leases consumer, under the reader lists of those
+# suites that the control state commits widened deliberately, design decision D-PIN). ONE existing suite is edited, home-assistant/tests/test_ecco_start_gate.py, only so that its two pins on sgt1's own state (the last five manifest stanzas, and the entry's
 # checkpoint and position) are read as of sgt1, with every later entry's manifest edit undone, as the older suites' pins are: every assertion is kept, only "sgt1 is the newest entry" is dropped, which no later
 # entry can satisfy. The package is template entities only (no automation, helper, script, trigger, action or service call): no register operation, no write of any kind.
 EXC1 = Entry(
     id="exc1", pr="EXC1", commit="unmerged",
     reverts=dict(_exc1.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after exc1
-        HA_MANIFEST: "c775aa79b786b9175628b4733362ef0d3401284e54fd431da2031e98886fdd35",
+        HA_MANIFEST: "6e8f993596e2531cd172f4090653660556125e2cee324abcaa3307ac797242da",
     },
     added_files=_exc1.ADDED_FILES,
     # _pex.fingerprint(EXC1): hashes its parent sgt1's fingerprint and every declaration above
-    fingerprint="6bd59c521ccfdb3b1a1f4d5cb18d0ff1a0650d09ae1029b3f96a1c7e4a03d849",
+    fingerprint="63924a95cb0cb80c8a4506f7baa019707b6d034d70cbe87d2e0dbef4e375ef95",
     note="the export coordinator v0 (nine template sensors: a proposal for an Export to Grid start from measured values, a re-target shadow and a comparison with the running lease); a read-only shadow, "
-         "nothing reads it yet, the gates are soft, it reads neither the start gate nor the time trust input (their packages pin who may read them), every missing or implausible input makes it INVALID; "
+         "only the control state read model reads it, the gates are soft, it reads the Export start gate and the leases consumer of the time trust package only as far as the two pinned reader lists (widened deliberately, D-PIN) allow, "
+         "its model carries no time of its evaluation, every missing or implausible input makes it INVALID; "
          "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
 )
 # csm1 (the CONTROL STATE read model: one display for Charge Battery and Export to Grid, slice S-A1 of the shared control integration; offline, nothing installed, the gates are SOFT; _csm1_scope.py): made on the export after
@@ -1583,11 +1585,11 @@ CSM1 = Entry(
     id="csm1", pr="CSM1", commit="unmerged",
     reverts=dict(_csm1.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after csm1
-        HA_MANIFEST: "09da83af1e6c35f0514a4a6df691bbbdb59c8a6c0c41be4fc0833023b53760a7",
+        HA_MANIFEST: "a8200431e7acef3d4fb655d65666d7182e2e788a38d93db959760c82f096dd9a",
     },
     added_files=_csm1.ADDED_FILES,
     # _pex.fingerprint(CSM1): hashes its parent exc1's fingerprint and every declaration above
-    fingerprint="410f516f71128e4a14be7043ea6fcc68df624b5d4ee162f7594d2f81016c3aaf",
+    fingerprint="cccfdf4694e6880000bb69e6e25590ba7301c427473264f9d6360d8c1fb7f38d",
     note="the control state read model (three template sensors: a lifecycle state, why, the next action, what blocks a start and what the lease holds for Charge Battery and for Export to Grid, and who holds the "
          "inverter settings); a display, never a gate, nothing may read it, the gates are soft, every unreadable input makes it UNKNOWN and never ready, no measurement and no moving time in an attribute; "
          "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
