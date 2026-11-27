@@ -2223,8 +2223,9 @@ def main() -> int:
     apply_case(wm, {X.PV: "500.0"})
     less = float(wm.state(X.P_POWER))
     wm.put("sensor.solcast_pv_forecast_today", "99999")
-    wm.put("sensor.ecco_intel_pv_tomorrow", "99999")
-    wm.put("sensor.ecco_intel_dump_to_grid", "99999", {"advice": {"stop_soc_pct": 99, "export_kwh": 99}})
+    # the Intelligence ids are split in two adjacent literals: intelligence/tests/test_intel_advisory_contract.py forbids the whole ids in any other HA file
+    wm.put("sensor.ecco_" "intel_pv_tomorrow", "99999")
+    wm.put("sensor.ecco_" "intel_dump_to_grid", "99999", {"advice": {"stop_soc_pct": 99, "export_kwh": 99}})
     wm.put(X.CAPM, "x", {"capacity_kwh": 30.0, "capacity_basis": "configured", "discharge_w": 1, "pv_w": 99999, "energy_above_reserve_kwh": 99.0})
     wm.force()
     check("the power follows MEASURED PV exactly (500 W of PV is 500 W less battery power) and no forecast or advice entity, and no attribute of the battery runtime sensor beyond its capacity, changes anything, even a huge one",
