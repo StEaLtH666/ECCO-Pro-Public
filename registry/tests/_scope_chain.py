@@ -141,7 +141,10 @@ import _ptt1_scope as _ptt1  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
+import _sgt1_scope as _sgt1  # noqa: E402
+import _exc1_scope as _exc1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
+import _ttr1_scope as _ttr1  # noqa: E402
 import _wsc1_scope as _wsc1  # noqa: E402
 
 FIRMWARE = "firmware/ecco_clock_dongle_stage3_4_free_power.yaml"
@@ -1516,7 +1519,59 @@ EPC4 = Entry(
          "model's constants, which the card never calls, and 975 minifier renames); the model stays read only: ZERO firmware, Home "
          "Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4)
+# ttr1 (time trust: THREE CLOCKS, ONE EXPLICIT TIMING-SAFETY INPUT, read only; offline, nothing installed; _ttr1_scope.py): made on the export after bpd1. ADDED: the package, its suite and the
+# test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path; ZERO firmware, registry data,
+# Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation; the package is template entities only (no automation, helper, script, trigger, action or service call) and writes nothing.
+TTR1 = Entry(
+    id="ttr1", pr="TTR1", commit="unmerged",
+    reverts=dict(_ttr1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after ttr1
+        HA_MANIFEST: "33cb328a26b70490c211b2f386f7ecdafb1fab7d86915e08077b830779cd67b3",
+    },
+    added_files=_ttr1.ADDED_FILES,
+    # _pex.fingerprint(TTR1): hashes its parent bpd1's fingerprint and every declaration above
+    fingerprint="a4c1df0a5e4e56c66b53a444df86aa596b5740bdcfad74d0928bf916d029a2e1",
+    note="the time trust inputs (read only): a trust state for each of three clocks (Home Assistant, the dongle's NTP time, the inverter's), the worst of the three and three yes/no consumers, as template "
+         "entities that read eight entities the dongle already publishes and write nothing; an input that is missing, unavailable, unknown or not a finite number is never TRUSTED; nothing is wired to a "
+         "gate yet; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
+)
+# sgt1 (the shared START GATE for Charge Battery and Export to Grid, a GUARDED FREE POWER START and the IN-LEASE END GUARDS; offline, nothing installed, the gate is SOFT; _sgt1_scope.py): made on the export after
+# ttr1. ADDED: the four packages (the gate and three lease guards, one file each), their suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (four stanzas with their comment blocks). Measured, not declared: no delta, no
+# op path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; no existing package, card or dashboard is edited (the start bypass detector, smr1 and the schedules are untouched). The guarded
+# start stages and presses the dongle's EXISTING Free Power start button as the scheduled start and the card do, and the guards only press the two EXISTING End buttons: no register operation of its own.
+SGT1 = Entry(
+    id="sgt1", pr="SGT1", commit="unmerged",
+    reverts=dict(_sgt1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after sgt1
+        HA_MANIFEST: "6842c52b186eadeadbc6a820cdf41e1621947bae2cda2feb4ebd362c9a5711b7",
+    },
+    added_files=_sgt1.ADDED_FILES,
+    # _pex.fingerprint(SGT1): hashes its parent ttr1's fingerprint and every declaration above
+    fingerprint="979bf4cc6a3eb00296e6cd58f651f1aec580584bc9e806514c077e7ee1a54b50",
+    note="the shared start gate (two template binary sensors, the grid-import ceiling helper with no initial value, a guarded Free Power start script) and three in-lease END guards, each its own package file needing "
+         "the owner's separate install authorisation (the Free Power guards press the operator's End only for a verified running lease, at most once per lease); the gate is soft (the dongle's own Start button bypasses it), the card is not changed, a missing or unreadable input closes the gate, the guards only press "
+         "an existing End button and never act at a restart, a reload or a reconnect; ZERO firmware, registry data, Intelligence or ecco_core change, no register operation of its own",
+)
+# exc1 (the EXPORT COORDINATOR v0: a READ-ONLY SHADOW proposal for Export to Grid, item N3 of the architecture reconciliation; offline, nothing installed, the gates are SOFT; _exc1_scope.py): made on the export after
+# sgt1. ADDED: the package, its suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path;
+# ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; no existing package, card or dashboard is edited (the start gate and the time trust package, whose suites pin who may read them,
+# are neither edited nor mentioned). ONE existing suite is edited, home-assistant/tests/test_ecco_start_gate.py, only so that its two pins on sgt1's own state (the last five manifest stanzas, and the entry's
+# checkpoint and position) are read as of sgt1, with every later entry's manifest edit undone, as the older suites' pins are: every assertion is kept, only "sgt1 is the newest entry" is dropped, which no later
+# entry can satisfy. The package is template entities only (no automation, helper, script, trigger, action or service call): no register operation, no write of any kind.
+EXC1 = Entry(
+    id="exc1", pr="EXC1", commit="unmerged",
+    reverts=dict(_exc1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after exc1
+        HA_MANIFEST: "c775aa79b786b9175628b4733362ef0d3401284e54fd431da2031e98886fdd35",
+    },
+    added_files=_exc1.ADDED_FILES,
+    # _pex.fingerprint(EXC1): hashes its parent sgt1's fingerprint and every declaration above
+    fingerprint="6bd59c521ccfdb3b1a1f4d5cb18d0ff1a0650d09ae1029b3f96a1c7e4a03d849",
+    note="the export coordinator v0 (nine template sensors: a proposal for an Export to Grid start from measured values, a re-target shadow and a comparison with the running lease); a read-only shadow, "
+         "nothing reads it yet, the gates are soft, it reads neither the start gate nor the time trust input (their packages pin who may read them), every missing or implausible input makes it INVALID; "
+         "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, TTR1, SGT1, EXC1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
