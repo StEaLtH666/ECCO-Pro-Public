@@ -938,7 +938,7 @@ def static_problems(text: str) -> list[str]:
         bad.append("an entity id outside the ecco namespace is read")
     if re.search(r"\binitial\s*:", text):
         bad.append("an `initial:` appears")
-    # the firmware's recovery-execute action ids are spelled as two adjacent literals here: registry/tests/test_free_power_recovery_evidence.py and ..._accept_current_state.py scan every home-assistant/ file
+    # the firmware's recovery-execute action ids are spelled as two adjacent literals here: the recovery-evidence guards of registry/tests scan every home-assistant/ file for them whole
     for forbidden in ("FORCE_RESTORE" "_ORIGINAL", "force_restore" "_original", "ACCEPT_CURRENT" "_STATE", "accept_current" "_state", "FORCE_RUN" "NING"):
         if forbidden in text:
             bad.append(f"the firmware recovery token {forbidden} appears whole (registry guard)")
@@ -1068,7 +1068,7 @@ MUTANTS = [
     ("a hold that cannot be read is shown as clear", "(hs if hs in ['clear', 'held'] else 'NOT_READ')", "(hs if hs == 'held' else 'clear')"),
     ("a limits state it does not know is passed on", "(lim if lim in ['VALID', 'NOT CONFIGURED', 'INVALID', 'AWAITING CONFIRMATION', 'UNKNOWN', 'UNAVAILABLE'] else 'NOT_READ')", "lim"),
     ("the owner shows a live match it does not read", "live_match: NOT_READ", "live_match: MATCH"),
-    ("the owner reads the saved profile's live match", "live_match: NOT_READ", "live_match: \"{{ states('sensor.ecco_clock_dongle_ecco_" "fallback_profile_live_match') }}\""),
+    ("the owner reads the saved profile's live match", "live_match: NOT_READ", "live_match: \"{{ states('sensor.ecco_clock_dongle_ecco_fall" "back_profile_live_match') }}\""),
     ("the owner names a reserved fallback token in its header", "# LIMITS, stated plainly", "# see ecco_" "fallback_profile\n# LIMITS, stated plainly"),
     ("the owner ignores the manual write flag", "('MANUAL_WRITE' if mw == 'on' else 'NONE')", "'NONE'"),
     ("the owner is a lease before a restore owed", "('RESTORE_OWED' if ((fs == 'on' and fa == 'off' and fo == 'off') or (ds == 'on' and da == 'off' and dq == 'off')) else ('CHARGE' if (fa == 'on' or fo == 'on') else",
