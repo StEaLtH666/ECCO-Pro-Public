@@ -140,6 +140,7 @@ import _pex0_scope as _pex0  # noqa: E402
 import _ptt1_scope as _ptt1  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
 import _rrb1_scope as _rrb1  # noqa: E402
+import _rrs1_scope as _rrs1  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
@@ -1537,7 +1538,26 @@ RRB1 = Entry(
          "plan's effective reserve; a register is not behaviour, so no claim of enforcement, and no behavioural check), and a notice that no firmware guard may be running when the dongle is "
          "lost while a lease, or the restore a half-made start owes, is reported; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no inverter, dongle or helper write",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, RRB1)
+# rrs1 (the battery reserve: ONE guarded SET script, split out of the first rrb1 draft; offline, nothing installed; _rrs1_scope.py): made on rrb1, so its parent is rrb1; when another entry merges first
+# this entry's fingerprint must be sealed again (registry/tests/_pex.py `sealed`, the tool reseal.py of the merge sequence) and, if that entry edits the manifest too, its manifest checkpoint recomputed.
+# ADDED: one Home Assistant package (ecco_reserve_control.yaml), its test model and suite, and the scope module. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured,
+# not declared: no delta, no op path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation. The package writes only input_number.ecco_minimum_reserve_soc (a
+# Home Assistant helper), its own result text and persistent notifications. It is a second writer of the reserve helper, which home-assistant/tests/test_ecco_reserve_default.py pins at one: widening that
+# pin is an OWNER DECISION, kept as the one last separate commit of the branch (an ordinary edit of a test file added by rsv1; it changes no declaration of this entry).
+RRS1 = Entry(
+    id="rrs1", pr="RRS1", commit="unmerged",
+    reverts=dict(_rrs1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after rrs1
+        HA_MANIFEST: "9e374143176d4803367c19373a43c4d2e3bc5ff0f9799cda1d716810d6d521e3",
+    },
+    added_files=_rrs1.ADDED_FILES,
+    # _pex.fingerprint(RRS1): hashes its parent rrb1's fingerprint and every declaration above
+    fingerprint="638170a0322d4dd5a3902515d8828a39469a202123864cde13174cc8617d6f07",
+    note="the battery reserve, ONE guarded script that sets the owner's reserve helper (and nothing else): validation, the helper's own range, a confirmation when the value is below the plan's reserve or "
+         "the owner's own, a stamped WRITING text before the write and a read-back after it; a second writer of the helper, so the pinned one-writer suite needs the owner's decision (a separate commit); "
+         "ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no inverter or dongle write",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, RRB1, RRS1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
