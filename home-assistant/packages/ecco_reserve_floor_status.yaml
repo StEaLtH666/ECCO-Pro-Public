@@ -10,24 +10,39 @@
 #
 # A REGISTER IS NOT BEHAVIOUR. That a floor register reads a number does not prove that the battery stops at it: whether a slot's target
 # SOC acts as a discharge floor at all is the open question of proof R6, which is separate and has not been run. So this package publishes NO
-# claim of enforcement and never uses the words held or enforced as a state: it reports what the registers read and how that compares with
-# the reserve. On the house today the non-charging slots read a target of 0 percent, so the honest answer is BELOW: the reserve is a
-# software value only until proof R6. "No warning" (the binary sensor off) is never "enforced".
+# claim of enforcement and never uses the words held, holds or enforced in a state, an entity id, a friendly name or a notice: it reports what
+# the registers read and how that compares with the reserve. On the house today the non-charging slots read a target of 0 percent, so the
+# honest answer is BELOW: the reserve is a software value only until proof R6. "No warning" (the binary sensor off) says nothing about
+# behaviour.
+#
+# NOT BUILT: THE BEHAVIOURAL CHECK. The check that would watch what the battery actually does (on grid, no lease running, SOC under the floor,
+# discharge over 150 W for 5 minutes: "NOT HOLDING") was NOT built. Its absence is the reason the binary sensor below is named for what it
+# reads (registers below the reserve, or unreadable) and not for what the battery does: with the binary sensor off, nothing has observed the
+# battery. Until proof R6 is run, and until such a behavioural check exists, the reserve is software only whatever this package reads.
 #
 # WHAT IT PROVIDES (template entities, one helper, one automation):
 #   sensor.ecco_reserve_floor_core                   internal: ONE delimited record of the whole rule (below); nothing else should read it
 #   sensor.ecco_reserve_floor_status                 MATCH / BELOW / ABOVE / PENDING / UNREADABLE; attributes: the floor, the slot floor, the shutdown SOC,
 #                                                    the effective reserve, the difference, mismatch, the slots counted and left out, the TOU flag, the
-#                                                    configuration read, a reason in words, every input with its freshness, and a constant `behaviour` note
-#   binary_sensor.ecco_reserve_not_held_by_inverter  on only for BELOW or UNREADABLE (device class problem); off for MATCH, ABOVE and PENDING
-#   input_boolean.ecco_tell_me_reserve_not_enforced  the owner's opt-in for the one notification below; NO initial value (a new helper reads off)
-#   automation ecco_reserve_floor_notify             with the opt-in on, ONE persistent notification (fixed id) when the binary sensor has been on for
-#                                                    10 minutes, dismissed when it goes off or the opt-in is turned off; it informs and does nothing else
+#                                                    configuration read, a reason in words, every input with its freshness, the charging slots' targets
+#                                                    (slot, source, target: listed and NOT judged) and a constant `behaviour` note
+#   binary_sensor.ecco_reserve_floor_registers_below_reserve   on only for BELOW or UNREADABLE: the registers read below the reserve, or cannot be
+#                                                    read (device class problem); off for MATCH, ABOVE and PENDING. Named for what it READS, not for what the battery does (see NOT BUILT above)
+#   input_boolean.ecco_tell_me_reserve_floor_registers  the owner's opt-in for the one notification below; NO initial value (a new helper reads off)
+#   automation ecco_reserve_floor_notify             with the opt-in on, ONE persistent notification (fixed id ecco_reserve_floor_registers) when the binary
+#                                                    sensor has been on for 10 minutes, dismissed when it goes off or the opt-in is turned off; it informs and does nothing else
 #
 # THE FLOOR. floor = the larger of (a) the battery shutdown SOC and (b) the LOWEST target SOC among the NON-charging TOU slots, where a slot
 # is non-charging only if its charge source reads exactly None (Grid, Generator and Grid + Generator are charging slots and are never counted,
 # never the charge slot). (b) counts only while the inverter's Time Of Use flag reads on: with TOU off the slots are not in force and the floor
 # is the shutdown SOC alone. The six slots tile the day, so the LOWEST non-charging target is the weakest floor that applies at some hour.
+# CHARGING SLOTS ARE NOT JUDGED. A slot whose charge source is Grid, Generator or Grid + Generator is left out of the floor (the lowest NON-charging
+# target is the weakest floor of a slot that does not charge), so with slot 1 on Grid at 40 percent and a reserve of 80 the verdict can still be MATCH
+# for the other slots. The charging slots' own targets are listed in the attribute charging_slot_targets (slot, source, target) and every MATCH, BELOW
+# and ABOVE reason says "charging slots not judged". Open question for the owner, the same as proof R6: on a Deye time-of-use table a slot's target is
+# INFERRED to act as the discharge floor of that slot whether or not charging is ticked; if so a charging slot's low target is a floor below the reserve
+# that this package does not count. Not established; nothing here decides it.
+#
 # The floor is compared with the EFFECTIVE reserve (the larger of the owner's reserve and a running Prepare for power cut reserve, rounded up):
 #   MATCH      floor == effective reserve
 #   BELOW      floor <  effective reserve   (the interesting case; also the truthful answer today)
@@ -40,12 +55,17 @@
 # flight (a lease writes every slot target to 100 percent and restores them, an editor Apply changes one slot at a time); or the configuration
 # read is older than 150 s or the dongle says the configuration is offline (150 s is the TOU editor's own freshness limit for the same read).
 # The configuration read is published about every 60 s. A read that stays stale for more than 1800 s is not "pending" any more: it reads
-# UNREADABLE (a lost read path must not hide behind a wait).
+# UNREADABLE (a lost read path must not hide behind a wait). Two more limits keep a wait from lasting for ever: the dongle's Configuration Online flag
+# reading off for more than 1800 s (its last_changed; firmware Block A can fail while Block B publishes a new time with online false, so the time
+# alone stays fresh) reads UNREADABLE, and so does any single PENDING cause (a lease flag, an operation or snapshot flag, the editor's latch, an open
+# recovery state) that has lasted more than 6 hours (its last_changed). A Home Assistant RESTART resets last_changed, so both limits count only
+# continuous Home Assistant uptime: that is the stated limit, not a defect. The 1800 s limit is checked after a pending cause (a lease explains a wait).
 #
 # UNREADABLE (never a guess). Any input that is missing, unavailable, unknown, empty, not a number, not a whole percent from 0 to 100, not
 # one of the four charge-source texts the firmware writes (None, Grid, Generator, Grid + Generator), not on or off for a flag, or a
 # configuration time that is not a time in the firmware's exact form; and the case that no slot is left to read a floor from (TOU on and no
-# slot with charge source None). The reason names the first input that failed.
+# slot with charge source None). The reason names the first input that failed. A reason never carries an age or a time that moves every minute (it would
+# write a recorder row a minute): ages are only compared, never shown.
 #
 # NO DRIFT STATE. A DRIFT verdict (the floor changed while no ECCO edit or restore explains it) needs a reliable fact, and none exists in Home
 # Assistant: the TOU editor's write-seen latch stays on after an Apply, its last-result text carries no time of the write and Home Assistant
@@ -53,12 +73,14 @@
 # never claims DRIFT; BELOW and ABOVE are the mismatch states (attribute mismatch is true for both). A real DRIFT needs a durable record of the
 # last value ECCO wrote, which is a later build (the assisted floor writer).
 #
-# THE BINARY SENSOR. "Reserve not held by the inverter" is on only for BELOW (the registers read lower than the reserve) and UNREADABLE (they
+# THE BINARY SENSOR. "ECCO Reserve Floor Registers Below Reserve" is on only for BELOW (the registers read lower than the reserve) and UNREADABLE (they
 # cannot be read, so nothing can be said). It is off for MATCH, ABOVE and PENDING: off means "no warning now" and nothing more, not that the
-# battery stops at the floor. It is unavailable while the status sensor is not readable (a reload or a restart, for a moment).
+# battery stops at the floor: no check of the battery's behaviour exists (NOT BUILT above). The friendly name stops at "Reserve" because Home
+# Assistant derives the entity id from it; the "or unreadable" half of the meaning is the `meaning` attribute. It is unavailable while the status sensor
+# is not readable (a reload or a restart, for a moment).
 #
 # THE NOTIFICATION. Off unless the owner turns the opt-in helper on (a new helper reads off; it has no initial value and keeps its state across
-# restarts). With it on, ONE persistent notification (fixed id ecco_reserve_floor_not_held) is created when the binary sensor has been on
+# restarts). With it on, ONE persistent notification (fixed id ecco_reserve_floor_registers) is created when the binary sensor has been on
 # for 10 minutes without a break, so a lease, a reload or a short outage never raises it, and it is dismissed when the binary sensor reads
 # off or the opt-in is turned off. It is a template trigger: it fires on a false-to-true change only, so a Home Assistant start with the
 # condition already true does not fire it, and a restart or a reload restarts the 10 minutes. It writes nothing but that notification.
@@ -66,7 +88,7 @@
 # THE INTERNAL RECORD. sensor.ecco_reserve_floor_core holds the whole rule as one text of ten fields separated by |:
 #   verdict | floor | slot floor | shutdown SOC | effective reserve | non-charging slots | charging slots | TOU flag | configuration read | reason
 # (a number is a whole percent, - is unknown; the slot lists are numbers separated by commas; the configuration read is fresh, stale, lost
-# or unreadable). One rule, one place: the status sensor and its attributes only read the record, so they can never disagree with each other.
+# or unreadable; the attribute charging_slot_targets is the one thing read outside it, and only to list the charging slots). One rule, one place: the status sensor and its attributes only read the record, so they can never disagree with each other.
 # The record is kept below 255 characters (Home Assistant refuses a longer state).
 #
 # FAIL SAFE. A restart, a template reload, a reconnect of the dongle or an outage creates no verdict by itself: every input that is not a
@@ -84,6 +106,9 @@
 #
 # LIMITS, stated plainly.
 #   - It reads registers, not behaviour (above). A MATCH says the registers agree with the reserve; whether the battery stops there is proof R6.
+#     The behavioural check (on grid, no lease, SOC under the floor, discharge over 150 W for 5 minutes) is NOT BUILT.
+#   - The two time limits (1800 s offline, 6 hours pending) use last_changed, which Home Assistant resets at a restart: they count only continuous uptime.
+#   - Charging slots are listed, not judged (above).
 #   - The read is the dongle's configuration read, about once a minute; between two reads a change by the vendor app or the inverter's panel is
 #     not seen, and a change is not told apart from one ECCO made (no DRIFT state).
 #   - The configuration time is a naive local-time text of the dongle. Home Assistant reads a naive time in the Core PROCESS time zone (the
@@ -101,13 +126,16 @@
 # (the verdict flips to PENDING and back), and two rows per entity at every template reload (unavailable, then the value). Four entities
 # (core, status, binary sensor, opt-in helper); the live count needs the row-counting tools extended with these entity ids.
 #
+# NAMES. Entity ids and friendly names are fixed before the first install (they persist in the entity registry). Renamed from the first draft, which
+# called the binary sensor "not held by the inverter" and the opt-in "not enforced": both implied an enforcement that proof R6 has not shown.
+#
 # INSTALL. One file copy to /config/packages/ecco_reserve_floor_status.yaml, a configuration check, then reload three domains in Developer tools,
 # YAML: Template entities, Input booleans and Automations (never "reload all"). No restart. Remove: delete the file and reload the same three.
 # Nothing here is meant to be exposed to a voice assistant.
 
 input_boolean:
-  ecco_tell_me_reserve_not_enforced:
-    name: ECCO tell me about reserve not enforced by the inverter
+  ecco_tell_me_reserve_floor_registers:
+    name: ECCO tell me when the reserve floor registers read below the reserve
     icon: mdi:bell-ring-outline
 
 template:
@@ -120,6 +148,10 @@ template:
           {%- macro pct(e) -%}
           {%- set v = states(e) | float(none) -%}
           {{- (v | int) if (v is number and v == v and v >= 0 and v <= 100 and v == (v | round(0))) else -1 -}}
+          {%- endmacro -%}
+          {%- macro age(e) -%}
+          {%- set o = states[e] -%}
+          {{- ((as_timestamp(now()) - as_timestamp(o.last_changed, 0)) | round(0) | int) if o is not none else 99999999 -}}
           {%- endmacro -%}
           {%- set ok = ['on', 'off'] -%}
           {%- set bad = ['unknown', 'unavailable', ''] -%}
@@ -141,14 +173,18 @@ template:
           {%- set cdt = strptime(ctxt, '%Y-%m-%d %H:%M:%S', none) if ctxt not in bad else none -%}
           {%- set cts = as_timestamp(cdt, none) if cdt is not none else none -%}
           {%- set cage = ((as_timestamp(now()) - cts) | abs | round(0) | int) if cts is not none else none -%}
-          {%- set cfg = 'unreadable' if (online not in ok or cage is none) else ('lost' if cage > 1800 else ('stale' if (online == 'off' or cage > 150) else 'fresh')) -%}
-          {%- set c = namespace(bad='', busy='') -%}
+          {%- set oage = age('binary_sensor.ecco_clock_dongle_configuration_online') | int -%}
+          {%- set cfg = 'unreadable' if (online not in ok or cage is none) else ('lost' if (cage > 1800 or (online == 'off' and oage > 1800)) else ('stale' if (online == 'off' or cage > 150) else 'fresh')) -%}
+          {%- set c = namespace(bad='', busy='', oldest=0, oldname='') -%}
           {%- for e in flags -%}
           {%- if c.bad == '' and states(e) not in ok -%}{%- set c.bad = e ~ ' reads ' ~ states(e) -%}{%- endif -%}
           {%- if c.busy == '' and states(e) == 'on' -%}{%- set c.busy = e -%}{%- endif -%}
+          {%- if states(e) == 'on' and (age(e) | int) > c.oldest -%}{%- set c.oldest = age(e) | int -%}{%- set c.oldname = e -%}{%- endif -%}
           {%- endfor -%}
           {%- set rfp_open = rfp != 'NONE' -%}
           {%- set rdg_open = not (rdg.startswith('NONE') or rdg.startswith('ACCEPTED')) -%}
+          {%- if rfp_open and rfp not in bad and (age('sensor.ecco_clock_dongle_free_power_recovery_state') | int) > c.oldest -%}{%- set c.oldest = age('sensor.ecco_clock_dongle_free_power_recovery_state') | int -%}{%- set c.oldname = 'sensor.ecco_clock_dongle_free_power_recovery_state' -%}{%- endif -%}
+          {%- if rdg_open and rdg not in bad and (age('sensor.ecco_clock_dongle_dump_to_grid_recovery_state') | int) > c.oldest -%}{%- set c.oldest = age('sensor.ecco_clock_dongle_dump_to_grid_recovery_state') | int -%}{%- set c.oldname = 'sensor.ecco_clock_dongle_dump_to_grid_recovery_state' -%}{%- endif -%}
           {%- set s = namespace(nc=[], ch=[], lo=101, bad='') -%}
           {%- for i in range(6) -%}
           {%- set soc = pct(socs[i]) | int(-1) -%}
@@ -165,19 +201,23 @@ template:
           {%- if res < 0 -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'the plan effective reserve cannot be read (' ~ states('sensor.ecco_plan_effective_reserve') ~ ')' -%}
           {%- elif c.bad != '' -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = c.bad -%}
           {%- elif rfp in bad or rdg in bad -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'a recovery state cannot be read (free power ' ~ rfp ~ ', dump ' ~ rdg ~ ')' -%}
-          {%- elif c.busy != '' or rfp_open or rdg_open -%}{%- set r.v = 'PENDING' -%}{%- set r.why = ('a lease, a restore, another write or an ECCO edit is in progress (' ~ c.busy ~ ')') if c.busy != '' else ('a recovery state is open (free power ' ~ rfp ~ ', dump ' ~ rdg ~ ')') -%}
+          {%- elif c.busy != '' or rfp_open or rdg_open -%}
+          {%- if c.oldest > 21600 -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'a pending cause has lasted more than 6 hours (' ~ c.oldname ~ ')' -%}
+          {%- else -%}{%- set r.v = 'PENDING' -%}{%- set r.why = ('a lease, a restore, another write or an ECCO edit is in progress (' ~ c.busy ~ ')') if c.busy != '' else ('a recovery state is open (free power ' ~ rfp ~ ', dump ' ~ rdg ~ ')') -%}
+          {%- endif -%}
+          {%- elif cfg == 'lost' and online == 'off' and cage <= 1800 -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'the configuration has read offline for more than 1800 s' -%}
           {%- elif cfg in ['unreadable', 'lost'] -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'the configuration read cannot be trusted (' ~ cfg ~ ': online ' ~ online ~ ', time ' ~ ctxt ~ ')' -%}
           {%- elif cfg == 'stale' -%}{%- set r.v = 'PENDING' -%}{%- set r.why = 'waiting for a fresh configuration read (' ~ ('offline' if online == 'off' else (cage ~ ' s old, limit 150 s')) ~ ')' -%}
           {%- elif s.bad != '' -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = s.bad -%}
           {%- elif shut < 0 -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'the battery shutdown SOC cannot be read (' ~ states('sensor.ecco_clock_dongle_ecco_battery_shutdown') ~ ')' -%}
           {%- elif tou not in ok -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'the Time Of Use flag cannot be read (' ~ tou ~ ')' -%}
           {%- elif tou == 'on' and (s.nc | length) == 0 -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'no slot has charge source None, so there is no slot to read a floor from' -%}
-          {%- elif floor == res -%}{%- set r.v = 'MATCH' -%}{%- set r.why = 'the registers read a floor of ' ~ floor ~ ' percent, the same as the effective reserve (a register is not behaviour)' -%}
-          {%- elif floor < res -%}{%- set r.v = 'BELOW' -%}{%- set r.why = 'the registers read a floor of ' ~ floor ~ ' percent, below the effective reserve of ' ~ res ~ ' percent: the reserve is software only' -%}
-          {%- else -%}{%- set r.v = 'ABOVE' -%}{%- set r.why = 'the registers read a floor of ' ~ floor ~ ' percent, above the effective reserve of ' ~ res ~ ' percent' -%}
+          {%- elif floor == res -%}{%- set r.v = 'MATCH' -%}{%- set r.why = 'the registers read a floor of ' ~ floor ~ ' percent, the same as the effective reserve (a register is not behaviour; charging slots not judged)' -%}
+          {%- elif floor < res -%}{%- set r.v = 'BELOW' -%}{%- set r.why = 'the registers read a floor of ' ~ floor ~ ' percent, below the effective reserve of ' ~ res ~ ' percent: the reserve is software only; charging slots not judged' -%}
+          {%- else -%}{%- set r.v = 'ABOVE' -%}{%- set r.why = 'the registers read a floor of ' ~ floor ~ ' percent, above the effective reserve of ' ~ res ~ ' percent; charging slots not judged' -%}
           {%- endif -%}
           {%- set shown = r.v in ['MATCH', 'BELOW', 'ABOVE'] -%}
-          {{ r.v }}|{{ floor if shown else '-' }}|{{ slotfloor if (shown and slotfloor >= 0) else '-' }}|{{ shut if shut >= 0 else '-' }}|{{ res if res >= 0 else '-' }}|{{ (s.nc | join(',')) or '-' }}|{{ (s.ch | join(',')) or '-' }}|{{ tou if tou in ok else '-' }}|{{ cfg }}|{{ (r.why | replace('|', '/'))[:140] }}
+          {{ r.v }}|{{ floor if shown else '-' }}|{{ slotfloor if (shown and slotfloor >= 0) else '-' }}|{{ shut if shut >= 0 else '-' }}|{{ res if res >= 0 else '-' }}|{{ (s.nc | join(',')) or '-' }}|{{ (s.ch | join(',')) or '-' }}|{{ tou if tou in ok else '-' }}|{{ cfg }}|{{ (r.why | replace('|', '/'))[:160] }}
 
       - name: ECCO Reserve Floor Status
         unique_id: ecco_reserve_floor_status
@@ -215,6 +255,18 @@ template:
           charging_slots: >-
             {%- set x = states('sensor.ecco_reserve_floor_core').split('|')[6] -%}
             {{ (x.split(',') | map('int') | list) if x != '-' else [] }}
+          charging_slot_targets: >-
+            {%- set x = states('sensor.ecco_reserve_floor_core').split('|')[6] -%}
+            {%- set socs = ['sensor.ecco_clock_dongle_ecco_timezone1_soc', 'sensor.ecco_clock_dongle_ecco_timezone2_soc', 'sensor.ecco_clock_dongle_ecco_timezone3_soc',
+                            'sensor.ecco_clock_dongle_ecco_timezone4_soc', 'sensor.ecco_clock_dongle_ecco_timezone5_soc', 'sensor.ecco_clock_dongle_ecco_timezone6_soc'] -%}
+            {%- set srcs = ['sensor.ecco_clock_dongle_ecco_timezone1_charge', 'sensor.ecco_clock_dongle_ecco_timezone2_charge', 'sensor.ecco_clock_dongle_ecco_timezone3_charge',
+                            'sensor.ecco_clock_dongle_ecco_timezone4_charge', 'sensor.ecco_clock_dongle_ecco_timezone5_charge', 'sensor.ecco_clock_dongle_ecco_timezone6_charge'] -%}
+            {%- set ns = namespace(r=[]) -%}
+            {%- if x != '-' -%}{%- for k in x.split(',') -%}{%- set i = (k | int) - 1 -%}
+            {%- set ns.r = ns.r + [{'slot': i + 1, 'source': states(srcs[i]), 'target': states(socs[i]) | int(-1)}] -%}
+            {%- endfor -%}{%- endif -%}
+            {{ ns.r }}
+          charging_slots_note: "listed, NOT judged: the floor counts only non-charging slots; whether a charging slot's target also acts as a floor is open (proof R6)"
           tou_enabled: >-
             {%- set x = states('sensor.ecco_reserve_floor_core').split('|')[7] -%}
             {{ true if x == 'on' else (false if x == 'off' else 'unknown') }}
@@ -240,17 +292,18 @@ template:
             {{ ns.r }}
 
   - binary_sensor:
-      - name: ECCO Reserve Not Held By Inverter
-        unique_id: ecco_reserve_not_held_by_inverter
+      - name: ECCO Reserve Floor Registers Below Reserve
+        unique_id: ecco_reserve_floor_registers_below_reserve
         icon: mdi:battery-alert-variant-outline
         device_class: problem
-        # On only for BELOW and UNREADABLE (an allow-list); off for MATCH, ABOVE and PENDING (no warning now, which is not proof of anything);
+        # On only for BELOW and UNREADABLE (an allow-list); off for MATCH, ABOVE and PENDING (no warning now, which is not proof of anything: NOT BUILT, the behavioural check);
         # unavailable while the status sensor cannot be read.
         availability: >-
           {{ states('sensor.ecco_reserve_floor_status') in ['MATCH', 'BELOW', 'ABOVE', 'PENDING', 'UNREADABLE'] }}
         state: >-
           {{ states('sensor.ecco_reserve_floor_status') in ['BELOW', 'UNREADABLE'] }}
         attributes:
+          meaning: "on = the inverter's registers read below the reserve, or cannot be read; off = no warning from the registers, which says nothing about what the battery does"
           status: >-
             {{ states('sensor.ecco_reserve_floor_status') }}
           reason: >-
@@ -258,9 +311,9 @@ template:
 
 automation:
   - id: ecco_reserve_floor_notify
-    alias: "ECCO - Reserve floor: tell me when the inverter registers do not hold the reserve (opt-in)"
+    alias: "ECCO - Reserve floor: tell me when the inverter's floor registers read below the reserve or cannot be read (opt-in)"
     description: >-
-      Off unless the opt-in helper is on. Creates ONE persistent notification (fixed id) when the reserve-not-held binary sensor has been on for
+      Off unless the opt-in helper is on. Creates ONE persistent notification (fixed id) when the registers-below-reserve binary sensor has been on for
       10 minutes without a break, and dismisses it when the sensor reads off or the opt-in is turned off. It informs and writes nothing else.
     mode: single
     max_exceeded: silent
@@ -268,16 +321,16 @@ automation:
       # False to true only (Home Assistant's template trigger): the condition is true while the opt-in is on and the binary sensor has read on for more than 600 s.
       - trigger: template
         value_template: >-
-          {{ is_state('input_boolean.ecco_tell_me_reserve_not_enforced', 'on')
-             and is_state('binary_sensor.ecco_reserve_not_held_by_inverter', 'on')
-             and ((as_timestamp(now()) - as_timestamp(states['binary_sensor.ecco_reserve_not_held_by_inverter'].last_changed, 0)) > 600) }}
+          {{ is_state('input_boolean.ecco_tell_me_reserve_floor_registers', 'on')
+             and is_state('binary_sensor.ecco_reserve_floor_registers_below_reserve', 'on')
+             and ((as_timestamp(now()) - as_timestamp(states['binary_sensor.ecco_reserve_floor_registers_below_reserve'].last_changed, 0)) > 600) }}
         id: inform
       - trigger: state
-        entity_id: binary_sensor.ecco_reserve_not_held_by_inverter
+        entity_id: binary_sensor.ecco_reserve_floor_registers_below_reserve
         to: "off"
         id: clear
       - trigger: state
-        entity_id: input_boolean.ecco_tell_me_reserve_not_enforced
+        entity_id: input_boolean.ecco_tell_me_reserve_floor_registers
         to: "off"
         id: clear
     actions:
@@ -288,13 +341,13 @@ automation:
             sequence:
               - action: persistent_notification.create
                 data:
-                  notification_id: ecco_reserve_floor_not_held
-                  title: "ECCO: the inverter's registers do not hold your reserve"
+                  notification_id: ecco_reserve_floor_registers
+                  title: "ECCO: the inverter's reserve floor registers read below your reserve, or cannot be read"
                   message: >-
                     For 10 minutes the reserve read-back has said {{ states('sensor.ecco_reserve_floor_status') }}: {{ state_attr('sensor.ecco_reserve_floor_status', 'reason') }}.
-                    This reads the inverter's registers about once a minute. A register is not behaviour: nothing here proves what the battery does at a floor, and nothing
-                    here changes a setting. You asked to be told (the opt-in helper); turn it off to stop this notice.
+                    Your reserve is software only until proof R6 has been run. This reads the inverter's registers about once a minute; a register is not behaviour, so nothing here
+                    says what the battery will do at a floor, and nothing here changes a setting. You asked to be told (the opt-in helper); turn it off to stop this notice.
         default:
           - action: persistent_notification.dismiss
             data:
-              notification_id: ecco_reserve_floor_not_held
+              notification_id: ecco_reserve_floor_registers

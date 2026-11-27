@@ -22,6 +22,7 @@ Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
 from __future__ import annotations
 
 import itertools
+import random
 import re
 import sys
 from pathlib import Path
@@ -43,6 +44,7 @@ FW_TEXT = (ROOT / "firmware" / "ecco_clock_dongle_stage3_4_free_power.yaml").rea
 MANIFEST_TEXT = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
 DONGLE = "ecco_clock_dongle"
 FP, DG, TEL, NOTE = M.FP, M.DG, M.TEL, M.NOTE
+FP_OP, FP_SNAP, DG_OP, DG_SNAP = M.FP_OP, M.FP_SNAP, M.DG_OP, M.DG_SNAP
 FAILURES: list[str] = []
 
 
@@ -97,7 +99,7 @@ FORBIDDEN_DOMAINS = ("number", "select", "switch", "button", "script", "climate"
 INTEL = "ecco_" "intel"
 SOLCAST = "solc" "ast"
 HEADER_MUST = ("WHEN IT RUNS", "WHAT IT NEVER DOES BY ITSELF", "THE WORDS TO THE OWNER", "HARD RULES", "LIMITS", "RECORDER FOOTPRINT (ESTIMATE", "INSTALL.", "5 minutes", "Zero Export",
-               "15 minutes", "90 s", "about 70 s", "Why 5 minutes", "SOFT", "NOT announced", "FROM A POSITIVE READING")
+               "15 minutes", "90 s", "about 70 s", "Why 5 minutes", "SOFT", "NOT announced", "FROM A POSITIVE READING", "START THAT FAILED HALF-WAY", "six lease flags", "seven dongle flags")
 
 
 def code_lines(text: str) -> str:
@@ -154,7 +156,7 @@ def static_problems(text: str) -> list:
         bad.append(f"the notification ids are {ids}")
     code = code_lines(text)
     found = {f"{m.group(1)}.{m.group(2)}" for m in ID_RE.finditer(code)}
-    if found != {FP, DG, TEL}:
+    if found != set(M.ALL):
         bad.append(f"it mentions {sorted(found)}")
     dom = sorted({i for i in found if i.split(".", 1)[0] in FORBIDDEN_DOMAINS})
     if dom:
@@ -184,24 +186,229 @@ def notified(aw) -> bool:
     return NOTE in aw.notifications
 
 
+def _title(which: str) -> str:
+    return f"ECCO: the dongle is lost while a {which} lease may be running"
+
+
+def _title_ok(title, which: str) -> bool:
+    """The title that names the family, or the generic one: a run that starts on a telemetry trigger can see every lease flag already unavailable (an ESPHome device's entities drop in no
+    fixed order), and then the notice says 'Free Power or Dump to Grid'. The WRONG family, or both when only one lease is on, is never acceptable (the single-trigger cases are exact: sc_titles)."""
+    return title in (_title(which), _title("Free Power or Dump to Grid"))
+
+
+_RNG = random.Random(20261127)
+_SHUFFLES = []
+for _i in range(24):
+    _l = list(M.ALL)
+    _RNG.shuffle(_l)
+    _SHUFFLES.append(tuple(_l))
+
+
+def _orders() -> list:
+    """The orders in which the dongle's entities may go unavailable: the six orders of the three Active/telemetry entities alone (the other four lease flags keep reading off), the same
+    six with the four other lease flags lost first and last, and 24 shuffles of all seven (a fixed seed)."""
+    extra = tuple(e for e in M.ALL if e not in M.ORIG)
+    out = []
+    for o in itertools.permutations(M.ORIG):
+        out += [o, extra + o, o + extra]
+    out += _SHUFFLES
+    return list(dict.fromkeys(out))
+
+
 def sc_orders(text: str) -> list:
-    """A lease lost, in every order the three entities may go unavailable: exactly one notification, at 5 minutes and not before."""
+    """A lease lost, in the orders the dongle's entities may go unavailable: exactly one notification, at 5 minutes and not before."""
     bad = []
     for lease, title in ((FP, "Free Power"), (DG, "Dump to Grid")):
-        for order in itertools.permutations(M.ALL):
+        for order in _orders():
             aw = M.AlertWorld(text, fp="on" if lease == FP else "off", dg="on" if lease == DG else "off")
             aw.lose(order)
             aw.advance(299)
             if aw.notifications:
-                bad.append(f"{lease} lost in order {[e[-12:] for e in order]}: a notification before 5 minutes")
+                bad.append(f"{lease} lost in order {[e[-14:] for e in order]}: a notification before 5 minutes")
             aw.advance(3)
             msg = aw.notifications.get(NOTE, {})
-            if list(aw.notifications) != [NOTE] or aw.creates() != 1 or title not in msg.get("title", "") or ("and" in msg.get("title", "").split("while a")[-1]):
-                bad.append(f"{lease} lost in order {[e[-12:] for e in order]}: {list(aw.notifications)} creates {aw.creates()} title {msg.get('title')!r}")
+            if list(aw.notifications) != [NOTE] or aw.creates() != 1 or not _title_ok(msg.get("title"), title):
+                bad.append(f"{lease} lost in order {[e[-14:] for e in order]}: {list(aw.notifications)} creates {aw.creates()} title {msg.get('title')!r}")
             aw.advance(7200)
             if aw.creates() != 1:
                 bad.append(f"{lease}: created again while it stands")
     return bad
+
+
+def sc_halfway(text: str) -> list:
+    """F6: a START THAT FAILED HALF-WAY (the snapshot committed and an operation in progress, the Active flag never on), a restore owed, or an operation alone: the dongle lost in that state is
+    announced like a lost lease; the dongle back, or everything reported over, is not."""
+    bad = []
+    for fam, flags, which in (("Free Power", M.FP_FLAGS, "Free Power"), ("Dump to Grid", M.DG_FLAGS, "Dump to Grid")):
+        act, op, snap = flags
+        for label, on in (("half-made start", (snap, op)), ("restore owed", (snap,)), ("operation alone", (op,))):
+            extra = {e: "on" for e in on}
+            for order in [M.ALL] + _SHUFFLES[:6]:
+                aw = M.AlertWorld(text, extra=extra)
+                aw.lose(order)
+                aw.advance(299)
+                early = bool(aw.notifications)
+                aw.advance(3)
+                if early or list(aw.notifications) != [NOTE] or not _title_ok(aw.notifications[NOTE].get("title"), which):
+                    bad.append(f"{fam} {label}, lost in {[e[-12:] for e in order]}: early {early}, {list(aw.notifications)} {aw.notifications.get(NOTE, {}).get('title')!r}")
+            # the dongle is alive but cannot read the inverter
+            for tel in ("off", "unavailable"):
+                aw = M.AlertWorld(text, extra=extra)
+                aw.put(M.TEL, tel)
+                aw.advance(299)
+                early = bool(aw.notifications)
+                aw.advance(3)
+                if early or list(aw.notifications) != [NOTE] or not _title_ok(aw.notifications[NOTE].get("title"), which):
+                    bad.append(f"{fam} {label} with telemetry {tel}: early {early}, {list(aw.notifications)}")
+            # the dongle returns inside the window with the flags still on: nothing; with everything reported over and telemetry still not on: nothing
+            aw = M.AlertWorld(text, extra=extra)
+            aw.lose()
+            aw.advance(100)
+            aw.back({M.TEL: "on", **{e: "on" for e in on}})
+            aw.advance(3600)
+            if aw.creates():
+                bad.append(f"{fam} {label}: the dongle returned at 100 s and a notice was created")
+            aw = M.AlertWorld(text, extra=extra)
+            aw.put(M.TEL, "off")
+            aw.advance(100)
+            for e in on:
+                aw.put(e, "off")
+            aw.advance(3600)
+            if aw.creates():
+                bad.append(f"{fam} {label}: reported over (all six readable and off) and a notice was created")
+            # one flag of the lease gone unavailable with telemetry still on: the wait ends at once
+            aw = M.AlertWorld(text, extra=extra)
+            aw.put(on[0], "unavailable")
+            aw.advance(3600)
+            if aw.creates():
+                bad.append(f"{fam} {label}: one flag unavailable with telemetry on raised a notice")
+            # reported over only in part: a flag of the lease reads off but another reads unavailable: not over
+            aw = M.AlertWorld(text, extra=extra)
+            aw.put(M.TEL, "off")
+            aw.advance(10)
+            for e in on:
+                aw.put(e, "off")
+            aw.put(act, "unavailable")
+            aw.advance(400)
+            if aw.creates() != 1:
+                bad.append(f"{fam} {label}: a lease flag unavailable is not 'reported over' ({aw.creates()} notices)")
+    # the lease flags of the OTHER family read off while the half-made start lost: unaffected
+    aw = M.AlertWorld(text, extra={M.FP_SNAP: "on"}, dg="off")
+    aw.lose()
+    aw.advance(301)
+    if not _title_ok(aw.notifications.get(NOTE, {}).get("title"), "Free Power"):
+        bad.append("a Free Power restore owed was named for the other family")
+    return bad
+
+
+def sc_titles(text: str) -> list:
+    """The notice names the lease family the flags that read on belong to, whichever flag and whichever trigger: one flag on at a time (six), each telemetry loss and a flag lost; and every pair of
+    one Free Power flag and one Dump flag together (nine) names both."""
+    bad = []
+    for flag in M.LEASE:
+        which = "Free Power" if flag in M.FP_FLAGS else "Dump to Grid"
+        for how in ("tel_off", "tel_gone", "flag_gone"):
+            aw = M.AlertWorld(text, extra={flag: "on"})
+            if how == "tel_off":
+                aw.put(M.TEL, "off")
+            elif how == "tel_gone":
+                aw.put(M.TEL, "unavailable")
+            else:
+                aw.put(flag, "unavailable")
+                aw.put(M.TEL, "unavailable")
+            aw.advance(301)
+            title = aw.notifications.get(NOTE, {}).get("title")
+            if title != _title(which):
+                bad.append(f"{flag[-26:]} on, {how}: title {title!r}, wanted {which!r}")
+    for f in M.FP_FLAGS:
+        for d in M.DG_FLAGS:
+            aw = M.AlertWorld(text, extra={f: "on", d: "on"})
+            aw.put(M.TEL, "off")
+            aw.advance(301)
+            title = aw.notifications.get(NOTE, {}).get("title")
+            if title != _title("Free Power and Dump to Grid"):
+                bad.append(f"{f[-26:]} and {d[-26:]} on: title {title!r}")
+    # a Dump-only lease with the Free Power flags off and readable: the Dump only (F9: the Free Power name must not read the Dump flag)
+    aw = M.AlertWorld(text, dg="on")
+    aw.put(M.TEL, "off")
+    aw.advance(301)
+    if aw.notifications.get(NOTE, {}).get("title") != _title("Dump to Grid"):
+        bad.append(f"a Dump-only lease: {aw.notifications.get(NOTE, {}).get('title')!r}")
+    return bad
+
+
+def sc_return(text: str) -> list:
+    """F9: the dongle returns inside the window but its telemetry does NOT read on (off, unknown, unavailable): a lease flag reads on again, telemetry is not back: the notice still comes at
+    5 minutes. A telemetry that returns on ends it; flags that all read off end it."""
+    bad = []
+    for tel_back in ("off", "unknown", "unavailable", ""):
+        for flag_back in ({M.FP: "on", M.DG: "off"}, {M.FP: "on", M.DG: "off", M.FP_SNAP: "on"}):
+            aw = M.AlertWorld(text, fp="on")
+            aw.lose()
+            aw.advance(100)
+            aw.back({M.TEL: tel_back, **flag_back})
+            aw.advance(199)
+            early = bool(aw.notifications)
+            aw.advance(3)
+            if early or list(aw.notifications) != [NOTE]:
+                bad.append(f"telemetry back as {tel_back!r} with a lease flag on: early {early}, then {list(aw.notifications)}")
+    # telemetry back as unknown/off, but every lease flag reads off: the lease is reported over: nothing
+    for tel_back in ("off", "unknown"):
+        aw = M.AlertWorld(text, fp="on")
+        aw.lose()
+        aw.advance(100)
+        aw.back({M.TEL: tel_back, M.FP: "off", M.DG: "off"})
+        aw.advance(3600)
+        if aw.creates():
+            bad.append(f"telemetry {tel_back!r} with every lease flag off raised a notice")
+    # telemetry is unknown at the END of the wait, the lease flags on and readable: not 'back'
+    aw = M.AlertWorld(text, fp="on")
+    aw.put(M.TEL, "off")
+    aw.advance(250)
+    aw.put(M.TEL, "unknown")
+    aw.advance(51)
+    if list(aw.notifications) != [NOTE]:
+        bad.append("telemetry unknown at the end of the wait counted as back")
+    # telemetry that is off at the end (flapped between off and unavailable): still lost
+    aw = M.AlertWorld(text, fp="on")
+    aw.put(M.TEL, "unavailable")
+    aw.advance(250)
+    aw.put(M.TEL, "off")
+    aw.advance(51)
+    if list(aw.notifications) != [NOTE]:
+        bad.append("telemetry off at the end of the wait counted as back")
+    return bad
+
+
+def sc_clear(text: str) -> list:
+    """F9: the notice stands until the telemetry flag reads on; nothing else dismisses it (a lease flag returning first, a telemetry state change that is not 'on')."""
+    bad = []
+    aw = M.AlertWorld(text, fp="on")
+    aw.lose()
+    aw.advance(301)
+    if list(aw.notifications) != [NOTE]:
+        return ["no notice to test the dismissal against"]
+    for eid, st in ((M.FP, "on"), (M.FP_SNAP, "on"), (M.DG, "off"), (M.FP_SNAP, "off"), (M.DG_OP, "off"), (M.DG_SNAP, "unknown"), (M.TEL, "off"), (M.TEL, "unavailable"), (M.TEL, "unknown"),
+                    (M.TEL, "off"), (M.FP, "unavailable"), (M.FP, "on")):
+        aw.put(eid, st)
+        aw.advance(5)
+        if NOTE not in aw.notifications:
+            bad.append(f"{eid[-24:]} -> {st}: the notice was dismissed while telemetry did not read on")
+            aw.w.notifications.pop(NOTE, None)
+    aw.put(M.TEL, "on")
+    aw.advance(1)
+    if aw.notifications:
+        bad.append("telemetry on did not dismiss the notice")
+    # the clear automation with no notice standing is harmless and creates nothing
+    n0 = aw.creates()
+    aw.put(M.TEL, "off")
+    aw.put(M.TEL, "on")
+    aw.advance(1)
+    if aw.creates() != n0:
+        bad.append("a dismissal created a notice")
+    return bad
+
+
 
 
 def sc_text(text: str) -> list:
@@ -228,7 +435,7 @@ def sc_text(text: str) -> list:
     aw.advance(301)
     if "Free Power or Dump to Grid" not in aw.notifications.get(NOTE, {}).get("title", ""):
         bad.append(f"no flag reading on: title {aw.notifications.get(NOTE, {}).get('title')!r}")
-    for needle in ("NO FIRMWARE GUARD MAY BE RUNNING", "Zero Export", "time-of-use table", "Stop SOC", "15 minutes", "5 minutes", "informational", "clears itself"):
+    for needle in ("NO FIRMWARE GUARD MAY BE RUNNING", "Zero Export", "time-of-use table", "Stop SOC", "15 minutes", "5 minutes", "informational", "clears itself", "(or the restore it still owes)"):
         if needle not in body:
             bad.append(f"the notification lacks {needle!r}")
     if "\n" in body.strip() and False:
@@ -424,17 +631,17 @@ def sc_never(text: str) -> list:
 
 
 def sc_sweep(text: str) -> list:
-    """Every input one at a time: each of the three flags, from every state it can have to every state it can go to (a missing entity, unavailable, unknown, empty, on, off, junk):
+    """Every input one at a time: each of the seven flags, from every state it can have to every state it can go to (a missing entity, unavailable, unknown, empty, on, off, junk):
     the notification is created exactly for the one transition each trigger is written for and never for another. The first state is the world's own at its start (no trigger fires
     for it), the second is one change."""
     bad = []
     states = [None, "unavailable", "unknown", "", "on", "off", "garbage"]
-    # the lease flags: the notification only for on -> unavailable (the telemetry flag standing off, so that the dongle is not back); the other lease flag reads off
-    for lease, key, okey in ((FP, "fp", "dg"), (DG, "dg", "fp")):
+    # each lease flag, the others reading off, the telemetry flag standing off (so that the dongle is not back): the notification only for on -> unavailable
+    for lease in M.LEASE:
         for first in states:
             for second in states:
                 present = tuple(e for e in M.ALL if e != lease or first is not None)
-                aw = M.AlertWorld(text, tel="off", present=present, **{key: first if first is not None else "off", okey: "off"})
+                aw = M.AlertWorld(text, tel="off", present=present, extra={lease: first if first is not None else "off"})
                 if second is None:
                     aw.w.states.pop(lease, None)
                 else:
@@ -442,24 +649,26 @@ def sc_sweep(text: str) -> list:
                 aw.advance(301)
                 want = first == "on" and second == "unavailable"
                 if bool(aw.creates()) != want:
-                    bad.append(f"{lease[-18:]} {first!r} -> {second!r}: {aw.creates()} notices, wanted {int(want)}")
-    # the telemetry flag, with a lease standing on: the notification only for on -> off and on -> unavailable
-    for first in states:
-        for second in states:
-            present = tuple(e for e in M.ALL if e != TEL or first is not None)
-            aw = M.AlertWorld(text, fp="on", dg="off", tel=first if first is not None else "on", present=present)
-            if second is None:
-                aw.w.states.pop(TEL, None)
-            else:
-                aw.put(TEL, second)
-            aw.advance(301)
-            want = first == "on" and second in ("off", "unavailable")
-            if bool(aw.creates()) != want:
-                bad.append(f"telemetry {first!r} -> {second!r}: {aw.creates()} notices, wanted {int(want)}")
-    # and with the lease flags junk, missing or off while the telemetry goes off: only a lease reading on counts
+                    bad.append(f"{lease[-30:]} {first!r} -> {second!r}: {aw.creates()} notices, wanted {int(want)}")
+    # the telemetry flag, with each lease flag in turn standing on: the notification only for on -> off and on -> unavailable
+    for lease in M.LEASE:
+        for first in states:
+            for second in states:
+                present = tuple(e for e in M.ALL if e != M.TEL or first is not None)
+                aw = M.AlertWorld(text, tel=first if first is not None else "on", present=present, extra={lease: "on"})
+                if second is None:
+                    aw.w.states.pop(M.TEL, None)
+                else:
+                    aw.put(M.TEL, second)
+                aw.advance(301)
+                want = first == "on" and second in ("off", "unavailable")
+                if bool(aw.creates()) != want:
+                    bad.append(f"telemetry {first!r} -> {second!r} with {lease[-26:]} on: {aw.creates()} notices, wanted {int(want)}")
+    # and with every lease flag junk, missing or off while the telemetry goes off: only a lease reading on counts
     for lease_state in (None, "unavailable", "unknown", "", "off", "garbage"):
-        aw = M.AlertWorld(text, tel="on", fp=("off" if lease_state is None else lease_state), dg=("off" if lease_state is None else lease_state), present=tuple(e for e in M.ALL if e not in (FP, DG) or lease_state is not None))
-        aw.put(TEL, "off")
+        extra = {e: ("off" if lease_state is None else lease_state) for e in M.LEASE}
+        aw = M.AlertWorld(text, tel="on", extra=extra, present=tuple(e for e in M.ALL if e not in M.LEASE or lease_state is not None))
+        aw.put(M.TEL, "off")
         aw.advance(301)
         if aw.creates():
             bad.append(f"telemetry off with the lease flags {lease_state!r}: {aw.creates()} notices")
@@ -483,12 +692,12 @@ def sc_vocabulary(text: str) -> list:
         bad.append(f"services {[(s, d.get('notification_id')) for s, _e, d in calls]}")
     touched = {e for _t, e, _s in aw.w.history[h0:]}
     if touched - set(M.ALL):
-        bad.append(f"states written beyond the three flags: {sorted(touched - set(M.ALL))}")
+        bad.append(f"states written beyond the seven flags: {sorted(touched - set(M.ALL))}")
     return bad
 
 
-BATTERY = [("static", lambda t: static_problems(t)), ("orders", sc_orders), ("text", sc_text), ("telemetry", sc_telemetry), ("window", sc_window), ("never", sc_never),
-           ("sweep", sc_sweep), ("vocabulary", sc_vocabulary)]
+BATTERY = [("static", lambda t: static_problems(t)), ("orders", sc_orders), ("halfway", sc_halfway), ("titles", sc_titles), ("text", sc_text), ("telemetry", sc_telemetry), ("window", sc_window),
+           ("return", sc_return), ("clear", sc_clear), ("never", sc_never), ("sweep", sc_sweep), ("vocabulary", sc_vocabulary)]
 
 
 def battery(text: str, kill: bool = False, prefer: str | None = None, info: dict | None = None) -> list:
@@ -517,7 +726,16 @@ check("the static rules are live: each flags an injected breach",
                                        PKG_TEXT.replace("binary_sensor.ecco_clock_dongle_telemetry_online\n        to: \"on\"", "sensor.ecco_clock_dongle_ecco_battery_shutdown\n        to: \"on\""),
                                        PKG_TEXT.replace("NO FIRMWARE GUARD MAY BE RUNNING", "a guard may be running"), PKG_TEXT.replace("notification_id: ecco_dongle_lost_in_lease", "notification_id: other", 1))))
 FW_IDS = firmware_ids()
-check("the three dongle entities it reads exist in the firmware (ids derived from the firmware's own names)", {FP, DG, TEL} <= FW_IDS, str(sorted({FP, DG, TEL} - FW_IDS)))
+check("the seven dongle entities it reads (the six lease flags and Telemetry Online) exist in the firmware (ids derived from the firmware's own names)", set(M.ALL) <= FW_IDS, str(sorted(set(M.ALL) - FW_IDS)))
+_fp_commit = re.search(r"if \(data_committed && marker_committed\) \{\s+id\(free_power_snapshot_valid\) = true;", FW_TEXT)
+_fp_active = re.search(r"if \(ok\) \{\s+id\(free_power_active_persisted\) = true;", FW_TEXT)
+_dg_commit = re.search(r"if \(data_committed && marker_committed\) \{\s+id\(dump_snapshot_valid\) = true;", FW_TEXT)
+_dg_active = re.search(r"if \(ok\) \{\s+id\(dump_active_persisted\) = true;", FW_TEXT)
+check("F6, pinned to the firmware: the snapshot is committed (Snapshot Valid true) BEFORE the first write and the Active flag is set only after a verified start (`if (ok)`), for Free Power and for Dump to Grid, so a start that fails "
+      "half-way leaves Snapshot Valid and Operation In Progress on with Active off; the three flags of each lease are the firmware's own entities",
+      all(m is not None for m in (_fp_commit, _fp_active, _dg_commit, _dg_active)) and _fp_commit.start() < _fp_active.start() and _dg_commit.start() < _dg_active.start()
+      and 'name: "Free Power Operation In Progress"' in FW_TEXT and 'name: "Free Power Snapshot Valid"' in FW_TEXT and 'name: "Dump to Grid Operation In Progress"' in FW_TEXT
+      and 'name: "Dump to Grid Snapshot Valid"' in FW_TEXT and "id(free_power_operation_in_progress) = true;" in FW_TEXT and "id(dump_operation_in_progress) = true;" in FW_TEXT)
 check("the firmware facts the alert relies on, pinned: the telemetry flag is published false on every failed read and true after a good one, the two lease flags exist, and a restore at boot ends an open lease",
       'name: "Telemetry Online"' in FW_TEXT and FW_TEXT.count("id(telemetry_online).publish_state(false);") >= 5 and "id(telemetry_online).publish_state(true);" in FW_TEXT
       and 'name: "Free Power Active"' in FW_TEXT and 'name: "Dump to Grid Active"' in FW_TEXT)
@@ -564,7 +782,7 @@ check(f"every id the package defines ({sum(len(x) for x in _mine)}: entities, un
       _clash == [] and sum(len(x) for x in _mine) >= 2, str(_clash[:3]))
 
 _stale = re.search(r'ecco_dump_soc_stale_ms: "(\d+)"', FW_TEXT)
-_reboot = re.search(r'ecco_failback_shadow_assumed_reboot_timeout_ms: "(\d+)"', FW_TEXT)
+_reboot = re.search(r'ecco_' r'failback_shadow_assumed_reboot_timeout_ms: "(\d+)"', FW_TEXT)
 check("the 5 minutes sit between the firmware's two bounds, both pinned: a Dump lease ends (fail closed) when its SOC telemetry is older than 90 s, and ESPHome restarts a dongle with no Home Assistant "
       "client after its default 15 minutes (the firmware relies on that default and models it as 900000 ms)",
       _stale is not None and _reboot is not None and int(_stale.group(1)) == 90000 and int(_reboot.group(1)) == 900000
@@ -588,8 +806,8 @@ BULLET = next((ln for ln in CHANGELOG.splitlines() if "ecco_dongle_lost_alert.ya
 check("the packages README has a Dongle lost during a lease section (the two automations, the fixed id, the 5 minutes with their reasons, the change-from-on rule, the manual fallback, the install reload) and the CHANGELOG has one "
       "bullet that says read-only, offline, nothing installed and that no firmware guard may be running",
       all(s in README for s in ("## Dongle lost during a lease", "ecco_dongle_lost_alert", "ecco_dongle_lost_alert_clear", "ecco_dongle_lost_in_lease", "5 minutes", "no firmware guard may be running", "Zero Export",
-                                "15 minutes", "90 second", "a change FROM `on`", "reload the Automations", "persistent_notification.create"))
-      and all(s in BULLET for s in ("read-only", "nothing installed", "no firmware guard may be running", "5 minutes", "change from `on`", "Automations")), BULLET[:80])
+                                "15 minutes", "90 second", "a change FROM `on`", "reload the Automations", "persistent_notification.create", "half-way", "Operation In Progress", "Snapshot Valid"))
+      and all(s in BULLET for s in ("read-only", "nothing installed", "no firmware guard may be running", "5 minutes", "change from `on`", "Automations", "half-way")), BULLET[:80])
 check("the package, the model and this suite are ASCII with LF line ends", b"\r" not in PKG_RAW and all(ord(c) < 128 for c in PKG_TEXT)
       and b"\r" not in (HERE / "_dongle_lost_alert_sim.py").read_bytes() and b"\r" not in Path(__file__).read_bytes())
 aw0 = M.AlertWorld(PKG_TEXT, present=())
@@ -606,55 +824,95 @@ print("[1] to [3] scenarios, never, vocabulary")
 # ===========================================================================================================================
 for name, fn in BATTERY[1:]:
     probs = fn(PKG_TEXT)
-    check({"orders": "a Free Power or a Dump lease lost, the three entities going unavailable in each of the six orders: nothing before 5 minutes, exactly one notification after, never a second while it stands",
+    check({"orders": "a Free Power or a Dump lease lost, the dongle's entities going unavailable in each of the six orders of the Active and telemetry flags (the four other lease flags first, last or untouched) and 24 shuffles of all seven: nothing before 5 minutes, exactly one notification after with the right title, never a second while it stands",
+           "halfway": "F6: a start that failed half-way (snapshot valid and operation in progress with the Active flag off), a restore owed, an operation alone, for each lease: the dongle lost or its telemetry off is announced at 5 minutes; a return, a lease reported over, or one flag unavailable with telemetry on is not",
+           "titles": "the notice names the lease family of the flag that reads on, for each of the six flags and each trigger, and both when one flag of each family reads on (nine pairs); a Dump-only lease is not called Free Power",
+           "return": "F9: the dongle returns inside the window with telemetry off, unknown, unavailable or empty and a lease flag on: the notice still comes; every lease flag off ends it; telemetry unknown or off at the end of the wait is not 'back'",
+           "clear": "F9: the notice stands until the telemetry flag reads on: a lease flag returning first, a telemetry change to off, unavailable or unknown dismisses nothing; a dismissal with no notice creates nothing",
            "text": "the notification names the leases (both here), says NO FIRMWARE GUARD MAY BE RUNNING, the manual fallback (Zero Export, the time-of-use table), the Stop SOC gap, the 15 minute self-restart, and that it clears itself",
            "telemetry": "a telemetry loss with the dongle alive or only the telemetry flag unavailable, with each lease on: the notice at 5 minutes; a return before it raises nothing and a return after it dismisses it",
            "window": "a return inside the window, a lease that ended meanwhile, a lease reported over, the other lease's off flag, a flap, a second trigger inside the countdown, a second loss after a dismissal, and the 299.9 s to 300.3 s boundary",
            "never": "no lease, an unavailable or unknown start, unknown to unavailable, off to unavailable, an entity that did not exist, a restart, a restart with a lease, a countdown killed by a restart or an automation reload, and a dongle lost "
                     "while Home Assistant restarts (the stated limit): none creates the notification",
-           "sweep": "every flag from every state it can have to every state it can go to (a missing entity, unavailable, unknown, empty, on, off, junk): the notification exactly for the one transition each trigger is written for",
-           "vocabulary": "over a whole session the only service calls are the notification create and dismiss, with the one fixed id, and only the three dongle flags change state"}[name],
+           "sweep": "each of the seven flags from every state it can have to every state it can go to (a missing entity, unavailable, unknown, empty, on, off, junk), with each lease flag in turn standing on for the telemetry sweep: the notification exactly for the one transition each trigger is written for",
+           "vocabulary": "over a whole session the only service calls are the notification create and dismiss, with the one fixed id, and only the seven dongle flags change state"}[name],
           probs == [], str(probs[:2]))
 
 # ===========================================================================================================================
 print("[4] mutation: in-memory mutants of the package, each caught")
 # ===========================================================================================================================
+_TEL_ON = "is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on')"
+_TRIG_DG = "          - binary_sensor.ecco_clock_dongle_dump_to_grid_active\n"
 MUTANTS = [
+    # --- the first version's mutants (anchors updated for the six lease flags) ---
     ("timeout: the wait is 5 seconds", "timeout: \"00:05:00\"", "timeout: \"00:00:05\""),
     ("timeout: the wait is 4 minutes 59 seconds", "timeout: \"00:05:00\"", "timeout: \"00:04:59\""),
     ("timeout: the wait is 5 minutes 1 second", "timeout: \"00:05:00\"", "timeout: \"00:05:01\""),
     ("timeout: the wait is 50 minutes", "timeout: \"00:05:00\"", "timeout: \"00:50:00\""),
-    ("trigger: the lease flag trigger fires on off", "          - binary_sensor.ecco_clock_dongle_dump_to_grid_active\n        to: \"unavailable\"", "          - binary_sensor.ecco_clock_dongle_dump_to_grid_active\n        to: \"off\""),
-    ("trigger: the Dump lease flag is not watched", "          - binary_sensor.ecco_clock_dongle_free_power_active\n          - binary_sensor.ecco_clock_dongle_dump_to_grid_active\n", "          - binary_sensor.ecco_clock_dongle_free_power_active\n"),
+    ("timeout: no continue on timeout", "continue_on_timeout: true", "continue_on_timeout: false"),
+    ("trigger: the lease flag trigger fires on off", "        to: \"unavailable\"\n        id: lease_flag_lost", "        to: \"off\"\n        id: lease_flag_lost"),
+    ("trigger: the Dump Active flag is not watched", _TRIG_DG, ""),
+    ("trigger: the Free Power Active flag is not watched", "          - binary_sensor.ecco_clock_dongle_free_power_active\n          - binary_sensor.ecco_clock_dongle_free_power_operation_in_progress\n", "          - binary_sensor.ecco_clock_dongle_free_power_operation_in_progress\n"),
+    ("trigger: the Free Power operation flag is not watched", "          - binary_sensor.ecco_clock_dongle_free_power_operation_in_progress\n          - binary_sensor.ecco_clock_dongle_free_power_snapshot_valid\n", "          - binary_sensor.ecco_clock_dongle_free_power_snapshot_valid\n"),
+    ("trigger: the Free Power snapshot flag is not watched", "          - binary_sensor.ecco_clock_dongle_free_power_snapshot_valid\n          - binary_sensor.ecco_clock_dongle_dump_to_grid_active\n", "          - binary_sensor.ecco_clock_dongle_dump_to_grid_active\n"),
+    ("trigger: the Dump operation flag is not watched", "          - binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress\n          - binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid\n", "          - binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid\n"),
+    ("trigger: the Dump snapshot flag is not watched", "          - binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid\n        to:", "        to:"),
     ("trigger: the telemetry-off trigger is gone", "        to: \"off\"\n        id: telemetry_off", "        to: \"on\"\n        id: telemetry_off"),
     ("trigger: the telemetry-unavailable trigger is gone", "        to: \"unavailable\"\n        id: telemetry_gone", "        to: \"unknown\"\n        id: telemetry_gone"),
     ("from: a lease flag that read off counts", "{%- if trigger.id == 'lease_flag_lost' -%}{{ was == 'on' }}", "{%- if trigger.id == 'lease_flag_lost' -%}{{ was in ['on', 'off'] }}"),
     ("from: a lease flag that was unknown counts", "{%- if trigger.id == 'lease_flag_lost' -%}{{ was == 'on' }}", "{%- if trigger.id == 'lease_flag_lost' -%}{{ was != 'unavailable' }}"),
     ("from: a lease flag that did not exist counts", "{%- set was = trigger.from_state.state if trigger.from_state is not none else '' -%}", "{%- set was = trigger.from_state.state if trigger.from_state is not none else 'on' -%}"),
     ("from: the lease trigger is judged as a telemetry loss", "{%- if trigger.id == 'lease_flag_lost' -%}", "{%- if trigger.id == 'telemetry_off' -%}"),
-    ("from: a telemetry loss counts without a lease", "{{ was == 'on' and (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') or is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')) }}", "{{ was == 'on' }}"),
-    ("from: a telemetry loss counts only with a Free Power lease", "{{ was == 'on' and (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') or is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')) }}",
-     "{{ was == 'on' and (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on')) }}"),
-    ("from: a telemetry flag that was off counts", "{{ was == 'on' and (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') or", "{{ was != 'unavailable' and (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') or"),
-    ("wait: unavailable telemetry ends the wait", "{{ is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on')\n             or (is_state", "{{ not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'off')\n             or (is_state"),
-    ("wait: either lease reported off ends the wait", "(is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off')) }}\n        timeout", "(is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') or is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off')) }}\n        timeout"),
-    ("wait: a return never ends the wait", "{{ is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on')\n             or (is_state", "{{ false\n             or (is_state"),
-    ("final: a return is not re-checked", "{{ not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on')\n             and not (", "{{ true\n             and not ("),
-    ("final: a lease reported over is not re-checked", "             and not (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off')) }}\n      - action", "             and true }}\n      - action"),
+    ("from: a telemetry loss counts without a lease", "{{ was == 'on' and (n.fp_on or n.dg_on) }}", "{{ was == 'on' }}"),
+    ("from: a telemetry loss counts only with a Free Power lease", "{{ was == 'on' and (n.fp_on or n.dg_on) }}", "{{ was == 'on' and n.fp_on }}"),
+    ("from: a telemetry loss counts only with a Dump lease", "{{ was == 'on' and (n.fp_on or n.dg_on) }}", "{{ was == 'on' and n.dg_on }}"),
+    ("from: a telemetry flag that was off counts", "{{ was == 'on' and (n.fp_on or n.dg_on) }}", "{{ was != 'unavailable' and (n.fp_on or n.dg_on) }}"),
+    ("wait: unavailable telemetry ends the wait", "{{ " + _TEL_ON + " or n.off == 6 }}", "{{ not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'off') or n.off == 6 }}"),
+    ("wait: either family reported off ends the wait", "or n.off == 6 }}", "or n.off >= 3 }}"),
+    ("wait: five of six reported off ends the wait", "or n.off == 6 }}", "or n.off >= 5 }}"),
+    ("wait: a return never ends the wait", "{{ " + _TEL_ON + " or n.off == 6 }}", "{{ false or n.off == 6 }}"),
+    ("final: a return is not re-checked", "{{ not " + _TEL_ON + " and n.off != 6 }}", "{{ true and n.off != 6 }}"),
+    ("final: a lease reported over is not re-checked", "{{ not " + _TEL_ON + " and n.off != 6 }}", "{{ not " + _TEL_ON + " and true }}"),
     ("mode: a new trigger restarts the count", "    mode: single\n    max_exceeded: silent\n    triggers:\n      - trigger: state\n        entity_id:\n          - binary_sensor.ecco_clock_dongle_free_power_active", "    mode: parallel\n    max_exceeded: silent\n    triggers:\n      - trigger: state\n        entity_id:\n          - binary_sensor.ecco_clock_dongle_free_power_active"),
     ("clear: the notice is dismissed when telemetry goes off", "        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online\n        to: \"on\"\n    actions:", "        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online\n        to: \"off\"\n    actions:"),
     ("clear: the dismissal names another id", "      - action: persistent_notification.dismiss\n        data:\n          notification_id: ecco_dongle_lost_in_lease", "      - action: persistent_notification.dismiss\n        data:\n          notification_id: ecco_dongle_lost_x"),
     ("create: the notification has another id", "          notification_id: ecco_dongle_lost_in_lease\n          title", "          notification_id: ecco_dongle_lost_x\n          title"),
-    ("which: Free Power is named for a Dump", "trigger.entity_id == 'binary_sensor.ecco_clock_dongle_dump_to_grid_active'", "trigger.entity_id == 'binary_sensor.ecco_clock_dongle_free_power_active'"),
+    ("which: Free Power is named for a Dump", "trigger.entity_id in fpl", "trigger.entity_id in dgl"),
     ("which: both leases are not named", "{{ 'Free Power and Dump to Grid' if (a and b) else ('Free Power' if a else ('Dump to Grid' if b else 'Free Power or Dump to Grid')) }}", "{{ 'Free Power' if a else ('Dump to Grid' if b else 'Free Power or Dump to Grid') }}"),
     ("text: the guard warning is removed", "NO FIRMWARE GUARD MAY BE RUNNING", "a guard may be running"),
     ("text: the manual fallback is removed", "set the export policy back to Zero Export (this stops a forced export) or put", "set the export policy back (this stops a forced export) or put"),
     ("which: no flag reading on is not named", "('Dump to Grid' if b else 'Free Power or Dump to Grid')", "('Dump to Grid' if b else 'Dump to Grid')"),
     ("text: the self-clearing is removed", "it clears itself when the dongle's telemetry returns", "it stays"),
     ("vocabulary: a button is pressed", "      - action: persistent_notification.create\n        data:\n          notification_id: ecco_dongle_lost_in_lease", "      - action: button.press\n        data:\n          notification_id: ecco_dongle_lost_in_lease"),
-    ("reads: another dongle entity is read", "{%- set a = (trigger.id == 'lease_flag_lost'", "{%- set zz = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') -%}\n            {%- set a = (trigger.id == 'lease_flag_lost'"),
+    ("reads: another dongle entity is read", "            {%- set a = (trigger.id == 'lease_flag_lost'", "            {%- set zz = states('sensor.ecco_clock_dongle_ecco_battery_shutdown') -%}\n            {%- set a = (trigger.id == 'lease_flag_lost'"),
     ("hygiene: an address appears in a comment", "# NOT INSTALLED, NOT LIVE-PROVEN.", "# 198.51.100.7 NOT INSTALLED, NOT LIVE-PROVEN."),
     ("wording: the header drops the 5 minute reasons", "Why 5 minutes:", "Why:"),
+    # --- NEW (F6 and F9): the half-made start, the names, the return, the clear ---
+    ("new lease flags: the snapshot flags are not lease flags (all four templates)", ", 'binary_sensor.ecco_clock_dongle_free_power_snapshot_valid'", "", 4),
+    ("new lease flags: the Dump snapshot flag is not a lease flag (all four templates)", ", 'binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid'", "", 4),
+    ("new lease flags: the Free Power operation flag is not a lease flag (all four templates)", ", 'binary_sensor.ecco_clock_dongle_free_power_operation_in_progress'", "", 4),
+    ("new lease flags: the Dump operation flag is not a lease flag (all four templates)", ", 'binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress'", "", 4),
+    ("new lease flags: the Active flags are not lease flags (templates)", "['binary_sensor.ecco_clock_dongle_free_power_active', ", "[", 4),
+    ("new which: the Free Power name reads the Dump flag", "or n.fp_on -%}", "or n.dg_on -%}"),
+    ("new which: the Dump name reads the Free Power flag", "or n.dg_on -%}", "or n.fp_on -%}"),
+    ("new which: both named when either reads on", "(a and b)", "(a or b)"),
+    ("new which: the Dump name is shortened", "('Dump to Grid' if b else", "('Dump' if b else"),
+    ("new which: a Dump trigger is named a Free Power flag", "(trigger.id == 'lease_flag_lost' and trigger.entity_id in dgl) or n.dg_on", "(trigger.id == 'lease_flag_lost' and trigger.entity_id in fpl) or n.dg_on"),
+    ("new clear: it also fires on the Free Power flag on", "        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online\n        to: \"on\"\n    actions:", "        entity_id:\n          - binary_sensor.ecco_clock_dongle_telemetry_online\n          - binary_sensor.ecco_clock_dongle_free_power_active\n        to: \"on\"\n    actions:"),
+    ("new clear: it fires on any telemetry change", "        to: \"on\"\n    actions:\n      - action: persistent_notification.dismiss", "    actions:\n      - action: persistent_notification.dismiss"),
+    ("new clear: it fires on telemetry off or on", "        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online\n        to: \"on\"\n    actions:", "        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online\n        to:\n          - \"on\"\n          - \"unknown\"\n    actions:"),
+    ("new final: telemetry unknown at the end counts as back", "{{ not " + _TEL_ON + " and n.off != 6 }}", "{{ not " + _TEL_ON + " and not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'unknown') and n.off != 6 }}"),
+    ("new final: telemetry off at the end counts as back", "{{ not " + _TEL_ON + " and n.off != 6 }}", "{{ not " + _TEL_ON + " and not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'off') and n.off != 6 }}"),
+    ("new final: a readable off flag of any lease ends it", "and n.off != 6 }}", "and n.off < 1 }}"),
+    ("new wait: telemetry unknown ends the wait", "{{ " + _TEL_ON + " or n.off == 6 }}", "{{ not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'unavailable') or n.off == 6 }}"),
+    ("new wait: telemetry off ends the wait", "{{ " + _TEL_ON + " or n.off == 6 }}", "{{ states('binary_sensor.ecco_clock_dongle_telemetry_online') in ['on', 'off'] or n.off == 6 }}"),
+    ("new wait: an unavailable flag counts as reported over", "{%- if is_state(e, 'off') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {%- for e in dgl -%}{%- if is_state(e, 'on') -%}{%- set n.dg_on = true -%}{%- endif -%}{%- if is_state(e, 'off') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {{ " + _TEL_ON + " or n.off == 6 }}",
+     "{%- if is_state(e, 'off') or is_state(e, 'unavailable') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {%- for e in dgl -%}{%- if is_state(e, 'on') -%}{%- set n.dg_on = true -%}{%- endif -%}{%- if is_state(e, 'off') or is_state(e, 'unavailable') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {{ " + _TEL_ON + " or n.off == 6 }}"),
+    ("new wait: the Dump flags are not counted as reported over", "{%- for e in dgl -%}{%- if is_state(e, 'on') -%}{%- set n.dg_on = true -%}{%- endif -%}{%- if is_state(e, 'off') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {{ " + _TEL_ON + " or n.off == 6 }}",
+     "{%- for e in dgl -%}{%- if is_state(e, 'on') -%}{%- set n.dg_on = true -%}{%- endif -%}{%- endfor -%}\n          {{ " + _TEL_ON + " or n.off >= 3 }}"),
+    ("new condition: a telemetry loss with only a Dump snapshot flag on does not count (the Dump list lacks it)", "{%- set dgl = ['binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'binary_sensor.ecco_clock_dongle_dump_to_grid_operation_in_progress', 'binary_sensor.ecco_clock_dongle_dump_to_grid_snapshot_valid'] -%}\n          {%- set n = namespace(fp_on=false, dg_on=false, off=0) -%}\n          {%- for e in fpl -%}{%- if is_state(e, 'on') -%}{%- set n.fp_on = true -%}{%- endif -%}{%- if is_state(e, 'off') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {%- for e in dgl -%}{%- if is_state(e, 'on') -%}{%- set n.dg_on = true -%}{%- endif -%}{%- if is_state(e, 'off') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {%- set was",
+     "{%- set dgl = ['binary_sensor.ecco_clock_dongle_dump_to_grid_active'] -%}\n          {%- set n = namespace(fp_on=false, dg_on=false, off=0) -%}\n          {%- for e in fpl -%}{%- if is_state(e, 'on') -%}{%- set n.fp_on = true -%}{%- endif -%}{%- if is_state(e, 'off') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {%- for e in dgl -%}{%- if is_state(e, 'on') -%}{%- set n.dg_on = true -%}{%- endif -%}{%- if is_state(e, 'off') -%}{%- set n.off = n.off + 1 -%}{%- endif -%}{%- endfor -%}\n          {%- set was"),
+    ("new text: the half-made start wording is removed", "(or the restore it still owes)", "(or so)"),
 ]
 total = len(MUTANTS)
 killed = 0
@@ -662,10 +920,11 @@ survivors: list = []
 prefer: dict = {}
 for entry in MUTANTS:
     label, old, new = entry[:3]
-    if PKG_TEXT.count(old) != 1:
-        check(f"mutant anchor is unique: {label}", False, f"{PKG_TEXT.count(old)}x")
+    want_n = entry[3] if len(entry) > 3 else 1
+    if PKG_TEXT.count(old) != want_n:
+        check(f"mutant anchor is found {want_n}x: {label}", False, f"{PKG_TEXT.count(old)}x")
         continue
-    mutated = PKG_TEXT.replace(old, new, 1)
+    mutated = PKG_TEXT.replace(old, new)
     family = label.split(":", 1)[0]
     info: dict = {}
     found = battery(mutated, kill=True, prefer=prefer.get(family), info=info)
@@ -677,8 +936,9 @@ for entry in MUTANTS:
         survivors.append(label)
         FAILURES.append(f"mutant survived: {label}")
         print(f"  FAIL  mutant survived: {label}")
-check(f"{total} mutants (the 5 minutes on both sides, every trigger, every from-state rule, the wait and the final re-check, the mode, the dismissal, the ids, the lease names, the words, "
-      "the vocabulary and the reads): all caught", killed == total and total >= 25, f"{killed}/{total} {survivors[:3]}")
+_new = len([m for m in MUTANTS if m[0].startswith("new ")])
+check(f"{total} mutants, {_new} of them new for F6 and F9 (the 5 minutes on both sides, every trigger of the six lease flags, every from-state rule, the wait and the final re-check, telemetry off or unknown at the end, "
+      "the mode, the dismissal and its triggers, the ids, the lease names, the words, the vocabulary and the reads): all caught", killed == total and total >= 50 and _new >= 15, f"{killed}/{total} {survivors[:3]}")
 _harmless = PKG_TEXT.replace("# WHY. A Free Power or Dump to Grid lease is guarded", "# WHY, restated. A Free Power or Dump to Grid lease is guarded")
 check("a harmless rewrite (a comment) survives the battery, and a rewrite of a rule does not", _harmless != PKG_TEXT and battery(_harmless, kill=True) == []
       and battery(PKG_TEXT.replace("timeout: \"00:05:00\"", "timeout: \"00:05:30\""), kill=True) != [])

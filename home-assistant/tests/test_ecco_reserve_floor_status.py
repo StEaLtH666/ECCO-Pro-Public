@@ -16,6 +16,10 @@ fact exists to base one on). Nothing was installed and nothing was written live.
   [4] differential  the package against an independent model of the rules over a seeded random sample
   [5] notification  the opt-in, the 10 minute debounce, a flap, a reload, a restart, dismissal
   [6] no writes   the model saw no service call but the notification, and no state outside the package's own entities and helper
+  [4b] limits     F4: the dongle's Configuration Online flag off for more than 1800 s and any single PENDING cause older than 6 hours read UNREADABLE (last_changed), and a reason never moves with time
+  [4c] vocabulary F9: every recovery text the firmware publishes, and invented ones, against the clear/open rule
+  [4d] charging   F5: the charging slots' targets are listed (slot, source, target) and not judged; every reason says so
+  [5b] flips      F9: a BELOW/UNREADABLE flip does not restart the debounce; a reload of the template entities or of the opt-in helper dismisses nothing; the notice's words
   [7] mutation    in-memory mutants of the package, each caught
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
@@ -23,6 +27,7 @@ Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import re
@@ -106,6 +111,8 @@ FORBIDDEN_DOMAINS = ("number", "select", "switch", "button", "script", "climate"
 # the words a contract id, a forecast or a claim of enforcement would need (the split literals keep this file clear of the Intelligence id scan)
 INTEL = "ecco_" "intel"
 SOLCAST = "solc" "ast"
+# F3: no id, friendly name, notice title or notice text may say that the inverter holds or enforces the reserve (R6 is not proven, no behavioural check exists)
+CLAIM_WORDS = re.compile(r"\b(held|holds|hold|enforced|enforce|enforces|enforcement)\b", re.I)
 
 
 def code_lines(text: str) -> str:
@@ -144,7 +151,8 @@ def privacy_problems(text: str) -> list:
 
 
 HEADER_MUST = ("A REGISTER IS NOT BEHAVIOUR", "NO DRIFT STATE", "THE FLOOR.", "PENDING", "UNREADABLE (never a guess)", "THE BINARY SENSOR", "THE NOTIFICATION", "FAIL SAFE",
-               "HARD RULES", "LIMITS", "RECORDER FOOTPRINT (ESTIMATE", "INSTALL.", "proof R6", "naive local-time text", "measured on a real core", "1800 s", "150 s", "10 minutes")
+               "HARD RULES", "LIMITS", "RECORDER FOOTPRINT (ESTIMATE", "INSTALL.", "proof R6", "naive local-time text", "measured on a real core", "1800 s", "150 s", "10 minutes",
+               "NOT BUILT: THE BEHAVIOURAL CHECK", "NOT HOLDING", "CHARGING SLOTS ARE NOT JUDGED", "6 hours", "continuous Home Assistant uptime", "charging slots not judged", "NAMES.")
 
 
 def static_problems(text: str) -> list:
@@ -194,6 +202,11 @@ def static_problems(text: str) -> list:
         bad.append("a state word claims enforcement or DRIFT")
     if "NOT PROVEN" not in code:
         bad.append("the behaviour note is gone")
+    if CLAIM_WORDS.search(code):
+        bad.append(f"a word that says the inverter holds or enforces the reserve appears in an id, a name, a notice or a state: {CLAIM_WORDS.search(code).group(0)!r}")
+    readers = json.dumps([b for blk in doc.get("template") or [] for b in (blk.get("binary_sensor") or [])]) + json.dumps(doc.get("automation") or [])
+    if M.CORE in readers:
+        bad.append("the internal record is read outside the status sensor")
     for p in privacy_problems(text):
         bad.append(f"hygiene: {p}")
     if "\r" in text or "\t" in text:
@@ -223,8 +236,9 @@ def whole(x):
     return int(v)
 
 
-def oracle(st: dict, now: float, zone) -> tuple:
-    """(verdict, floor or None) of the rules, from a map entity -> state text (a missing entity reads 'unknown')."""
+def oracle(st: dict, now: float, zone, since: dict | None = None) -> tuple:
+    """(verdict, floor or None) of the rules, from a map entity -> state text (a missing entity reads 'unknown') and, for F4, the seconds each entity has held its state (default 0)."""
+    since = since or {}
     g = lambda e: st.get(e, "unknown")  # noqa: E731
     E = whole(g(M.PLAN))
     if E is None:
@@ -235,8 +249,9 @@ def oracle(st: dict, now: float, zone) -> tuple:
     rfp, rdg = g(M.REC_FP), g(M.REC_DG)
     if rfp in ("unknown", "unavailable", "") or rdg in ("unknown", "unavailable", ""):
         return "UNREADABLE", None
-    if "on" in flags or rfp != "NONE" or not (rdg.startswith("NONE") or rdg.startswith("ACCEPTED")):
-        return "PENDING", None
+    causes = [e for e in M.FLAGS if g(e) == "on"] + ([M.REC_FP] if rfp != "NONE" else []) + ([M.REC_DG] if not (rdg.startswith("NONE") or rdg.startswith("ACCEPTED")) else [])
+    if causes:
+        return ("UNREADABLE" if max(since.get(e, 0) for e in causes) > 21600 else "PENDING"), None
     online, txt = g(M.ONLINE), g(M.CFGTIME)
     age = None
     try:
@@ -245,7 +260,7 @@ def oracle(st: dict, now: float, zone) -> tuple:
         age = None
     if online not in ("on", "off") or age is None:
         return "UNREADABLE", None
-    if age > LOST_S:
+    if age > LOST_S or (online == "off" and since.get(M.ONLINE, 0) > LOST_S):
         return "UNREADABLE", None
     if online == "off" or age > FRESH_S:
         return "PENDING", None
@@ -423,6 +438,13 @@ def sc_pending(text: str) -> list:
     if rec(fw).get("v") != "UNREADABLE":
         bad.append("a lease with an unreadable reserve is not UNREADABLE")
     undo(fw, back)
+    # a lease (or a restore owed) with the configuration read lost, stale, or online off is PENDING: the lease explains the wait (F9), for every busy flag
+    for e in M.FLAGS:
+        for mods in ({M.CFGTIME: aged(fw, 4000)}, {M.CFGTIME: aged(fw, 4000), M.ONLINE: "off"}, {M.CFGTIME: aged(fw, 400)}, {M.ONLINE: "off"}):
+            back = apply(fw, {e: "on", **mods})
+            if rec(fw).get("v") != "PENDING":
+                bad.append(f"{e[-36:]} on with {sorted(mods.values())[:1]}: {rec(fw).get('v')}, wanted PENDING")
+            undo(fw, back)
     # freshness at its limits (150 s fresh, 151 s stale, offline stale, 1800 s stale, 1801 s lost, a future text judged by its distance)
     for age, online, want in [(0, "on", "MATCH"), (149, "on", "MATCH"), (150, "on", "MATCH"), (151, "on", "PENDING"), (900, "on", "PENDING"), (1799, "on", "PENDING"), (1800, "on", "PENDING"),
                               (1801, "on", "UNREADABLE"), (7200, "on", "UNREADABLE"), (10, "off", "PENDING"), (1801, "off", "UNREADABLE"), (-149, "on", "MATCH"), (-151, "on", "PENDING"),
@@ -453,7 +475,7 @@ def sc_attributes(text: str) -> list:
     elif not any(x == f"{M.SOC[2]} = 5 (fresh)" for x in inputs):
         bad.append("an input does not carry its freshness")
     back = apply(fw, {e: "0" for e in M.SOC[1:]})
-    if (a("floor_percent"), a("difference_percent"), a("mismatch"), fw.state(M.STATUS), a("reason")) != (0, -5, True, "BELOW", "the registers read a floor of 0 percent, below the effective reserve of 5 percent: the reserve is software only"):
+    if (a("floor_percent"), a("difference_percent"), a("mismatch"), fw.state(M.STATUS), a("reason")) != (0, -5, True, "BELOW", "the registers read a floor of 0 percent, below the effective reserve of 5 percent: the reserve is software only; charging slots not judged"):
         bad.append(f"BELOW attributes {[a(n) for n in ('floor_percent', 'difference_percent', 'mismatch', 'reason')]}")
     undo(fw, back)
     back = apply(fw, {M.SHUT: "10"})
@@ -476,7 +498,7 @@ def sc_attributes(text: str) -> list:
     if (fw.state(M.STATUS), fw.state(M.BINARY), a("effective_reserve_percent")) != ("UNREADABLE", "on", "unknown"):
         bad.append("an unreadable reserve attributes")
     undo(fw, back)
-    if len(fw.state(M.CORE)) > 255 or any(len(rec(fw).get("why", "")) > 140 for _ in (0,)):
+    if len(fw.state(M.CORE)) > 255 or any(len(rec(fw).get("why", "")) > 160 for _ in (0,)):
         bad.append("the record is too long")
     return bad
 
@@ -489,7 +511,8 @@ def sc_reasons(text: str) -> list:
     cases = [({M.SOC[4]: "unavailable"}, "reads unavailable"), ({M.SRC[5]: "Battery"}, "reads Battery"), ({M.FLAGS[6]: "on"}, "in progress"), ({M.REC_FP: "OWED"}, "recovery state is open"),
              ({M.CFGTIME: aged(fw, 400)}, "waiting for a fresh configuration read"), ({M.ONLINE: "off"}, "offline"), ({M.CFGTIME: aged(fw, 4000)}, "cannot be trusted"),
              ({M.PLAN: "unknown"}, "plan effective reserve cannot be read"), ({M.SHUT: "unknown"}, "shutdown SOC cannot be read"), ({M.TOU: "unknown"}, "Time Of Use flag"),
-             ({**{e: "Grid" for e in M.SRC}}, "no slot has charge source None"), ({M.PLAN: "7"}, "software only"), ({M.PLAN: "3"}, "above the effective reserve of 3 percent"),
+             ({**{e: "Grid" for e in M.SRC}}, "no slot has charge source None"), ({M.PLAN: "7"}, "software only; charging slots not judged"), ({M.PLAN: "3"}, "above the effective reserve of 3 percent; charging slots not judged"), ({}, "(a register is not behaviour; charging slots not judged)"),
+             ({M.PLAN: "100", **{e: "99" for e in M.SOC[1:]}}, "reserve of 100 percent: the reserve is software only; charging slots not judged"),
              ({M.REC_DG: "unknown", M.REC_FP: "unknown"}, "a recovery state cannot be read")]
     for mods, needle in cases:
         back = apply(fw, mods)
@@ -519,6 +542,11 @@ def sc_binary(text: str) -> list:
     fw.override(M.STATUS, None)
     if fw.attr(M.BINARY, "status") != fw.state(M.STATUS):
         bad.append("the binary sensor's status attribute")
+    meaning = str(fw.attr(M.BINARY, "meaning"))
+    if "registers read below the reserve, or cannot be read" not in meaning or "says nothing about what the battery does" not in meaning:
+        bad.append(f"the binary sensor's meaning attribute is {meaning!r}")
+    if CLAIM_WORDS.search(meaning):
+        bad.append("the meaning attribute claims enforcement")
     # the status sensor is unavailable while the record cannot be read
     for j in ["unavailable", "unknown", "", "BELOW|1|2", "WHATEVER|-|-|-|-|-|-|-|-|x", "MATCH|1|2|3|4|5|6|7|8|9|10"]:
         fw.override(M.CORE, j)
@@ -719,6 +747,37 @@ def sc_differential(text: str, samples: int = 400, seed: int = 7) -> list:
     return bad
 
 
+def sc_differential_ages(text: str, samples: int = 160, seed: int = 11) -> list:
+    """F4 against the independent model: random worlds in which the causes and the online flag have held their state for 0 s to 50000 s (the model's clock record is set, then every template renders again)."""
+    rnd = random.Random(seed)
+    bad = []
+    fw = world(text)
+    zone = fw.zone
+    ages = [0, 100, 1800, 1801, 21600, 21601, 50000]
+    for _ in range(samples):
+        mods = {e: rnd.choice(["off", "off", "off", "on"]) for e in M.FLAGS}
+        mods[M.REC_FP] = rnd.choice(["NONE", "NONE", "LOCKED_ORIGINAL"])
+        mods[M.REC_DG] = rnd.choice(["NONE", "NONE - idle", "LOCKED - operator decision required"])
+        mods[M.ONLINE] = rnd.choice(["on", "on", "off"])
+        mods[M.CFGTIME] = aged(fw, rnd.choice([0, 30, 149, 151, 1799, 1801, 4000]))
+        fw.put_many(mods)
+        now = fw.w.t + fw.w.clock_offset
+        since = {}
+        for e in list(M.FLAGS) + [M.REC_FP, M.REC_DG, M.ONLINE]:
+            since[e] = rnd.choice(ages) if rnd.random() < 0.5 else 0
+            fw.w.changed_at[e] = now - since[e]
+        fw.force()
+        want, floor = oracle(snapshot(fw), now, zone, since)
+        r = rec(fw)
+        if r.get("v") != want or (floor is not None and r.get("floor") != str(floor)):
+            bad.append(f"{r.get('v')}/{r.get('floor')} against the model's {want}/{floor} for {mods} with ages {since}")
+            if len(bad) >= 3:
+                break
+    if fw.errors:
+        bad.append(f"template errors {fw.errors[:2]}")
+    return bad
+
+
 def sc_writes(text: str) -> list:
     """Over a whole session the model saw nothing but the notification service, and wrote no state outside the package's own entities and helper."""
     bad = []
@@ -740,8 +799,258 @@ def sc_writes(text: str) -> list:
     return bad
 
 
+def _aged_change(fw, eid: str, seconds: float) -> None:
+    """Make the model's last_changed of `eid` `seconds` old (the model's own clock record), then render everything again."""
+    fw.w.changed_at[eid] = fw.w.t + fw.w.clock_offset - seconds
+    fw.force()
+
+
+CAUSES = [(e, "on") for e in M.FLAGS] + [(M.REC_FP, "LOCKED_ORIGINAL"), (M.REC_DG, "LOCKED - operator decision required")]
+
+
+def sc_limits(text: str) -> list:
+    """F4: two limits keep a wait from lasting for ever. (a) The dongle's Configuration Online flag off for more than 1800 s (its last_changed) is UNREADABLE even while the configuration time stays fresh;
+    (b) any single PENDING cause that has lasted more than 6 hours (its last_changed) is UNREADABLE. A restart resets last_changed: the limits count continuous uptime only."""
+    bad = []
+    # (a) online off, the configuration time kept fresh by the dongle's feed (firmware Block A failing, Block B publishing a new time with online false)
+    fw = world(text, live=True)
+    fw.put(M.ONLINE, "off")
+    fw.advance(1800)
+    fw.force()
+    r = rec(fw)
+    if r.get("v") != "PENDING" or fw.state(M.BINARY) != "off" or r.get("cfg") != "stale":
+        bad.append(f"online off for 1800 s: {r.get('v')} / {r.get('cfg')} / binary {fw.state(M.BINARY)}, wanted PENDING / stale / off")
+    fw.advance(1)
+    fw.force()
+    r = rec(fw)
+    if r.get("v") != "UNREADABLE" or fw.state(M.BINARY) != "on" or "offline for more than 1800 s" not in r.get("why", "") or r.get("cfg") != "lost":
+        bad.append(f"online off for 1801 s: {r.get('v')} / {r.get('cfg')} / binary {fw.state(M.BINARY)} / {r.get('why')!r}, wanted UNREADABLE / lost / on")
+    c1 = fw.state(M.CORE)
+    fw.advance(240)
+    if fw.state(M.CORE) != c1:
+        bad.append("the record of a long-offline read moves with time (a recorder row a minute)")
+    fw.put(M.ONLINE, "on")
+    if rec(fw).get("v") != "MATCH":
+        bad.append(f"online back on: {rec(fw).get('v')}")
+    fw.put(M.ONLINE, "off")
+    fw.advance(1000)
+    if rec(fw).get("v") != "PENDING":
+        bad.append("a second offline period did not restart the 1800 s")
+    # an online flag that has been ON for a day is no limit
+    fw = world(text, live=True)
+    _aged_change(fw, M.ONLINE, 86400)
+    if rec(fw).get("v") != "MATCH":
+        bad.append(f"online on for a day reads {rec(fw).get('v')}")
+    # a busy cause explains the wait: a lease with a lost configuration read, and with online off for hours, is PENDING until the cause hits 6 hours
+    fw = world(text, live=True)
+    fw.put(M.FLAGS[0], "on")
+    fw.put(M.ONLINE, "off")
+    _aged_change(fw, M.ONLINE, 7200)
+    fw.put(M.CFGTIME, aged(fw, 4000))
+    fw.feed_handle["on"] = False
+    fw.force()
+    r = rec(fw)
+    if r.get("v") != "PENDING":
+        bad.append(f"a lease with a lost read and online off for 2 hours reads {r.get('v')}, wanted PENDING")
+    # (b) every cause, at 6 hours and one second
+    for e, val in CAUSES:
+        fw = world(text, live=True)
+        fw.put(e, val)
+        _aged_change(fw, e, 21600)
+        r = rec(fw)
+        if r.get("v") != "PENDING" or fw.state(M.BINARY) != "off":
+            bad.append(f"{e[-40:]} {val!r} for 6 hours reads {r.get('v')}/{fw.state(M.BINARY)}, wanted PENDING/off")
+        _aged_change(fw, e, 21601)
+        r = rec(fw)
+        if r.get("v") != "UNREADABLE" or fw.state(M.BINARY) != "on" or "more than 6 hours" not in r.get("why", "") or e not in r.get("why", ""):
+            bad.append(f"{e[-40:]} {val!r} for 6 h 1 s reads {r.get('v')}/{fw.state(M.BINARY)}/{r.get('why')!r}")
+        fw.put(e, "off" if e in M.FLAGS else "NONE")
+        if rec(fw).get("v") != "MATCH":
+            bad.append(f"{e[-40:]}: the cause ended and the verdict is {rec(fw).get('v')}")
+    # the OLDEST cause counts, whatever the others
+    fw = world(text, live=True)
+    fw.put(M.FLAGS[0], "on")
+    fw.put(M.FLAGS[5], "on")
+    fw.put(M.REC_DG, "LOCKED - operator decision required")
+    _aged_change(fw, M.FLAGS[0], 100)
+    _aged_change(fw, M.REC_DG, 3000)
+    if rec(fw).get("v") != "PENDING":
+        bad.append("three young causes read UNREADABLE")
+    _aged_change(fw, M.FLAGS[5], 30000)
+    r = rec(fw)
+    if r.get("v") != "UNREADABLE" or M.FLAGS[5] not in r.get("why", ""):
+        bad.append(f"the oldest cause did not decide: {r.get('v')} {r.get('why')!r}")
+    # a cause that flips off and on again starts again
+    fw.put(M.FLAGS[5], "off")
+    fw.put(M.FLAGS[5], "on")
+    if rec(fw).get("v") != "PENDING":
+        bad.append("a cause that ended and began again kept its old age")
+    # real time: a flag on for 6 hours and a minute of passing time
+    fw = world(text, live=True)
+    fw.put(M.FLAGS[2], "on")
+    fw.advance(21600)
+    if rec(fw).get("v") != "PENDING":
+        bad.append(f"a flag on for 21600 s of real time reads {rec(fw).get('v')}")
+    fw.advance(61)
+    if rec(fw).get("v") != "UNREADABLE":
+        bad.append(f"a flag on for 21661 s of real time reads {rec(fw).get('v')}")
+    c1 = fw.state(M.CORE)
+    fw.advance(240)
+    if fw.state(M.CORE) != c1 or rec(fw).get("v") != "UNREADABLE":
+        bad.append("the record of a pending cause past 6 hours moves with time (a recorder row a minute)")
+    if fw.errors:
+        bad.append(f"template errors {fw.errors[:2]}")
+    return bad
+
+
+FW_FP_TEXTS = sorted(set(re.findall(r'"(NONE|LOCKED_[A-Z]+|REVIEWED|ACCEPT_RUNNING)"', FW_TEXT)))
+FW_DG_TEXTS = sorted(set(re.findall(r'dump_recovery_state\)\.publish_state\("([^"]*)"\)', FW_TEXT)))
+
+
+def sc_recovery(text: str) -> list:
+    """F9: every recovery text the firmware publishes, and invented ones, against the rule: Free Power is clear only for the exact text NONE; Dump to Grid is clear for a text that starts NONE or ACCEPTED;
+    anything else (a LOCKED, PENDING, NEITHER, FOREIGN, CRITICAL, ACCEPT_RUNNING, REVIEWED text) is an open recovery: PENDING, never judged."""
+    bad = []
+    fw = world(text)
+    fp_clear = {"NONE"}
+    for val in FW_FP_TEXTS + ["NEITHER", "FOREIGN", "CRITICAL", "none", "NONE ", "NONE - idle", "ACCEPTED", "accepted", "ACCEPTED - operator chose to keep the live inverter state", "LOCKED", "garbage"]:
+        back = apply(fw, {M.REC_FP: val})
+        v = rec(fw).get("v")
+        want = "MATCH" if val in fp_clear else "PENDING"
+        if v != want:
+            bad.append(f"free power recovery {val!r} reads {v}, wanted {want}")
+        undo(fw, back)
+    for val in FW_DG_TEXTS + ["NEITHER", "NEITHER - repeated restore verify mismatch", "FOREIGN (not overwritten)", "CRITICAL", "ACCEPT_RUNNING", "REVIEWED", "LOCKED_NEITHER", "N", "LOCKED", "PENDING",
+                              "garbage", "none", "accepted", "NONE - idle", "ACCEPTED CURRENT STATE - x"]:
+        back = apply(fw, {M.REC_DG: val})
+        v = rec(fw).get("v")
+        want = "MATCH" if (val.startswith("NONE") or val.startswith("ACCEPTED")) else "PENDING"
+        if v != want:
+            bad.append(f"dump recovery {val!r} reads {v}, wanted {want}")
+        undo(fw, back)
+    # both open at once, and both clear
+    back = apply(fw, {M.REC_FP: "LOCKED_NEITHER", M.REC_DG: "PENDING - outstanding snapshot found at boot; automatic restore expected"})
+    if rec(fw).get("v") != "PENDING":
+        bad.append("two open recoveries did not read PENDING")
+    undo(fw, back)
+    return bad
+
+
+def sc_charging(text: str) -> list:
+    """F5: charging slots are listed (slot, source, target) and NOT judged: the verdict ignores their targets and every MATCH, BELOW and ABOVE reason says so."""
+    bad = []
+    fw = world(text)
+    a = lambda n: fw.attr(M.STATUS, n)  # noqa: E731
+    if a("charging_slot_targets") != [{"slot": 1, "source": "Grid", "target": 100}]:
+        bad.append(f"the base house lists {a('charging_slot_targets')}")
+    # slot 1 on Grid at 40 with a reserve of 80 and the other slots at 80: MATCH, the charging target listed, the reason says not judged
+    back = apply(fw, {M.PLAN: "80", M.SOC[0]: "40", **{e: "80" for e in M.SOC[1:]}})
+    if fw.state(M.STATUS) != "MATCH" or a("charging_slot_targets") != [{"slot": 1, "source": "Grid", "target": 40}] or "charging slots not judged" not in a("reason"):
+        bad.append(f"slot 1 Grid at 40, reserve 80: {fw.state(M.STATUS)} {a('charging_slot_targets')} {a('reason')!r}")
+    undo(fw, back)
+    back = apply(fw, {M.SRC[1]: "Generator", M.SOC[1]: "7", M.SRC[4]: "Grid + Generator", M.SOC[4]: "0"})
+    if a("charging_slot_targets") != [{"slot": 1, "source": "Grid", "target": 100}, {"slot": 2, "source": "Generator", "target": 7}, {"slot": 5, "source": "Grid + Generator", "target": 0}]:
+        bad.append(f"three charging slots list {a('charging_slot_targets')}")
+    if a("non_charging_slots") != [3, 4, 6]:
+        bad.append("the non-charging slots changed")
+    undo(fw, back)
+    back = apply(fw, {**{e: "None" for e in M.SRC}})
+    if a("charging_slot_targets") != []:
+        bad.append(f"no charging slot lists {a('charging_slot_targets')}")
+    undo(fw, back)
+    for mods, verdict in (({}, "MATCH"), ({M.PLAN: "7"}, "BELOW"), ({M.PLAN: "3"}, "ABOVE"), ({M.PLAN: "100", **{e: "99" for e in M.SOC[1:]}}, "BELOW")):
+        back = apply(fw, mods)
+        if fw.state(M.STATUS) != verdict or not a("reason").endswith("charging slots not judged)") and not a("reason").endswith("charging slots not judged"):
+            bad.append(f"{verdict}: the reason {a('reason')!r} does not end with 'charging slots not judged'")
+        undo(fw, back)
+    if "NOT judged" not in str(a("charging_slots_note")):
+        bad.append("the charging slots note")
+    # the verdict ignores a charging slot's target, whatever it reads
+    for tgt in ("0", "5", "50", "100"):
+        back = apply(fw, {M.SOC[0]: tgt})
+        if fw.state(M.STATUS) != "MATCH":
+            bad.append(f"a charging slot at {tgt} changed the verdict to {fw.state(M.STATUS)}")
+        undo(fw, back)
+    # a charging slot whose target is unreadable is UNREADABLE (every slot is read), listed with -1 only when the verdict is shown
+    return bad
+
+
+def sc_flips(text: str) -> list:
+    """F9: a BELOW/UNREADABLE flip during the debounce does not restart it (the binary sensor stays on: last_changed, not last_updated); a reload of the template entities or of the opt-in helper with the notice
+    standing dismisses nothing; the notice says the reserve is software only."""
+    bad = []
+    for first, second, word in (("below", "unreadable", "UNREADABLE"), ("unreadable", "below", "BELOW")):
+        fw = world(text, live=True)
+        fw.put(M.OPTIN, "on")
+        if first == "below":
+            for e in M.SOC[1:]:
+                fw.put(e, "0")
+        else:
+            fw.put(M.SHUT, "unavailable")
+        fw.advance(300)
+        if first == "below":
+            fw.put(M.SHUT, "unavailable")
+        else:
+            for e in M.SOC[1:]:
+                fw.put(e, "0")
+            fw.put(M.SHUT, "0")
+        if fw.state(M.BINARY) != "on":
+            bad.append(f"{first} to {second}: the binary sensor left on")
+        fw.advance(299)
+        if fw.notifications:
+            bad.append(f"{first} to {second}: a notification before the 10 minutes were over")
+        fw.advance(62)
+        msg = fw.notifications.get(M.NOTE, {})
+        if list(fw.notifications) != [M.NOTE] or word not in msg.get("message", ""):
+            bad.append(f"{first} to {second}: after 10 minutes of the binary sensor on {list(fw.notifications)} {msg.get('message', '')[:60]!r}")
+    # the notice's words
+    fw = world(text, live=True)
+    fw.put(M.OPTIN, "on")
+    for e in M.SOC[1:]:
+        fw.put(e, "0")
+    fw.advance(660)
+    msg = fw.notifications.get(M.NOTE, {})
+    for needle in ("software only until proof R6", "a register is not behaviour", "changes a setting", "turn it off"):
+        if needle not in msg.get("message", ""):
+            bad.append(f"the notice lacks {needle!r}")
+    if CLAIM_WORDS.search(msg.get("message", "") + " " + msg.get("title", "")):
+        bad.append("the notice says held, holds or enforced")
+    # a reload of the template entities with the notice standing: every entity reads unavailable once; the notice is neither dismissed nor lost (one second later, once the automation has run)
+    fw.reload()
+    fw.advance(1)
+    if M.NOTE not in fw.notifications or fw.state(M.BINARY) != "on":
+        bad.append("a template reload dismissed the notice")
+    # the opt-in helper reads unavailable and returns (a reload of Input booleans), or unknown: the notice is not dismissed while it is away (a second passes between steps: one run at a time)
+    for gap in ("unavailable", "unknown"):
+        fw.put(M.OPTIN, gap)
+        fw.advance(1)
+        if M.NOTE not in fw.notifications:
+            bad.append(f"the opt-in helper going {gap} dismissed the notice")
+        fw.put(M.OPTIN, "on")
+        fw.advance(1)
+        if M.NOTE not in fw.notifications:
+            bad.append(f"the opt-in helper's return from {gap} left no notice")
+    # BELOW stays but the verdict flips to UNREADABLE and back: the binary sensor never leaves on, the notice is never dismissed
+    fw.put(M.SHUT, "unavailable")
+    fw.advance(1)
+    if M.NOTE not in fw.notifications or fw.state(M.BINARY) != "on":
+        bad.append("BELOW to UNREADABLE dismissed the notice")
+    fw.put(M.SHUT, "0")
+    fw.advance(1)
+    if M.NOTE not in fw.notifications:
+        bad.append("UNREADABLE to BELOW dismissed the notice")
+    # a real return to MATCH dismisses it
+    for e in M.SOC[1:]:
+        fw.put(e, "5")
+    fw.advance(1)
+    if fw.notifications:
+        bad.append("MATCH did not dismiss")
+    return bad
+
+
 BATTERY = [("static", lambda t: static_problems(t)), ("table", sc_table), ("attributes", sc_attributes), ("pending", sc_pending), ("unreadable", sc_unreadable),
-           ("binary", sc_binary), ("reasons", sc_reasons), ("notify", sc_notify), ("reload-restart", sc_reload_restart), ("time", sc_time), ("writes", sc_writes)]
+           ("binary", sc_binary), ("reasons", sc_reasons), ("notify", sc_notify), ("reload-restart", sc_reload_restart), ("time", sc_time), ("writes", sc_writes),
+           ("limits", sc_limits), ("recovery", sc_recovery), ("charging", sc_charging), ("flips", sc_flips)]
 
 
 def battery(text: str, kill: bool = False, prefer: str | None = None, info: dict | None = None) -> list:
@@ -841,9 +1150,10 @@ CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 BULLET = next((ln for ln in CHANGELOG.splitlines() if "ecco_reserve_floor_status.yaml" in ln), "")
 check("the packages README has a Reserve floor read-back section (the entities, the floor rule, the five states, the binary sensor, no DRIFT, a register is not behaviour, the install reloads) and the CHANGELOG has one bullet that says "
       "read-only, offline, nothing installed and makes no claim of enforcement",
-      all(s in README for s in ("## Reserve floor read-back", "sensor.ecco_reserve_floor_status", "binary_sensor.ecco_reserve_not_held_by_inverter", "input_boolean.ecco_tell_me_reserve_not_enforced",
-                                "MATCH", "BELOW", "ABOVE", "PENDING", "UNREADABLE", "no DRIFT state", "A register is not behaviour", "proof R6", "Template entities, Input booleans and Automations"))
-      and all(s in BULLET for s in ("read-only", "nothing installed", "no claim of enforcement", "BELOW", "restart_required: false", "proof R6")), BULLET[:80])
+      all(s in README for s in ("## Reserve floor read-back", "sensor.ecco_reserve_floor_status", "binary_sensor.ecco_reserve_floor_registers_below_reserve", "input_boolean.ecco_tell_me_reserve_floor_registers",
+                                "MATCH", "BELOW", "ABOVE", "PENDING", "UNREADABLE", "no DRIFT state", "A register is not behaviour", "proof R6", "Template entities, Input booleans and Automations",
+                                "NOT BUILT", "NOT HOLDING", "charging slots not judged", "charging_slot_targets", "6 hours", "1800 s", "continuous Home Assistant uptime", "ecco_reserve_floor_registers"))
+      and all(s in BULLET for s in ("read-only", "nothing installed", "no claim of enforcement", "BELOW", "restart_required: false", "proof R6", "not built", "charging slots", "6 hours", "1800 s")), BULLET[:80])
 check("the package, the model and this suite are ASCII with LF line ends", b"\r" not in PKG_RAW and all(ord(c) < 128 for c in PKG_TEXT)
       and b"\r" not in (HERE / "_reserve_floor_status_sim.py").read_bytes() and b"\r" not in Path(__file__).read_bytes())
 
@@ -884,7 +1194,7 @@ check("a state longer than 255 characters is refused by the model as by Home Ass
 # ===========================================================================================================================
 print("[2] to [3] the table, the sweeps, the attributes, the reasons, the binary sensor, time")
 # ===========================================================================================================================
-for name, fn in BATTERY[1:8] + [BATTERY[9]]:
+for name, fn in BATTERY[1:8] + [BATTERY[9]] + BATTERY[11:]:
     probs = fn(PKG_TEXT)
     check({"table": "the state table: every verdict, the floor rule (shutdown, the lowest non-charging slot, TOU off, a charging slot never counted, 21 cases), the binary sensor",
            "attributes": "the attributes: the floor, the slot floor, the shutdown SOC, the reserve, the difference, mismatch, the slots, the TOU flag, the configuration read, the behaviour note and every input with its freshness",
@@ -893,7 +1203,12 @@ for name, fn in BATTERY[1:8] + [BATTERY[9]]:
            "binary": "the binary sensor is an allow-list on the status sensor (on only for BELOW and UNREADABLE) and the status sensor is unavailable while the record cannot be read",
            "reasons": "every reason names its cause in words, is never cut short, and the record stays below 255 characters in the worst case",
            "notify": "the notification: off without the opt-in, nothing before 10 minutes, one after, none again while it stands, dismissed at MATCH, restarted by a flap, raised by UNREADABLE, by the opt-in turned on late, never by ABOVE or PENDING",
-           "time": "a configuration read that stops goes stale by the passing of time alone: MATCH, PENDING after 150 s, UNREADABLE after 1800 s"}[name],
+           "time": "a configuration read that stops goes stale by the passing of time alone: MATCH, PENDING after 150 s, UNREADABLE after 1800 s",
+           "limits": "F4: Configuration Online off for 1800 s (the time kept fresh) is PENDING and then, at 1801 s, UNREADABLE; every one of the ten PENDING causes (eight flags, two recovery states) is PENDING at 6 hours and UNREADABLE at 6 hours 1 s; "
+                     "the oldest cause decides; a lease explains a lost read; a cause that ends and begins again starts again; the reasons carry no age",
+           "recovery": "F9: every recovery text the firmware publishes (Free Power NONE, LOCKED_*, REVIEWED, ACCEPT_RUNNING; Dump to Grid NONE, PENDING, LOCKED, ACCEPTED) and invented ones (NEITHER, FOREIGN, CRITICAL, N, garbage): clear only for the exact rule, otherwise open (PENDING)",
+           "charging": "F5: the charging slots' targets are listed as slot, source, target and not judged (slot 1 on Grid at 40 with a reserve of 80 still MATCHES the other slots); every MATCH, BELOW and ABOVE reason says charging slots not judged",
+           "flips": "F9: BELOW to UNREADABLE and back inside the debounce does not restart it (the binary sensor stays on), a reload of the template entities or the opt-in helper (unavailable, unknown) dismisses nothing, the notice says the reserve is software only until proof R6 and never says held or enforced"}[name],
           probs == [], str(probs[:2]))
 check("the restart and reload rules: a reload reads unavailable once and creates nothing; the restored window shows the old state for milliseconds and creates nothing; a restart with the dongle gone reads UNREADABLE or "
       "unavailable and raises nothing; the dongle's return reads MATCH; a persistent BELOW after a restart raises the notice only after the debounce", sc_reload_restart(PKG_TEXT) == [], str(sc_reload_restart(PKG_TEXT)[:2]))
@@ -902,6 +1217,8 @@ check("the restart and reload rules: a reload reads unavailable once and creates
 print("[4] differential: the package against an independent model of the rules")
 # ===========================================================================================================================
 diff = sc_differential(PKG_TEXT)
+diff_ages = sc_differential_ages(PKG_TEXT)
+check("F4 against the independent model: the verdict equals the model's over 160 seeded random worlds in which the causes and the online flag have held their state for 0 s to 50000 s", diff_ages == [], str(diff_ages[:2]))
 check("the verdict and the floor equal the independent model's over 400 seeded random worlds (every input valid or, one time in 25, junk; ages from -200 s to 4000 s)", diff == [], str(diff[:2]))
 check("the model itself is sane: it reads today's house as BELOW, and an unreadable reserve as UNREADABLE",
       oracle({**{e: "off" for e in M.FLAGS}, M.REC_FP: "NONE", M.REC_DG: "NONE", M.PLAN: "5", M.SHUT: "0", M.TOU: "on", M.ONLINE: "on", M.CFGTIME: "2026-11-27 12:00:00",
@@ -921,8 +1238,8 @@ MUTANTS = [
     ("macro: the upper bound of a percent becomes exclusive", "v >= 0 and v <= 100 and v == (v | round(0))", "v >= 0 and v < 100 and v == (v | round(0))"),
     ("macro: the upper bound is widened", "v >= 0 and v <= 100 and v == (v | round(0))", "v >= 0 and v <= 101 and v == (v | round(0))"),
     ("macro: the whole-percent rule is dropped", "v >= 0 and v <= 100 and v == (v | round(0))", "v >= 0 and v <= 100"),
-    ("freshness: the lost bound moves up", "'lost' if cage > 1800", "'lost' if cage > 1801"),
-    ("freshness: the lost bound is inclusive", "'lost' if cage > 1800", "'lost' if cage >= 1800"),
+    ("freshness: the lost bound moves up", "'lost' if (cage > 1800 or", "'lost' if (cage > 1801 or"),
+    ("freshness: the lost bound is inclusive", "'lost' if (cage > 1800 or", "'lost' if (cage >= 1800 or"),
     ("freshness: the stale bound moves up", "cage > 150) else 'fresh'", "cage > 151) else 'fresh'"),
     ("freshness: the stale bound is inclusive", "cage > 150) else 'fresh'", "cage >= 150) else 'fresh'"),
     ("freshness: the dongle's offline flag no longer makes the read stale", "(online == 'off' or cage > 150)", "(cage > 150)"),
@@ -964,20 +1281,60 @@ MUTANTS = [
     ("status: the difference changes sign", "((p[1] | int) - (p[4] | int))", "((p[4] | int) - (p[1] | int))"),
     ("status: the reason field is the wrong one", "split('|')[9] }}\n          floor_percent", "split('|')[8] }}\n          floor_percent"),
     ("status: the floor is shown while PENDING", "{%- set shown = r.v in ['MATCH', 'BELOW', 'ABOVE'] -%}", "{%- set shown = true -%}"),
-    ("status: the reasons are cut at 20 characters", "[:140]", "[:20]"),
+    ("status: the reasons are cut at 20 characters", "[:160]", "[:20]"),
     ("status: the behaviour note says the floor is proven", "NOT PROVEN: a register is not behaviour", "A register is behaviour"),
     ("notify: the debounce is one minute", "> 600) }}", "> 60) }}"),
     ("notify: the debounce is an hour", "> 600) }}", "> 3600) }}"),
-    ("notify: the opt-in is not required", "{{ is_state('input_boolean.ecco_tell_me_reserve_not_enforced', 'on')\n             and is_state('binary_sensor", "{{ is_state('binary_sensor"),
-    ("notify: the binary sensor is not required", "and is_state('binary_sensor.ecco_reserve_not_held_by_inverter', 'on')\n             and ((as_timestamp", "and ((as_timestamp"),
+    ("notify: the opt-in is not required", "{{ is_state('input_boolean.ecco_tell_me_reserve_floor_registers', 'on')\n             and is_state('binary_sensor", "{{ is_state('binary_sensor"),
+    ("notify: the binary sensor is not required", "and is_state('binary_sensor.ecco_reserve_floor_registers_below_reserve', 'on')\n             and ((as_timestamp", "and ((as_timestamp"),
     ("notify: the notification is never dismissed at off", "        to: \"off\"\n        id: clear\n      - trigger: state\n        entity_id: input_boolean", "        to: \"on\"\n        id: clear\n      - trigger: state\n        entity_id: input_boolean"),
-    ("notify: turning the opt-in off dismisses nothing", "entity_id: input_boolean.ecco_tell_me_reserve_not_enforced\n        to: \"off\"", "entity_id: input_boolean.ecco_tell_me_reserve_not_enforced\n        to: \"on\""),
-    ("notify: the notification id changes on dismiss", "      notification_id: ecco_reserve_floor_not_held\n", "      notification_id: ecco_reserve_floor_not_held_x\n", 1),
-    ("notify: the notification id changes on create", "                  notification_id: ecco_reserve_floor_not_held\n", "                  notification_id: ecco_reserve_floor_not_held_x\n"),
+    ("notify: turning the opt-in off dismisses nothing", "entity_id: input_boolean.ecco_tell_me_reserve_floor_registers\n        to: \"off\"", "entity_id: input_boolean.ecco_tell_me_reserve_floor_registers\n        to: \"on\""),
+    ("notify: the notification id changes on dismiss", "      notification_id: ecco_reserve_floor_registers\n", "      notification_id: ecco_reserve_floor_registers_x\n", 1),
+    ("notify: the notification id changes on create", "                  notification_id: ecco_reserve_floor_registers\n", "                  notification_id: ecco_reserve_floor_registers_x\n"),
     ("vocabulary: a button press is added", "          - action: persistent_notification.dismiss\n            data:", "          - action: button.press\n            data:"),
     ("hygiene: an address appears in a comment", "# NOT INSTALLED, NOT LIVE-PROVEN.", "# 198.51.100.7 NOT INSTALLED, NOT LIVE-PROVEN."),
     ("wording: the header drops the unproven-behaviour rule", "A REGISTER IS NOT BEHAVIOUR.", "A REGISTER IS BEHAVIOUR."),
     ("reads: a forecast entity is read", "{%- set rfp = states('sensor.ecco_clock_dongle_free_power_recovery_state') -%}", "{%- set rfp = states('sensor.ecco_clock_dongle_free_power_recovery_state') -%}{%- set zz = states('sensor.solc" "ast_forecast') -%}"),
+    # --- NEW (F3, F4, F5, F9): the names, the two limits, the charging slots, the recovery vocabulary, the debounce and the clear triggers ---
+    ("new limit: online off for 1800 s is already lost", "(online == 'off' and oage > 1800)", "(online == 'off' and oage >= 1800)"),
+    ("new limit: the online-off bound moves up", "(online == 'off' and oage > 1800)", "(online == 'off' and oage > 1801)"),
+    ("new limit: online off is not a limit", "(online == 'off' and oage > 1800)", "(online == 'never')"),
+    ("new limit: the online age reads the configuration time entity", "age('binary_sensor.ecco_clock_dongle_configuration_online')", "age('sensor.ecco_clock_dongle_last_configuration_update')"),
+    ("new limit: the pending limit is inclusive", "c.oldest > 21600 -%}", "c.oldest >= 21600 -%}"),
+    ("new limit: the pending limit moves up", "c.oldest > 21600 -%}", "c.oldest > 21601 -%}"),
+    ("new limit: the pending limit is 60 hours", "c.oldest > 21600 -%}", "c.oldest > 216000 -%}"),
+    ("new limit: a flag cause is not aged", "{%- if states(e) == 'on' and (age(e) | int) > c.oldest -%}", "{%- if false -%}"),
+    ("new limit: the free power recovery state is not aged", "{%- if rfp_open and rfp not in bad and", "{%- if false and rfp not in bad and"),
+    ("new limit: the dump recovery state is not aged", "{%- if rdg_open and rdg not in bad and", "{%- if false and rdg not in bad and"),
+    ("new limit: the youngest cause decides", "(age(e) | int) > c.oldest -%}{%- set c.oldest = age(e) | int", "(age(e) | int) < c.oldest or c.oldest == 0 -%}{%- set c.oldest = age(e) | int"),
+    ("new limit: the reason carries the age (a recorder row a minute)", "'a pending cause has lasted more than 6 hours (' ~ c.oldname ~ ')'", "'a pending cause has lasted more than 6 hours (' ~ c.oldname ~ ', ' ~ c.oldest ~ ' s)'"),
+    ("new limit: the offline reason carries the time (a recorder row a minute)", "'the configuration has read offline for more than 1800 s'", "'the configuration has read offline for more than 1800 s (time ' ~ ctxt ~ ')'"),
+    ("new limit: a lease with a lost read is UNREADABLE", "          {%- elif c.busy != '' or rfp_open or rdg_open -%}\n", "          {%- elif cfg == 'lost' -%}{%- set r.v = 'UNREADABLE' -%}{%- set r.why = 'x' -%}\n          {%- elif c.busy != '' or rfp_open or rdg_open -%}\n"),
+    ("new limit: the 6 hour limit is not applied", "{%- if c.oldest > 21600 -%}", "{%- if false -%}"),
+    ("new charging: the MATCH reason does not say charging slots not judged", "(a register is not behaviour; charging slots not judged)", "(a register is not behaviour)"),
+    ("new charging: the BELOW reason does not say charging slots not judged", "the reserve is software only; charging slots not judged'", "the reserve is software only'"),
+    ("new charging: the ABOVE reason does not say charging slots not judged", "' percent; charging slots not judged'", "' percent'"),
+    ("new charging: the list shows the non-charging slots", "{%- set x = states('sensor.ecco_reserve_floor_core').split('|')[6] -%}\n            {%- set socs", "{%- set x = states('sensor.ecco_reserve_floor_core').split('|')[5] -%}\n            {%- set socs"),
+    ("new charging: the slot number is off by one", "'slot': i + 1,", "'slot': i,"),
+    ("new charging: the target reads the charge source", "'target': states(socs[i]) | int(-1)", "'target': states(srcs[i]) | int(-1)"),
+    ("new charging: the source reads the target", "'source': states(srcs[i])", "'source': states(socs[i])"),
+    ("new charging: the note is dropped", "charging_slots_note: \"listed, NOT judged:", "charging_slots_note: \"listed:"),
+    ("new names: the opt-in helper's name says enforced", "name: ECCO tell me when the reserve floor registers read below the reserve", "name: ECCO tell me when the reserve is not enforced"),
+    ("new names: the notice title says hold", "title: \"ECCO: the inverter's reserve floor registers read below your reserve, or cannot be read\"", "title: \"ECCO: the inverter's registers do not hold your reserve\""),
+    ("new names: the notice says the reserve is held", "Your reserve is software only until proof R6 has been run.", "Your reserve is held by the inverter."),
+    ("new names: the binary sensor is named for the battery", "      - name: ECCO Reserve Floor Registers Below Reserve\n        unique_id: ecco_reserve_floor_registers_below_reserve", "      - name: ECCO Reserve Not Held By Inverter\n        unique_id: ecco_reserve_not_held_by_inverter"),
+    ("new names: the meaning attribute is emptied", "meaning: \"on = the inverter's registers read below the reserve, or cannot be read; off = no warning from the registers, which says nothing about what the battery does\"", "meaning: \"\""),
+    ("new names: the notice no longer says software only", "Your reserve is software only until proof R6 has been run.", "Your reserve is fine."),
+    ("new reads: the binary reason is read from the core record", "{{ state_attr('sensor.ecco_reserve_floor_status', 'reason') | default('', true) }}", "{{ states('sensor.ecco_reserve_floor_core').split('|')[9] }}"),
+    ("new debounce: the debounce counts from last_updated", "as_timestamp(states['binary_sensor.ecco_reserve_floor_registers_below_reserve'].last_changed, 0)", "as_timestamp(states['binary_sensor.ecco_reserve_floor_registers_below_reserve'].last_updated, 0)"),
+    ("new clear: the binary sensor trigger has no to", "        entity_id: binary_sensor.ecco_reserve_floor_registers_below_reserve\n        to: \"off\"\n        id: clear", "        entity_id: binary_sensor.ecco_reserve_floor_registers_below_reserve\n        id: clear"),
+    ("new clear: the opt-in trigger has no to", "        entity_id: input_boolean.ecco_tell_me_reserve_floor_registers\n        to: \"off\"\n        id: clear", "        entity_id: input_boolean.ecco_tell_me_reserve_floor_registers\n        id: clear"),
+    ("new vocabulary: a Dump recovery text that starts with N is clear", "not (rdg.startswith('NONE') or rdg.startswith('ACCEPTED'))", "not (rdg.startswith('N') or rdg.startswith('ACCEPTED'))"),
+    ("new vocabulary: a locked Dump recovery text is clear", "not (rdg.startswith('NONE') or rdg.startswith('ACCEPTED'))", "not (rdg.startswith('NONE') or rdg.startswith('ACCEPTED') or rdg.startswith('LOCKED'))"),
+    ("new vocabulary: a pending Dump recovery text is clear", "not (rdg.startswith('NONE') or rdg.startswith('ACCEPTED'))", "not (rdg.startswith('NONE') or rdg.startswith('ACCEPTED') or rdg.startswith('PENDING'))"),
+    ("new vocabulary: Free Power ACCEPT_RUNNING reads as clear", "{%- set rfp_open = rfp != 'NONE' -%}", "{%- set rfp_open = rfp not in ['NONE', 'ACCEPT_RUNNING'] -%}"),
+    ("new vocabulary: Free Power REVIEWED reads as clear", "{%- set rfp_open = rfp != 'NONE' -%}", "{%- set rfp_open = rfp not in ['NONE', 'REVIEWED'] -%}"),
+    ("new vocabulary: a Free Power text that starts with N is clear", "{%- set rfp_open = rfp != 'NONE' -%}", "{%- set rfp_open = not rfp.startswith('N') -%}"),
 ]
 total = len(MUTANTS)
 killed = survived = 0
@@ -1006,8 +1363,9 @@ for entry in MUTANTS:
         survivors.append(label)
         FAILURES.append(f"mutant survived: {label}")
         print(f"  FAIL  mutant survived: {label}")
-check(f"{total} mutants (every bound on both sides, every unreadable branch, every pending cause, the floor rule, the verdict ladder, the binary sensor's allow-list, the record, the debounce, "
-      "the opt-in, the vocabulary and the words): all caught", killed == total and total >= 25, f"{killed}/{total} {survivors[:3]}")
+_new = len([m for m in MUTANTS if m[0].startswith("new ")])
+check(f"{total} mutants, {_new} of them new for F3, F4, F5 and F9 (every bound on both sides, every unreadable branch, every pending cause, the floor rule, the verdict ladder, the binary sensor's allow-list, the record, "
+      "the debounce on last_changed, the clear triggers, the opt-in, the two limits, the charging slots, the recovery vocabulary, the names and the words): all caught", killed == total and total >= 90 and _new >= 15, f"{killed}/{total} {survivors[:3]}")
 _harmless = PKG_TEXT.replace("# WHY. ECCO's battery reserve is a plan value", "# WHY, restated. ECCO's battery reserve is a plan value")
 check("a harmless rewrite (a comment) survives the battery, and a rewrite of a rule does not", _harmless != PKG_TEXT and battery(_harmless, kill=True) == []
       and battery(PKG_TEXT.replace("cage > 150) else 'fresh'", "cage > 15000) else 'fresh'"), kill=True) != [])
