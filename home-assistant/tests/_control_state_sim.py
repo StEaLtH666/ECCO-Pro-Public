@@ -68,7 +68,6 @@ PROP = "sensor.ecco_export_proposal"
 P_FLOOR = "sensor.ecco_export_proposal_floor"
 P_NET = "sensor.ecco_export_proposal_net_export"
 RETG = "sensor.ecco_export_retarget"
-LM = f"sensor.{DONGLE}_ecco_fallback_profile_live_match"
 
 # the package's own entities
 CHARGE = "sensor.ecco_charge_control_state"
@@ -196,7 +195,9 @@ OWNER_NOTES = {
     "UNKNOWN": "A flag cannot be read, or both functions claim the inverter settings at once: nobody is shown as the owner.",
 }
 END_NOW_MESSAGE = "ECCO would end this export; no END guard is installed: press END."
-LIVE_MATCH_VALUES = ("MATCH", "DRIFT", "NO_PROFILE", "PAUSED", "PAUSED_IO", "OUT_OF_DOMAIN", "EXPORT", "CONTEXT")
+# The saved profile's Live Match is NOT read: the pin on who may name its entity (registry/tests/test_fallback_live_match.py) allows only the fallback status package, the dashboard and the HA package
+# suites, and a third reader is a pin widening the design does not name. The owner sensor says so in its `live_match` attribute.
+LIVE_MATCH = "NOT_READ"
 HELD_KINDS = ("hold_battery", "skip_tonight", "prepare_power_cut")
 PROPOSAL_STATES = ("VALID", "INVALID", "UNVERIFIED", "HOLD", "NOT ALLOWED")
 RETARGET_STATES = ("NOT RUNNING", "UNKNOWN", "NO CHANGE", "WAIT", "ALLOWED", "END NOW")
@@ -225,7 +226,6 @@ HEALTHY: dict = {
     FREQP: "4000.0", FREQD: "60.0", DREQP: "3000.0", DREQD: "60.0", DREQS: "40.0",
     CEIL: "0.0", HOLD: ("clear", {"held_by": ""}), RES: "40", LATCHED: "unknown", LIM: "VALID", CAS: "BELOW PROVEN LEVEL",
     RETG: ("NOT RUNNING", {"reasons": [], "changes": []}),
-    LM: "FB-B3;m=MATCH;ca=F;obl=-;eh=U",
 }
 # the export coordinator's sensors are NOT in the healthy set: a house without it must read cleanly ("proposal not installed")
 PROPOSAL_VALID = {PROP: ("VALID", {"actionable": True, "blocked_by": []}), P_FLOOR: "40", P_NET: "3000"}
@@ -524,10 +524,7 @@ def owner_of(raw: dict) -> tuple:
         own = "MANUAL_WRITE"
     else:
         own = "NONE"
-    lm = _state(raw, LM)
-    mm = lm.split("m=")[1].split(";")[0] if "m=" in lm else "UNKNOWN"
-    live = "NOT_READ" if lm in BAD else (mm if mm in LIVE_MATCH_VALUES else "UNKNOWN")
-    return own, {"live_match": live, "note": OWNER_NOTES[own]}
+    return own, {"live_match": LIVE_MATCH, "note": OWNER_NOTES[own]}
 
 
 def reference(raw: dict) -> dict:

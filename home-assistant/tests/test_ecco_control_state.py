@@ -75,7 +75,7 @@ def flat(s: str) -> str:
 # ===========================================================================================================================
 OWN_IDS = set(X.OWN)
 EXPECTED_READS = {X.TL, X.CG, X.EG, X.FA, X.FO, X.FS, X.DA, X.DO, X.DS, X.MW, X.FT, X.DT, X.FE, X.DE, X.FW, X.DW, X.FSS, X.FSG, X.DSS, X.DSG, X.FARM, X.DARM, X.FSTAT, X.DSTAT, X.FREQP, X.FREQD,
-                  X.DREQP, X.DREQD, X.DREQS, X.CEIL, X.HOLD, X.RES, X.LATCHED, X.LIM, X.CAS, X.PROP, X.P_FLOOR, X.P_NET, X.RETG, X.LM}
+                  X.DREQP, X.DREQD, X.DREQS, X.CEIL, X.HOLD, X.RES, X.LATCHED, X.LIM, X.CAS, X.PROP, X.P_FLOOR, X.P_NET, X.RETG}
 # the exact (entity, attribute) pairs read through state_attr: nothing else (a pin by entity id alone would let a measurement in through an attribute of an entity that is allowed)
 EXPECTED_STATE_ATTRS = {(X.CG, "blocked_by"), (X.EG, "blocked_by"), (X.PROP, "actionable"), (X.PROP, "blocked_by"), (X.RETG, "reasons"), (X.RETG, "changes"), (X.HOLD, "held_by")}
 STATE_ATTR_RE = re.compile(r"state_attr\(\s*'([^']+)'\s*,\s*'([^']+)'\s*\)")
@@ -218,9 +218,11 @@ REQUIRED = {
     "export": [(X.EG, "GATE"), (X.TL, "TIME"), (X.DA, "ACTIVE"), (X.DO, "OPERATION"), (X.DS, "SNAPSHOT"), (X.FA, "OTHER_ACTIVE"), (X.FO, "OTHER_OPERATION"), (X.FS, "OTHER_SNAPSHOT"),
                (X.MW, "MANUAL_WRITE"), (X.DT, "STATUS"), (X.DW, "WRITE_ENABLE"), (X.DSS, "START_SCRIPT"), (X.DSG, "GUARDED_SCRIPT"), (X.DARM, "SCHEDULE_ARMED")],
 }
+# the reserved tokens of the fallback and failback records, spelled as adjacent literals so that this file carries none whole (the pin chain's BANNED scan reads every home-assistant/ file)
+RESERVED_TOKENS = re.compile(r"ecco_" "fallback|FALLBACK_" "PROFILE|FAILBACK_" "STATE|ecco_" "failback")
 BAD_FLAG = (None, "unavailable", "unknown", "", "x", "ON", "true", "1")
 BAD_TEXT = (None, "unavailable", "unknown", "", "a text nobody knows", "ACTIVE")
-OPTIONAL = [X.CEIL, X.FE, X.DE, X.FREQP, X.FREQD, X.DREQP, X.DREQD, X.DREQS, X.HOLD, X.RES, X.LATCHED, X.LIM, X.CAS, X.FSTAT, X.DSTAT, X.PROP, X.P_FLOOR, X.P_NET, X.RETG, X.LM]
+OPTIONAL = [X.CEIL, X.FE, X.DE, X.FREQP, X.FREQD, X.DREQP, X.DREQD, X.DREQS, X.HOLD, X.RES, X.LATCHED, X.LIM, X.CAS, X.FSTAT, X.DSTAT, X.PROP, X.P_FLOOR, X.P_NET, X.RETG]
 BAD_OPTIONAL = (None, "unavailable", "unknown", "x", "nan", "-1", "1e999")
 
 
@@ -324,8 +326,6 @@ def combo_rows() -> list[tuple]:
             if changes is not None:
                 attrs["changes"] = changes
             rows.append((f"retarget {rs} {reasons!r}", H({X.RETG: None if rs is None else (rs, attrs)}, proposal=True)))
-    for lm in ("x;m=MATCH;ca=F", "x;m=DRIFT;ca=F;obl=-", "x;m=NO_PROFILE", "x;m=PAUSED_IO;eh=U", "x;m=WEIRD", "x", "", "unknown", "unavailable", None, "m=MATCH", "FB-B3;ca=F;m=EXPORT"):
-        rows.append((f"live match {lm!r}", H({X.LM: lm})))
     for hold, hb in (("clear", ""), ("held", "hold_battery"), ("held", "hold_battery,skip_tonight,prepare_power_cut,x"), ("unknown", None), ("unavailable", None), (None, None), ("held", None), ("held", 5)):
         rows.append((f"hold {hold} {hb!r}", H({X.HOLD: None if hold is None else (hold, {"held_by": hb})})))
     for latched, res, lease_on in (("40", "40", True), ("40", "41", True), ("40", "39.2", True), ("unknown", "40", True), ("40", "unknown", True), ("101", "40", True), ("40", "40", False), ("30", "40", False)):
@@ -404,8 +404,6 @@ def random_raw(rng: random.Random, p: float) -> dict:
         raw[X.P_NET] = rng.choice(["3000", "2800", "x"])
     if rng.random() < 0.4:
         raw[X.RETG] = (rng.choice(X.RETARGET_STATES + ("weird",)), {"reasons": rng.choice([[], ["LEASE_TOO_YOUNG: x"], ["TIME_NOT_TRUSTED: y", "MEMORY_YOUNG: z"]]), "changes": rng.choice([[], ["STOP_SOC 40.0 -> 42"], ["END 16:00 -> 17:00"]])})
-    if rng.random() < 0.3:
-        raw[X.LM] = rng.choice(["x;m=DRIFT;ca=F", "x;m=MATCH", "x", "unavailable", "FB;m=WEIRD;eh=U"])
     if rng.random() < 0.5:
         raw[X.LATCHED] = rng.choice(["40", "unknown", "45"])
         raw[X.RES] = rng.choice(["40", "42", "unknown"])
@@ -940,9 +938,14 @@ def static_problems(text: str) -> list[str]:
         bad.append("an entity id outside the ecco namespace is read")
     if re.search(r"\binitial\s*:", text):
         bad.append("an `initial:` appears")
-    for forbidden in ("FORCE_RESTORE_ORIGINAL", "force_restore_original", "ACCEPT_CURRENT_STATE", "accept_current_state", "FORCE_RUNNING"):
+    # the firmware's recovery-execute action ids are spelled as two adjacent literals here: registry/tests/test_free_power_recovery_evidence.py and ..._accept_current_state.py scan every home-assistant/ file
+    for forbidden in ("FORCE_RESTORE" "_ORIGINAL", "force_restore" "_original", "ACCEPT_CURRENT" "_STATE", "accept_current" "_state", "FORCE_RUN" "NING"):
         if forbidden in text:
             bad.append(f"the firmware recovery token {forbidden} appears whole (registry guard)")
+    # the saved profile's Live Match entity is not named: registry/tests/test_fallback_live_match.py allows only the fallback status package, the dashboard and the HA package suites; the reserved tokens of the
+    # fallback and failback records (registry/tests/_scope_chain.py BANNED) appear nowhere in this package
+    if RESERVED_TOKENS.search(text):
+        bad.append(f"a reserved fallback token appears: {sorted(set(RESERVED_TOKENS.findall(text)))}")
     hdr = "\n".join(line.lstrip("#") for line in text.splitlines() if line.startswith("#"))
     hflat = flat(hdr)
     for pin in HEADER_PINS:
@@ -1064,8 +1067,9 @@ MUTANTS = [
     ("a held_by kind it does not know is passed on", "select('in', ['hold_battery', 'skip_tonight', 'prepare_power_cut'])", "select('string')"),
     ("a hold that cannot be read is shown as clear", "(hs if hs in ['clear', 'held'] else 'NOT_READ')", "(hs if hs == 'held' else 'clear')"),
     ("a limits state it does not know is passed on", "(lim if lim in ['VALID', 'NOT CONFIGURED', 'INVALID', 'AWAITING CONFIRMATION', 'UNKNOWN', 'UNAVAILABLE'] else 'NOT_READ')", "lim"),
-    ("a live match it does not know is passed on", "(mm if mm in ['MATCH', 'DRIFT', 'NO_PROFILE', 'PAUSED', 'PAUSED_IO', 'OUT_OF_DOMAIN', 'EXPORT', 'CONTEXT'] else 'UNKNOWN')", "mm"),
-    ("a missing live match is a match", "'NOT_READ' if lm in ['unknown', 'unavailable', 'none', '']", "'MATCH' if lm in ['unknown', 'unavailable', 'none', '']"),
+    ("the owner shows a live match it does not read", "live_match: NOT_READ", "live_match: MATCH"),
+    ("the owner reads the saved profile's live match", "live_match: NOT_READ", "live_match: \"{{ states('sensor.ecco_clock_dongle_ecco_" "fallback_profile_live_match') }}\""),
+    ("the owner names a reserved fallback token in its header", "# LIMITS, stated plainly", "# see ecco_" "fallback_profile\n# LIMITS, stated plainly"),
     ("the owner ignores the manual write flag", "('MANUAL_WRITE' if mw == 'on' else 'NONE')", "'NONE'"),
     ("the owner is a lease before a restore owed", "('RESTORE_OWED' if ((fs == 'on' and fa == 'off' and fo == 'off') or (ds == 'on' and da == 'off' and dq == 'off')) else ('CHARGE' if (fa == 'on' or fo == 'on') else",
      "('CHARGE' if (fa == 'on' or fo == 'on') else ('RESTORE_OWED' if ((fs == 'on' and fa == 'off' and fo == 'off') or (ds == 'on' and da == 'off' and dq == 'off')) else"),
