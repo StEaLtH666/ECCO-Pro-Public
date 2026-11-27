@@ -10,8 +10,9 @@ template that uses now(), an availability template that is a super template, att
     the entity has published, and a state object with state unknown and NO attributes before that and after a template reload), "first-none" (none before the first publish,
     then the state object), "none" (always none) and "undefined" (the name is not defined at all, as in a Home Assistant that does not offer it to template entities);
   - a zone-aware `timestamp_custom` filter (the interpreter's own is a fixed UTC+1);
-  - the world builder: the healthy input set, the dongle's telemetry poll text with a chosen age, a Dump to Grid lease with the values the firmware latches, the Export
-    schedule's window and the time its start script last ran (a lease the SCHEDULE started), and a test hook that sets how old the re-target memory is.
+  - the world builder: the healthy input set (the Export start gate and the leases consumer of the time trust package among it: a value may be a state text or a (state, attributes) pair),
+    the dongle's telemetry poll text with a chosen age, a Dump to Grid lease with the values the firmware latches, the Export schedule's window and the time its start script last ran (a lease
+    the SCHEDULE started), the age of the gate and of the consumer (the hold-off reads their last_changed), and a test hook that sets how old the re-target memory is.
 
 Nothing here touches Home Assistant, a dongle or an inverter. There is no service, no action and no write: the model cannot call anything.
 """
@@ -56,6 +57,8 @@ LIM = "sensor.ecco_dump_limits_state"
 TEL = f"binary_sensor.{DONGLE}_telemetry_online"
 POLL = f"sensor.{DONGLE}_last_telemetry_update"
 LEASE = f"binary_sensor.{DONGLE}_dump_to_grid_active"
+EG = "binary_sensor.ecco_export_start_allowed"             # the Export start gate: its state and its blocked_by list
+TL = "binary_sensor.ecco_time_trusted_for_leases"          # the time trust consumer for leases (the one consumer this package may read)
 L_STOP = f"sensor.{DONGLE}_dump_to_grid_active_stop_soc"
 L_EXP = f"sensor.{DONGLE}_dump_to_grid_active_export_power"
 L_CMD = f"sensor.{DONGLE}_dump_to_grid_commanded_battery_ceiling"
@@ -79,6 +82,7 @@ NUMERIC = (P_FLOOR, P_ENERGY, P_POWER, P_NET, P_DUR)
 HEALTHY = {
     SOC: "80.0", LOAD: "800.0", PV: "0.0", GRID: "800.0", CAP: "30.0", HOLD: "clear", RESERVE: "40", STOP_S: "25.0",
     TGT: "3000.0", WIN: "240.0", SCH_START: "2026-11-26 18:00:00", PCEIL: "6000.0", PROV: "6000.0", MX: "3600.0", LIM: "VALID", TEL: "on", LEASE: "off", L_STOP: "unknown",
+    EG: ("on", {"blocked_by": []}), TL: "on",
 }
 # the constants of the package header (the suite pins header and templates to these)
 MAX_TELEMETRY_AGE_S = 90
@@ -100,8 +104,13 @@ ORIGIN_RUN_TOLERANCE_S = 10
 ORIGIN_WINDOW_START_TOLERANCE_S = 60
 ORIGIN_WINDOW_END_TOLERANCE_S = 120
 PHYSICAL_MAX_W = 30000
-MODEL_MAX_AGE_S = 180
+GATE_SETTLE_S = 60
 THIS_MODES = ("ha", "first-none", "none", "undefined")
+
+
+def split(v) -> tuple:
+    """A world value is a state text, or (state, attributes)."""
+    return (str(v[0]), dict(v[1])) if isinstance(v, tuple) else (str(v), {})
 
 
 class ThisState:
@@ -193,6 +202,32 @@ class CoordWorld(ThisMixin, T.TrustWorld):
     def make_healthy(self, overrides: dict | None = None, poll_age: float | None = 0.0) -> None:
         """The healthy input set (with `overrides` on top; a None removes the entity) and a poll text `poll_age` seconds old (None leaves the poll alone), rendered once."""
         self.bulk({**HEALTHY, **(overrides or {})}, poll_age="keep" if poll_age is None else poll_age)
+        self.settle_gate()
+
+    def settle_gate(self, seconds: float = 600.0) -> None:
+        """Make the Export start gate and the leases consumer read on for `seconds` (the hold-off reads their last_changed): age each that exists and is younger."""
+        moved = False
+        for eid in (EG, TL):
+            if eid in self.w.states and self.now_ts() - self.w.changed_at.get(eid, 0.0) < seconds:
+                stamp = self.now_ts() - seconds
+                self.w.changed_at[eid] = stamp
+                self.w.updated_at[eid] = stamp
+                moved = True
+        if moved:
+            self.force()
+
+    def set_gate_ages(self, eg_age: float, tl_age: float) -> None:
+        """Give the Export start gate and the leases consumer exactly these ages (seconds; each only if it exists), then render everything."""
+        for eid, age in ((EG, eg_age), (TL, tl_age)):
+            if eid in self.w.states and age is not None:
+                stamp = self.now_ts() - age
+                self.w.changed_at[eid] = stamp
+                self.w.updated_at[eid] = stamp
+        self.force()
+
+    def gate_ages(self) -> tuple:
+        """How long the gate and the consumer have held their state, as the model sees it (None: the entity does not exist)."""
+        return tuple((self.now_ts() - self.w.changed_at.get(eid, 0.0)) if eid in self.w.states else None for eid in (EG, TL))
 
     def start_feed(self, period: float = 10.0) -> dict:
         """The dongle publishes the poll text every `period` seconds from now on (a healthy dongle). `stop_feed()` ends it (a dead one)."""
@@ -215,7 +250,8 @@ class CoordWorld(ThisMixin, T.TrustWorld):
                     self.w.states.pop(eid, None)
                     self.pending.add(eid)
                 else:
-                    self.w.set(eid, st, dict(T._MARK))
+                    st0, attrs0 = split(st)
+                    self.w.set(eid, st0, {**attrs0, **T._MARK})
             if poll_age != "keep":
                 self.set_poll(poll_age)
             if capm != "keep":
@@ -283,16 +319,15 @@ class CoordWorld(ThisMixin, T.TrustWorld):
         self.put(L_END, "Inactive")
         self.force()
 
-    def set_memory_age(self, seconds: float, *, eval_age: float = 0.0, rt_entry="keep", rt_state="keep") -> None:
-        """A TEST HOOK: the re-target memory (the model's own previous attribute) has existed for `seconds`, its last evaluation was `eval_age` seconds ago, and optionally its previous
-        would-change (`rt_entry`, an epoch or None) and previous re-target state (`rt_state`) are what is given: rewrites those keys of the published model (a sweep cannot advance the clock
-        half an hour in every world; the real-time tests advance it). The next render reads it back through `this`."""
+    def set_memory_age(self, seconds: float, *, rt_entry="keep", rt_state="keep") -> None:
+        """A TEST HOOK: the re-target memory (the model's own previous attribute) has existed for `seconds`, and optionally its previous would-change (`rt_entry`, an epoch or None) and
+        previous re-target state (`rt_state`) are what is given: rewrites those keys of the published model (a sweep cannot advance the clock half an hour in every world; the real-time tests
+        advance it). The next render reads it back through `this`."""
         st = self.w.states.get(MODEL)
         if st is None or not isinstance(st[1].get("model"), dict):
             raise AssertionError("the model has not published a dict yet")
         m = dict(st[1]["model"])
         m["mem_since_ts"] = math.floor(self.now_ts() - seconds)
-        m["evaluated_ts"] = round(self.now_ts() - eval_age)
         if rt_entry != "keep":
             m["rt_entry"] = rt_entry
         if rt_state != "keep":
@@ -375,8 +410,27 @@ def lease_origin(*, running: bool, w_start, w_end, l_start_ts, run_ts, l_end_ts)
                 and l_end_ts is not None and l_end_ts <= w_end + ORIGIN_WINDOW_END_TOLERANCE_S)
 
 
+def gate_reading(raw: dict, gate_ages: tuple | None = None) -> dict:
+    """What the proposal makes of the Export start gate and of the leases consumer (their ages are how long each has held its state, in seconds; the default is 'long enough'): the gate's own
+    codes while it does not allow a start (GATE_UNREADABLE when it cannot be read, GATE_INCONSISTENT when its state and its list disagree, GATE_SETTLING while it has read on for less than
+    GATE_SETTLE_S), and whether the leases consumer counts (on, for GATE_SETTLE_S)."""
+    egs, ega = split(raw[EG]) if raw.get(EG) is not None else ("unknown", {})
+    bl = ega.get("blocked_by")
+    egl = list(bl) if isinstance(bl, (list, tuple, set, frozenset)) else None
+    eg_age, tl_age = gate_ages if gate_ages is not None else (600.0, 600.0)
+    g_read = egs in ("on", "off") and egl is not None
+    g_incons = g_read and ((egs == "on") != (len(egl) == 0))
+    g_open = g_read and egs == "on" and len(egl) == 0
+    if not g_read:
+        codes = ["GATE_UNREADABLE"]
+    else:
+        codes = [c[:40] for c in egl if isinstance(c, str)] + (["GATE_INCONSISTENT"] if g_incons else []) + (["GATE_SETTLING"] if (g_open and not (eg_age is not None and eg_age >= GATE_SETTLE_S)) else [])
+    tls = split(raw[TL])[0] if raw.get(TL) is not None else "unknown"
+    return {"codes": codes, "time_ok": tls == "on" and tl_age is not None and tl_age >= GATE_SETTLE_S, "tl": tls}
+
+
 def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | None = None, held_by: str = "unknown", now_ts: float | None = None, zone: ZoneInfo | None = None,
-              lease: dict | None = None) -> dict:
+              lease: dict | None = None, gate_ages: tuple | None = None) -> dict:
     """What the proposal must be for these raw readings (strings or None for a missing entity). `poll_skew_s` is Home Assistant's clock minus the poll text, in seconds (None: the
     text cannot be read as a time). `capacity_attrs` = (capacity_kwh, capacity_basis) of the battery runtime sensor. `now_ts` is Home Assistant's clock (needed while the Export
     schedule's window is open and while a lease runs). `lease` = {"end_text", "start_ts", "run_ts"} (the raw end text of the lease, the epoch its flag last changed, the epoch the scheduled
@@ -501,6 +555,10 @@ def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | N
     else:
         state = "VALID"
     numeric = state in ("VALID", "UNVERIFIED")
+    gate = gate_reading(raw, gate_ages)
+    verdict = state
+    if state == "VALID" and gate["codes"]:
+        state = "NOT ALLOWED"
     notes: list[str] = []
     if numeric:
         if tgt > net:
@@ -516,7 +574,8 @@ def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | N
         if running and l_stop_v is not None and l_stop_v > max(stop_s, reserve, DONGLE_STOP_SOC_MIN):
             notes.append("FLOOR_FROM_RUNNING_LEASE")
     return {
-        "state": state, "blocked_by": codes, "notes": notes,
+        "state": state, "verdict": verdict, "actionable": verdict == "VALID" and not gate["codes"], "time_ok": gate["time_ok"], "gate_codes": gate["codes"],
+        "blocked_by": gate["codes"] if state == "NOT ALLOWED" else codes, "notes": notes,
         "floor": floor if numeric else None, "energy": energy if numeric else None, "power": p if numeric else None, "net": net if numeric else None,
         "duration": dur if numeric else None, "raw_power": raw_p if numeric else None, "dur_raw": dur_raw if numeric else None,
         "loop_power": lp if numeric else None, "loop_duration": ldur if numeric else None,
@@ -527,23 +586,24 @@ def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | N
     }
 
 
-def memory_age(mem_seconds, eval_age, mem_ok: bool) -> float:
-    """How old the re-target memory reads at a render, given what the previous model attribute says (`mem_seconds` since when it remembers, `eval_age` seconds since its last evaluation) and
-    whether `this` can be read at all. A memory that is not there, was not evaluated within the last MODEL_MAX_AGE_S (or is from the future by more than 5 s) starts afresh: age 0."""
+def memory_age(mem_seconds, mem_ok: bool) -> float:
+    """How old the re-target memory reads at a render, given what the previous model attribute says (`mem_seconds` since when it remembers) and whether `this` can be read at all. A memory
+    that is not there, or is from the future by more than 5 s, starts afresh: age 0. (There is no pause rule any more: the model carries no time of its evaluation, decision D-C04a route a;
+    a restart restores the memory, decision D-C04d.)"""
     if not mem_ok or mem_seconds is None:
         return 0.0
-    if -5 <= eval_age <= MODEL_MAX_AGE_S and mem_seconds >= -5:
+    if mem_seconds >= -5:
         return float(mem_seconds)
     return 0.0
 
 
 def reference_lease(prop: dict, *, lease: str, l_stop_raw, l_exp_raw, l_cmd_raw, l_end_text, l_start_ts, run_ts, now_ts: float, prev_state: str | None, prev_entry: float | None,
-                    mem_age: float, mem_ok: bool = True, zone: ZoneInfo | None = None) -> dict:
+                    mem_age: float, mem_ok: bool = True, zone: ZoneInfo | None = None, time_ok: bool = True) -> dict:
     """The comparison and the re-target for a proposal (from `reference`) and the lease's raw facts. `lease` is the raw state of the lease flag; `l_end_text` the raw end text; `l_start_ts`
     the epoch the flag last changed and `run_ts` the epoch the Export schedule's start script last ran (each None when unknown); `prev_state` and `prev_entry` are the re-target's memory (its state
     and the entry time of its latest ALLOWED episode); `mem_age` is how old that memory reads in seconds (see memory_age) and `mem_ok` whether `this` can be read at all."""
     parsed = prop["parsed"]
-    numeric = prop["state"] in ("VALID", "UNVERIFIED")
+    numeric = prop["verdict"] in ("VALID", "UNVERIFIED")
     floor, net, p, lp = prop["floor"], prop["net"], prop["power"], prop["loop_power"]
     l_stop, l_exp, l_cmd = num(l_stop_raw, 0, 100), num(l_exp_raw, 0, PHYSICAL_MAX_W), num(l_cmd_raw, 0, PHYSICAL_MAX_W)
     l_end_ts = lease_end_reading(l_end_text, now_ts, l_start_ts, zone)      # an end that lies before now or before the lease start cannot be right
@@ -582,11 +642,11 @@ def reference_lease(prop: dict, *, lease: str, l_stop_raw, l_exp_raw, l_cmd_raw,
         rt = "UNKNOWN"
     elif end_now:
         rt = "END NOW"
-    elif prop["state"] != "VALID" or not complete or age is None or not origin:
+    elif prop["verdict"] != "VALID" or not complete or age is None or not origin:
         rt = "UNKNOWN"
     elif not dev:
         rt = "NO CHANGE"
-    elif age < RETARGET_MIN_AGE_S or recent or mem_young:
+    elif age < RETARGET_MIN_AGE_S or recent or mem_young or not time_ok:
         rt = "WAIT"
     else:
         rt = "ALLOWED"
@@ -598,13 +658,13 @@ def reference_lease(prop: dict, *, lease: str, l_stop_raw, l_exp_raw, l_cmd_raw,
         codes.append("HOLD_ACTIVE")
     if rt == "END NOW" and end_res:
         codes.append("RESERVE_ABOVE_LEASE_STOP_SOC")
-    if rt == "UNKNOWN" and on and prop["state"] != "VALID":
+    if rt == "UNKNOWN" and on and prop["verdict"] != "VALID":
         codes.append("PROPOSAL_NOT_VALID")
-    if rt == "UNKNOWN" and on and prop["state"] == "VALID" and not complete:
+    if rt == "UNKNOWN" and on and prop["verdict"] == "VALID" and not complete:
         codes.append("LEASE_FACTS_UNREADABLE")
-    if rt == "UNKNOWN" and on and prop["state"] == "VALID" and complete and age is None:
+    if rt == "UNKNOWN" and on and prop["verdict"] == "VALID" and complete and age is None:
         codes.append("LEASE_START_UNKNOWN")
-    if rt == "UNKNOWN" and on and prop["state"] == "VALID" and complete and age is not None and not origin:
+    if rt == "UNKNOWN" and on and prop["verdict"] == "VALID" and complete and age is not None and not origin:
         codes.append("LEASE_ORIGIN_UNKNOWN")
     if rt == "WAIT" and age < 0:
         codes.append("CLOCK_BACKWARDS")
@@ -616,11 +676,13 @@ def reference_lease(prop: dict, *, lease: str, l_stop_raw, l_exp_raw, l_cmd_raw,
         codes.append("MEMORY_UNAVAILABLE")
     if rt == "WAIT" and mem_ok and mem_young:
         codes.append("MEMORY_YOUNG")
+    if rt == "WAIT" and not time_ok:
+        codes.append("TIME_NOT_TRUSTED")
     wait_until = None
     if rt == "WAIT":
         wait_until = max([(l_start_ts + RETARGET_MIN_AGE_S) if (age is not None and age < RETARGET_MIN_AGE_S) else 0,
                           (prev_entry + RETARGET_MIN_GAP_S) if recent else 0,
-                          (math.floor(now_ts - mem_age) + RETARGET_MIN_GAP_S) if mem_young else 0])
+                          (math.floor(now_ts - mem_age) + RETARGET_MIN_GAP_S) if mem_young else 0]) or None
     changes: list[str] = []
     if rt in ("WAIT", "ALLOWED", "END NOW"):
         if dev_stop:
