@@ -143,6 +143,7 @@ import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
 import _sgt1_scope as _sgt1  # noqa: E402
 import _exc1_scope as _exc1  # noqa: E402
+import _csm1_scope as _csm1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
 import _ttr1_scope as _ttr1  # noqa: E402
 import _wsc1_scope as _wsc1  # noqa: E402
@@ -1571,7 +1572,27 @@ EXC1 = Entry(
          "nothing reads it yet, the gates are soft, it reads neither the start gate nor the time trust input (their packages pin who may read them), every missing or implausible input makes it INVALID; "
          "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, TTR1, SGT1, EXC1)
+# csm1 (the CONTROL STATE read model: one display for Charge Battery and Export to Grid, slice S-A1 of the shared control integration; offline, nothing installed, the gates are SOFT; _csm1_scope.py): made on the export after
+# exc1. ADDED: the package, its suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path;
+# ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; no existing package, card or dashboard is edited. TWO existing suites are edited, each only to widen a pinned list of the packages that
+# may read a fact, DELIBERATELY and exactly as the design (decision D-PIN) names it: home-assistant/tests/test_ecco_start_gate.py (the gates' readers: the export gate by the export coordinator and the control state
+# package, the charge gate by the control state package) and home-assistant/tests/test_ecco_time_trust.py (READERS and PINNED_READERS: the export coordinator and the control state package, for the leases consumer
+# only); both widenings are pinned by mutants. The package is three template sensors only (no automation, helper, script, trigger, action or service call): no register operation, no write of any kind. The entries
+# must be re-sealed in merge order when main's chain moves: 70, 72, 74, this one, then the reserve branch.
+CSM1 = Entry(
+    id="csm1", pr="CSM1", commit="unmerged",
+    reverts=dict(_csm1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after csm1
+        HA_MANIFEST: "09da83af1e6c35f0514a4a6df691bbbdb59c8a6c0c41be4fc0833023b53760a7",
+    },
+    added_files=_csm1.ADDED_FILES,
+    # _pex.fingerprint(CSM1): hashes its parent exc1's fingerprint and every declaration above
+    fingerprint="410f516f71128e4a14be7043ea6fcc68df624b5d4ee162f7594d2f81016c3aaf",
+    note="the control state read model (three template sensors: a lifecycle state, why, the next action, what blocks a start and what the lease holds for Charge Battery and for Export to Grid, and who holds the "
+         "inverter settings); a display, never a gate, nothing may read it, the gates are soft, every unreadable input makes it UNKNOWN and never ready, no measurement and no moving time in an attribute; "
+         "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, TTR1, SGT1, EXC1, CSM1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
