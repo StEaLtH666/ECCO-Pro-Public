@@ -1,0 +1,129 @@
+# ECCO Pro - dongle lost during a lease: ONE notification that says no firmware guard may be running (READ-ONLY; it only informs)
+#
+# NOT INSTALLED, NOT LIVE-PROVEN. Offline only; see home-assistant/packages/README.md ("Dongle lost during a lease").
+#
+# WHY. A Free Power or Dump to Grid lease is guarded by the dongle's own firmware: its end time, its watchdog, and for a Dump the Stop SOC checked every
+# 15 s (failing closed when the SOC is older than 90 s). If the dongle is dead, cut off or unable to read the inverter while a lease is running, those guards
+# may not be running, and Home Assistant cannot see it: the dongle's entities simply read unavailable. For a Dump the export then continues with no Stop SOC (only the
+# inverter's own shutdown SOC remains); for Free Power the grid charge to 100 percent continues in every slot until the lease ends. Today nothing tells the owner.
+# This package is that alert and nothing more. It prevents nothing and ends nothing.
+#
+# WHAT IT PROVIDES (two automations, no helper, no template entity)
+#   ecco_dongle_lost_alert        when a lease was REPORTED ACTIVE and the dongle's telemetry has then stayed offline for 5 minutes, ONE persistent notification
+#                                 (fixed id ecco_dongle_lost_in_lease) that says in plain words that no firmware guard may be running and what the owner can do
+#   ecco_dongle_lost_alert_clear  dismisses that notification when the dongle's telemetry reads on again
+#
+# WHEN IT RUNS (every trigger is a change FROM A POSITIVE READING; nothing runs at a start, a reload or a reconnect)
+#   - the lease flag of Free Power or Dump to Grid changes from on to unavailable: the dongle vanished while a lease was on; or
+#   - the dongle's Telemetry Online flag changes from on to off (the dongle is alive but cannot read the inverter) or from on to unavailable, while a lease flag reads on.
+# It then waits for up to 5 minutes for the dongle to come back (telemetry on) or for the lease to be reported over (both lease flags readable and off). If neither has happened
+# when the 5 minutes end, and telemetry is still not on, it raises the notification. A flap that recovers inside the 5 minutes ends the wait and raises nothing.
+# Why 5 minutes: it is longer than the Dump's own fail-closed bound (90 s) and than the longest dip measured on a real Home Assistant core for template and
+# dongle reconnects (about 70 s), so a reconnect, a reload or a dongle reboot never raises it; and it is well inside the 15 minutes after which ESPHome restarts a dongle that has
+# no Home Assistant client (and the dongle's boot ends and restores an open lease), so the owner is told while there is still something to do. A Dump moves at most about
+# 8 kW, so 5 minutes is at most about 0.7 kWh of battery.
+#
+# WHAT IT NEVER DOES BY ITSELF. A restart, a reload, an unavailable-to-on transition, an entity that did not exist before, a flag that is unknown, a lease flag that reads off, or a
+# Home Assistant that has just started never creates the notification: a trigger counts only as a change from on, the notification is created only after the 5 minutes, and a
+# countdown in progress dies with a restart or an automation reload (so a dongle lost while Home Assistant restarts is NOT announced: the one stated limit).
+#
+# THE WORDS TO THE OWNER (the manual fallback). In the inverter's vendor app: for a Dump to Grid, set the export policy back to Zero Export (this stops the forced
+# export); for Free Power, put your usual time-of-use table back (this ends the forced charge). A dongle that is alive but has lost Home Assistant restarts itself about 15 minutes after
+# it last had a client and ends the lease when it boots. The notification clears itself when the dongle's telemetry returns.
+#
+# HARD RULES (each is a static check in home-assistant/tests/test_ecco_dongle_lost_alert.py).
+#   - READ-ONLY. The ONLY service calls are persistent_notification.create and persistent_notification.dismiss. It never presses a button, never writes a number, switch,
+#     select, helper, register or TOU slot, and never starts or ends a lease.
+#   - It reads only the three dongle flags above (the lease flags and Telemetry Online): no forecast, no Solcast, no Intelligence entity, no ECCO control.
+#   - A trigger acts only on a POSITIVE reading: a value that is missing, unavailable or unknown is never the old state of a trigger.
+#
+# LIMITS, stated plainly. It is SOFT: it runs in Home Assistant, so a Home Assistant that is down or restarting announces nothing. It cannot tell a dead dongle from a dongle that lost
+# its connection. It says "may": it does not know whether the dongle's own guards are running. The notification lives in memory only (a restart clears it). Recalled from Home Assistant
+# core, NOT verified on a real instance (the offline model of them is in the suite): that a state trigger fires with trigger.from_state set to the previous state object (none for an entity
+# that did not exist) and trigger.entity_id set, that wait_template with continue_on_timeout continues at once when its template is already true, that `mode: single` with max_exceeded silent drops
+# a trigger while a run is busy, that an ESPHome device's entities all read unavailable when its connection drops (in no fixed order), and that persistent_notification.dismiss of an id that
+# does not exist is ignored.
+#
+# RECORDER FOOTPRINT (ESTIMATE, not measured). The automations write a row only when they trigger (their last-triggered attribute): about 0 rows an hour while the dongle is healthy.
+# The live count needs the row-counting tools extended with these entity ids.
+#
+# INSTALL. One file copy to /config/packages/ecco_dongle_lost_alert.yaml, a configuration check, then reload the AUTOMATIONS (Developer tools, YAML, Automations; never "reload all"). No restart,
+# no helper to create. Remove: delete the file and reload the automations. Nothing here is meant to be exposed to a voice assistant.
+
+automation:
+  - id: ecco_dongle_lost_alert
+    alias: "ECCO - Dongle lost during a lease: tell the owner that no firmware guard may be running"
+    description: >-
+      After a Free Power or Dump to Grid lease was reported active and the dongle's telemetry has then stayed offline for 5 minutes, creates ONE persistent notification
+      (fixed id) that says no firmware guard may be running and what the owner can do. Acts only on a change from on, never at a restart, a reload or a reconnect. It only
+      informs: it presses and writes nothing.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id:
+          - binary_sensor.ecco_clock_dongle_free_power_active
+          - binary_sensor.ecco_clock_dongle_dump_to_grid_active
+        to: "unavailable"
+        id: lease_flag_lost
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online
+        to: "off"
+        id: telemetry_off
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online
+        to: "unavailable"
+        id: telemetry_gone
+    conditions:
+      # A change FROM A POSITIVE READING (on): never from unavailable or unknown, and never from nothing. A telemetry loss counts only while a lease flag still reads on.
+      - condition: template
+        value_template: >-
+          {%- set was = trigger.from_state.state if trigger.from_state is not none else '' -%}
+          {%- if trigger.id == 'lease_flag_lost' -%}{{ was == 'on' }}
+          {%- else -%}{{ was == 'on' and (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') or is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on')) }}
+          {%- endif -%}
+    actions:
+      - variables:
+          # Which lease: the flag that was lost (the trigger knows it), or a flag that still reads on. A telemetry trigger can run after the lease flags have gone unavailable too
+          # (an ESPHome device's entities drop in no fixed order, and a run starts after the trigger): then no flag reads on and the notice says "Free Power or Dump to Grid".
+          which: >-
+            {%- set a = (trigger.id == 'lease_flag_lost' and trigger.entity_id == 'binary_sensor.ecco_clock_dongle_free_power_active') or is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'on') -%}
+            {%- set b = (trigger.id == 'lease_flag_lost' and trigger.entity_id == 'binary_sensor.ecco_clock_dongle_dump_to_grid_active') or is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'on') -%}
+            {{ 'Free Power and Dump to Grid' if (a and b) else ('Free Power' if a else ('Dump to Grid' if b else 'Free Power or Dump to Grid')) }}
+      # The 5 minutes: end the wait at once when the dongle's telemetry reads on again or the lease is reported over (both flags readable and off).
+      - wait_template: >-
+          {{ is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on')
+             or (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off')) }}
+        timeout: "00:05:00"
+        continue_on_timeout: true
+      # Still lost: telemetry does not read on, and neither lease is reported over.
+      - condition: template
+        value_template: >-
+          {{ not is_state('binary_sensor.ecco_clock_dongle_telemetry_online', 'on')
+             and not (is_state('binary_sensor.ecco_clock_dongle_free_power_active', 'off') and is_state('binary_sensor.ecco_clock_dongle_dump_to_grid_active', 'off')) }}
+      - action: persistent_notification.create
+        data:
+          notification_id: ecco_dongle_lost_in_lease
+          title: "ECCO: the dongle is lost while a {{ which }} lease may be running"
+          message: >-
+            A {{ which }} lease was running when the dongle's data stopped, and the dongle has not come back for 5 minutes. The firmware guards that end a lease (its end time, its
+            watchdog and, for a Dump to Grid, the Stop SOC check every 15 seconds) run on the dongle: if it is dead, cut off or cannot read the inverter, NO FIRMWARE GUARD MAY BE RUNNING.
+            For a Dump to Grid the export then continues with no Stop SOC: only the inverter's own shutdown SOC remains. For Free Power the grid charge to 100 percent continues in every slot
+            until the lease ends. What you can do: open the inverter's vendor app and set the export policy back to Zero Export (this stops a forced export) or put your usual time-of-use table back
+            (this ends a forced charge). A dongle that is alive but has lost Home Assistant restarts itself about 15 minutes after it last had a client, and its boot ends the lease. This notice is
+            informational: it changed nothing, and it clears itself when the dongle's telemetry returns.
+
+  - id: ecco_dongle_lost_alert_clear
+    alias: "ECCO - Dongle lost during a lease: clear the notice when telemetry returns"
+    description: >-
+      Dismisses the dongle-lost notification when the dongle's telemetry reads on again. It dismisses and creates nothing else; dismissing an id that does not exist is harmless.
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.ecco_clock_dongle_telemetry_online
+        to: "on"
+    actions:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: ecco_dongle_lost_in_lease

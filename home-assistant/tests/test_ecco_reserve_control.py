@@ -1,0 +1,635 @@
+"""Offline suite for the reserve control package (home-assistant/packages/ecco_reserve_control.yaml): ONE guarded script that sets the owner's battery reserve.
+
+The script validates a request (a whole percent from 0 to 80), asks for a confirmation when it LOWERS the reserve (a value below the reserve the plan uses now or below the
+owner's own), writes ONLY input_number.ecco_minimum_reserve_soc, reads it back and leaves a result text for a card. It never writes an inverter, dongle, TOU, number, switch or
+button entity. Nothing was installed and nothing was written live. This suite runs the REAL package on the repository's own models (the FPS1 interpreter and the zone-aware plan
+layer with Home Assistant's helper range checks), with the REAL owner reserve helper definition and the REAL plan helper package, so the effective reserve is produced by its real template.
+
+  [0] static      the file defines one script and one helper, the write vocabulary is exactly input_number.set_value on one entity, input_text.set_value on one entity and the
+                  notification calls; it reads only the reserve helper and the plan's effective reserve; no dongle slug, no forecast, no Intelligence entity; ASCII, LF, no site
+                  value; the header states the rules; the manifest stanza, the README section and the CHANGELOG bullet
+  [1] table       raise, lower, same value, with and without confirm, at the limits, during a Prepare for power cut reserve
+  [2] values      every kind of junk in the value field, one at a time; the confirm field in every spelling
+  [3] unreadable  the helper and the effective reserve missing, unavailable, unknown or junk, one at a time
+  [4] failure     a write that does not stick, one that lands on another number, one that raises: FAILED, one write, no retry, a notification, dismissed by the next success
+  [5] vocabulary  over a whole session the only service calls are the four allowed ones, on the allowed entities, and no state outside the helper and the result text changes
+  [6] mutation    in-memory mutants of the package, each caught
+
+Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import sys
+from pathlib import Path
+
+import yaml
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(ROOT / "tools"))
+import _ha_script_sim as S  # noqa: E402
+import _reserve_control_sim as M  # noqa: E402
+import ecco_site_render as render  # noqa: E402
+
+PKG_REL = "home-assistant/packages/ecco_reserve_control.yaml"
+PKG_TEXT = (ROOT / PKG_REL).read_text(encoding="utf-8")
+PKG_RAW = (ROOT / PKG_REL).read_bytes()
+PKGS = ROOT / "home-assistant" / "packages"
+MANIFEST_TEXT = (ROOT / "deployment" / "ha-manifest.yaml").read_text(encoding="utf-8")
+FAILURES: list[str] = []
+MISSING = S._MISSING
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    if ok:
+        print(f"  PASS  {name}")
+    else:
+        FAILURES.append(name)
+        print(f"  FAIL  {name}" + (f" - {detail}" if detail else ""))
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def _no_dupes(loader, node, deep=False):
+    keys = [loader.construct_object(k, deep=deep) for k, _v in node.value]
+    dup = sorted({k for k in keys if keys.count(k) > 1}, key=str)
+    if dup:
+        raise ValueError(f"duplicate mapping key(s) {dup}")
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dupes)
+
+HELPER, PLAN, RESULT, NOTE = M.HELPER, M.PLAN, M.RESULT, M.NOTE
+
+
+def slug(name: str) -> str:
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", name.lower())).strip("_")
+
+ALLOWED_ACTIONS = {"input_number.set_value", "input_text.set_value", "persistent_notification.create", "persistent_notification.dismiss"}
+ID_RE = re.compile(r"(?<![A-Za-z0-9_.])((?:binary_)?sensor|input_[a-z]+|switch|button|number|select|script|automation|climate|light|lock|cover|fan|esphome|modbus|mqtt|rest_command|"
+                   r"shell_command|scene|group|timer|counter)\.([a-z0-9_]+)")
+FORBIDDEN_DOMAINS = ("number", "select", "switch", "button", "climate", "light", "lock", "cover", "fan", "esphome", "modbus", "mqtt", "rest_command", "shell_command", "scene",
+                     "group", "timer", "counter", "binary_sensor", "input_boolean", "input_select", "input_datetime")
+INTEL = "ecco_" "intel"
+SOLCAST = "solc" "ast"
+HEADER_MUST = ("WHAT IT WRITES, AND WHAT IT NEVER WRITES", "THE RULES", "HARD RULES", "LIMITS", "RECORDER FOOTPRINT (ESTIMATE", "INSTALL.", "never lowers on an unreadable reserve",
+               "KNOWN CONFLICT", "second writer", "exactly one writer", "does NOT lower the effective reserve", "CONFIRM_NEEDED", "NOT_A_NUMBER", "OUT_OF_RANGE", "NOT_WHOLE", "HELPER_UNREADABLE", "RESERVE_UNREADABLE", "WRITE_NOT_CONFIRMED",
+               "NO CHANGE", "the inverter's own floor registers are NOT changed", "never while the script runs")
+
+
+def code_lines(text: str) -> str:
+    return "\n".join(ln for ln in text.split("\n") if not ln.lstrip().startswith("#"))
+
+
+def collect(node, key: str, acc: list) -> list:
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key and isinstance(v, str):
+                acc.append(v)
+            collect(v, key, acc)
+    elif isinstance(node, list):
+        for v in node:
+            collect(v, key, acc)
+    return acc
+
+
+def privacy_problems(text: str) -> list:
+    bad = []
+    if re.search(r"(?<![0-9.])(?:\d{1,3}\.){3}\d{1,3}(?![0-9.])", text):
+        bad.append("an IPv4 address")
+    if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}", text):
+        bad.append("an e-mail address")
+    if re.search(r"https?://|www\.", text):
+        bad.append("a link")
+    if re.search(r"api[_ -]?key|password|secret|token", text, re.I):
+        bad.append("a key or secret word")
+    if re.search(r"[A-Za-z]:\\|/Users/|/home/", text):
+        bad.append("a path")
+    if any(ord(c) > 126 or (ord(c) < 32 and c != "\n") for c in text):
+        bad.append("a non-ASCII or control character")
+    if re.search(r"[ \t]+$", text, re.M):
+        bad.append("trailing space")
+    return bad
+
+
+def static_problems(text: str) -> list:
+    bad = []
+    try:
+        doc = yaml.load(text, Loader=UniqueKeyLoader) or {}
+    except Exception as exc:  # noqa: BLE001
+        return [f"YAML does not parse: {str(exc)[:100]}"]
+    if set(doc) != {"input_text", "script"}:
+        return [f"top-level keys are {sorted(doc)}"]
+    it = doc["input_text"]
+    if set(it) != {"ecco_reserve_set_result"} or it["ecco_reserve_set_result"].get("max") != 255 or "initial" in it["ecco_reserve_set_result"]:
+        bad.append("the result helper is not exactly one input_text with max 255 and no initial value")
+    sc = doc["script"]
+    if set(sc) != {"ecco_reserve_set"}:
+        return bad + [f"scripts are {sorted(sc)}"]
+    s = sc["ecco_reserve_set"]
+    if s.get("mode") != "single" or set(s.get("fields") or {}) != {"value", "confirm"}:
+        bad.append("the script is not mode single with exactly the fields value and confirm")
+    acts = collect(doc, "action", [])
+    if set(acts) != ALLOWED_ACTIONS:
+        bad.append(f"the service calls are {sorted(set(acts))}")
+    # the one write: input_number.set_value on exactly the reserve helper, once
+    nums = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("action") == "input_number.set_value":
+                nums.append(((node.get("target") or {}).get("entity_id"), node.get("continue_on_error")))
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(s)
+    if nums != [(HELPER, True)]:
+        bad.append(f"input_number.set_value calls are {nums}")
+    texts = []
+
+    def walk2(node):
+        if isinstance(node, dict):
+            if node.get("action") == "input_text.set_value":
+                texts.append((node.get("target") or {}).get("entity_id"))
+            for v in node.values():
+                walk2(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk2(v)
+    walk2(s)
+    if not texts or set(texts) != {RESULT}:
+        bad.append(f"input_text.set_value targets are {texts}")
+    code = code_lines(text)
+    ids = {f"{m.group(1)}.{m.group(2)}" for m in ID_RE.finditer(code)} - ALLOWED_ACTIONS
+    if ids != {HELPER, RESULT, PLAN}:
+        bad.append(f"it mentions {sorted(ids)} (expected the helper, the result text and the plan's effective reserve)")
+    dom = sorted({i for i in ids if i.split(".", 1)[0] in FORBIDDEN_DOMAINS})
+    if dom:
+        bad.append(f"a write domain appears: {dom}")
+    if "ecco_clock_dongle" in text:
+        bad.append("it names a dongle entity")
+    low = code.lower()
+    for word in (INTEL, SOLCAST, "forecast", "intelligence"):
+        if word in low:
+            bad.append(f"it reads or names {word!r}")
+    if "template" in doc or "automation" in doc:
+        bad.append("a template or an automation appears")
+    if re.search(r"\bnotify\.|\bhomeassistant\.|\btrigger\b", code):
+        bad.append("a notify service, a homeassistant service or a trigger appears")
+    for p in privacy_problems(text):
+        bad.append(f"hygiene: {p}")
+    if "\r" in text or "\t" in text:
+        bad.append("a CR or a tab")
+    for phrase in HEADER_MUST:
+        if phrase not in text:
+            bad.append(f"the header lost {phrase!r}")
+    return bad
+
+
+# ===========================================================================================================================
+# scenarios (each returns the problems it found, for the package and for every mutant)
+# ===========================================================================================================================
+STAMP = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"
+
+
+def go(text, owner=5, cut=None, plan=True, **fields):
+    cw = M.ControlWorld(text, reserve=owner, with_plan=plan)
+    if cut:
+        cw.power_cut(cut)
+    n0, h0 = len(cw.w.service_log), len(cw.w.history)
+    res = cw.run(**fields)
+    cw.n0, cw.h0 = n0, h0
+    return cw, res
+
+
+def kinds(cw) -> list:
+    return [(s, e) for s, e, _d in cw.services(cw.n0)]
+
+
+def judge(label: str, cw, res: str, kind: str, owner_after, notified: bool, writes: int, bad: list, extra: str = "") -> None:
+    pat = {"OK": rf"^OK {STAMP} - your reserve is now \d+ percent \(it was \d+\)\. ", "NOCHANGE": rf"^OK {STAMP} - NO CHANGE: your reserve already is \d+ percent; nothing was written$"}.get(
+        kind, rf"^REFUSED (?:{kind}) {STAMP} - ")
+    if not re.match(pat, res) or len(res) > 255 or (kind == "OK" and not res.endswith("Nothing was written to the inverter or the dongle.")):
+        bad.append(f"{label}: result {res!r}")
+    if abs(float(cw.owner()) - float(owner_after)) > 1e-9:
+        bad.append(f"{label}: the helper reads {cw.owner()}, wanted {owner_after}")
+    if (NOTE in cw.notified()) != notified:
+        bad.append(f"{label}: notification {list(cw.notified())}, wanted {notified}")
+    if len(cw.write_log) != writes:
+        bad.append(f"{label}: {len(cw.write_log)} reserve writes, wanted {writes}")
+    if extra and extra not in res:
+        bad.append(f"{label}: result lacks {extra!r}: {res!r}")
+
+
+def sc_table(text: str) -> list:
+    bad = []
+    # (label, owner, power cut reserve, fields, kind, helper after, notification, writes, a phrase the result must carry)
+    cases = [
+        ("a raise needs no confirm", 5, None, dict(value=10), "OK", 10, False, 1, "The plan reserve is now 10 percent."),
+        ("a raise with confirm false", 5, None, dict(value=6, confirm=False), "OK", 6, False, 1, ""),
+        ("a raise to the maximum", 5, None, dict(value=80), "OK", 80, False, 1, "The plan reserve is now 80 percent."),
+        ("the same value is NO CHANGE and writes nothing", 5, None, dict(value=5), "NOCHANGE", 5, False, 0, ""),
+        ("zero is a whole percent in range: lowering to 0 asks to confirm", 5, None, dict(value=0), "CONFIRM_NEEDED", 5, False, 0, "nothing was written"),
+        ("a lowering asks to confirm", 5, None, dict(value=3), "CONFIRM_NEEDED", 5, False, 0, "call again with confirm true"),
+        ("a lowering with confirm false asks", 5, None, dict(value=3, confirm=False), "CONFIRM_NEEDED", 5, False, 0, ""),
+        ("a lowering with confirm true is written", 5, None, dict(value=3, confirm=True), "OK", 3, False, 1, "(it was 5)"),
+        ("lowering to 0 with confirm", 5, None, dict(value=0, confirm=True), "OK", 0, False, 1, "The plan reserve is now 0 percent."),
+        ("lowering by one from the maximum asks", 80, None, dict(value=79), "CONFIRM_NEEDED", 80, False, 0, "(80 percent)"),
+        ("lowering from the maximum with confirm", 80, None, dict(value=40, confirm=True), "OK", 40, False, 1, "(it was 80)"),
+        ("raising from zero by one", 0, None, dict(value=1), "OK", 1, False, 1, ""),
+        ("zero over zero is NO CHANGE", 0, None, dict(value=0), "NOCHANGE", 0, False, 0, ""),
+        ("a power cut reserve: raising the owner's value below it still asks (below the reserve the plan uses now)", 5, 80, dict(value=20), "CONFIRM_NEEDED", 5, False, 0,
+         "Prepare for power cut"),
+        ("a power cut reserve: lowering the owner's value with confirm is allowed and does not lower the plan reserve", 40, 80, dict(value=20, confirm=True), "OK", 20, False, 1,
+         "stays at 80 percent while a Prepare for power cut reserve runs"),
+        ("a power cut reserve: the same value as the owner's is NO CHANGE", 5, 80, dict(value=5), "NOCHANGE", 5, False, 0, ""),
+        ("a power cut reserve: raising to its own value needs no confirm", 5, 80, dict(value=80), "OK", 80, False, 1, "The plan reserve is now 80 percent."),
+        ("a power cut reserve below the owner's own does not count: the plan uses the owner's value", 50, 40, dict(value=45), "CONFIRM_NEEDED", 50, False, 0, "(50 percent)"),
+    ]
+    for label, owner, cut, fields, kind, after, notified, writes, phrase in cases:
+        cw, res = go(text, owner, cut, **fields)
+        judge(label, cw, res, kind, after, notified, writes, bad, phrase)
+    # the owner-only lowering: the plan's value is below the owner's (a plain sensor, as no real plan can read): the owner's own reserve is still compared
+    cw, res = go(text, 10, None, plan=False, value=7)
+    cw.w.set(PLAN, "4")
+    cw.n0, cw.h0 = len(cw.w.service_log), len(cw.w.history)
+    res = cw.run(value=7)
+    judge("lowering below the owner's own reserve but above the plan's asks", cw, res, "CONFIRM_NEEDED", 10, False, 0, bad)
+    return bad
+
+
+def sc_values(text: str) -> list:
+    bad = []
+    nan, inf = float("nan"), float("inf")
+    refused = [(None, "NOT_A_NUMBER"), ("", "NOT_A_NUMBER"), (" ", "NOT_A_NUMBER"), ("abc", "NOT_A_NUMBER"), ("7x", "NOT_A_NUMBER"), ("nan", "NOT_A_NUMBER"), (nan, "NOT_A_NUMBER"),
+               (True, "NOT_A_NUMBER"), (False, "NOT_A_NUMBER"), ([], "NOT_A_NUMBER"), ([7], "NOT_A_NUMBER"), ({}, "NOT_A_NUMBER"), (inf, "OUT_OF_RANGE|NOT_A_NUMBER"), (-inf, "OUT_OF_RANGE|NOT_A_NUMBER"),
+               ("inf", "OUT_OF_RANGE"), (-1, "OUT_OF_RANGE"), ("-1", "OUT_OF_RANGE"), (81, "OUT_OF_RANGE"), ("81", "OUT_OF_RANGE"), (100, "OUT_OF_RANGE"), (1000, "OUT_OF_RANGE"),
+               (80.5, "OUT_OF_RANGE"), (-0.5, "OUT_OF_RANGE"), (5.5, "NOT_WHOLE"), ("5.5", "NOT_WHOLE"), (0.5, "NOT_WHOLE"), (79.9, "NOT_WHOLE"), (6.0000001, "NOT_WHOLE")]
+    for v, code in refused:
+        cw, res = go(text, 5, None, value=v, confirm=True)
+        judge(f"value {v!r}", cw, res, code, 5, True, 0, bad)
+    cw, res = go(text, 5, None)
+    judge("no value field at all", cw, res, "NOT_A_NUMBER", 5, True, 0, bad)
+    for v, want in [("7", 7), (7.0, 7), (" 8 ", 8), ("1e1", 10), ("+9", 9), (80, 80), ("80", 80), (6, 6)]:
+        cw, res = go(text, 5, None, value=v)
+        judge(f"value {v!r}", cw, res, "OK", want, False, 1, bad)
+    for c, kind, after in [(True, "OK", 3), (False, "CONFIRM_NEEDED", 5), (None, "CONFIRM_NEEDED", 5), ("true", "CONFIRM_NEEDED", 5), ("True", "CONFIRM_NEEDED", 5), (1, "CONFIRM_NEEDED", 5),
+                           ("yes", "CONFIRM_NEEDED", 5), ("on", "CONFIRM_NEEDED", 5), ([], "CONFIRM_NEEDED", 5), ({}, "CONFIRM_NEEDED", 5), ("", "CONFIRM_NEEDED", 5), (MISSING, "CONFIRM_NEEDED", 5)]:
+        cw, res = go(text, 5, None, value=3, confirm=c)
+        judge(f"confirm {c!r}", cw, res, kind, after, False, 1 if kind == "OK" else 0, bad)
+    return bad
+
+
+def sc_unreadable(text: str) -> list:
+    bad = []
+    for junk in (None, "unavailable", "unknown", "", "abc", "nan", "inf", "-1", "101"):
+        cw = M.ControlWorld(text, reserve=5)
+        cw.raw(HELPER, junk)
+        n0 = len(cw.w.service_log)
+        res = cw.run(value=10, confirm=True)
+        cw.n0 = n0
+        judge(f"the helper reads {junk!r}", cw, res, "HELPER_UNREADABLE", 5 if junk is None else 5, True, 0, bad) if False else None
+        if not re.match(rf"^REFUSED HELPER_UNREADABLE {STAMP} - ", res) or cw.write_log or NOTE not in cw.notified():
+            bad.append(f"the helper reads {junk!r}: {res!r} writes {len(cw.write_log)} notified {list(cw.notified())}")
+    for junk in (None, "unavailable", "unknown", "", "abc", "nan", "inf", "-1", "101"):
+        # a LOWERING cannot be judged: refused, with confirm too, nothing written
+        cw = M.ControlWorld(text, reserve=5, with_plan=False)
+        cw.raw(PLAN, junk)
+        res = cw.run(value=3, confirm=True)
+        if not re.match(rf"^REFUSED RESERVE_UNREADABLE {STAMP} - ", res) or cw.write_log or NOTE not in cw.notified() or float(cw.owner()) != 5.0:
+            bad.append(f"the plan reserve reads {junk!r}: a lowering reads {res!r} writes {len(cw.write_log)}")
+        # a raise needs no plan reserve: written, and the result says the plan reserve cannot be read
+        cw = M.ControlWorld(text, reserve=5, with_plan=False)
+        cw.raw(PLAN, junk)
+        res = cw.run(value=10)
+        if not res.startswith("OK ") or "The plan reserve cannot be read now." not in res or float(cw.owner()) != 10.0 or len(cw.write_log) != 1:
+            bad.append(f"the plan reserve reads {junk!r}: a raise reads {res!r} writes {len(cw.write_log)}")
+        # the same value: nothing to write
+        cw = M.ControlWorld(text, reserve=5, with_plan=False)
+        cw.raw(PLAN, junk)
+        res = cw.run(value=5)
+        if "NO CHANGE" not in res or cw.write_log:
+            bad.append(f"the plan reserve reads {junk!r}: the same value reads {res!r}")
+    # the plan package is not installed at all: the sensor does not exist
+    cw = M.ControlWorld(text, reserve=5, with_plan=False)
+    cw.w.states.pop(PLAN, None)
+    res = cw.run(value=3, confirm=True)
+    if not re.match(rf"^REFUSED RESERVE_UNREADABLE {STAMP} - ", res) or cw.write_log:
+        bad.append(f"no plan sensor: a lowering reads {res!r}")
+    res = cw.run(value=10)
+    if not res.startswith("OK ") or len(cw.write_log) != 1:
+        bad.append(f"no plan sensor: a raise reads {res!r}")
+    return bad
+
+
+def sc_failure(text: str) -> list:
+    bad = []
+    for label, hook in (("the write does not stick", dict(drop=True)), ("the write lands on another number", dict(skew=1.0)), ("the write raises", dict(raise_next=1))):
+        cw = M.ControlWorld(text, reserve=5)
+        for k, v in hook.items():
+            setattr(cw, k, v)
+        n0 = len(cw.w.service_log)
+        res = cw.run(value=10)
+        cw.n0 = n0
+        if not re.match(rf"^FAILED WRITE_NOT_CONFIRMED {STAMP} - ", res) or len(cw.write_log) != 1 or NOTE not in cw.notified():
+            bad.append(f"{label}: {res!r} writes {len(cw.write_log)} notified {list(cw.notified())}")
+        if label == "the write does not stick" and abs(float(cw.owner()) - 5.0) > 1e-9:
+            bad.append("a dropped write changed the helper")
+        # the next success dismisses the notification and says OK
+        cw.drop, cw.skew, cw.raise_next = False, 0.0, 0
+        res = cw.run(value=30)
+        if not res.startswith("OK ") or NOTE in cw.notified() or float(cw.owner()) != 30.0:
+            bad.append(f"{label}: the retry reads {res!r}, notified {list(cw.notified())}")
+    return bad
+
+
+def sc_text(text: str) -> list:
+    """The result is always one line below the helper's 255 characters, the helper never rejects it, and a success carries the stamp, the new and the old value."""
+    bad = []
+    worst = 0
+    for owner, cut, fields in [(5, None, dict(value=10)), (40, 80, dict(value=20, confirm=True)), (5, 80, dict(value=20)), (80, None, dict(value=79)), (5, None, dict(value="x" * 400)),
+                               (50, 40, dict(value=45)), (5, 100, dict(value=3, confirm=True))]:
+        cw, res = go(text, owner, cut, **fields)
+        worst = max(worst, len(res))
+        if "\n" in res or len(res) > 255 or not res or any("invalid value of length" in w for w in cw.w.warnings):
+            bad.append(f"result {res!r}")
+    return bad
+
+
+def sc_vocabulary(text: str) -> list:
+    """Over a whole session the only service calls are the four allowed ones on the allowed entities, and no state outside the helper, the result text and the script itself changes."""
+    bad = []
+    cw = M.ControlWorld(text, reserve=5)
+    n0, h0 = len(cw.w.service_log), len(cw.w.history)
+    for fields in (dict(value=10), dict(value=3), dict(value=3, confirm=True), dict(value="abc"), dict(value=99), dict(value=10), dict(value=10), dict(value=5.5)):
+        cw.run(**fields)
+    cw.drop = True
+    cw.run(value=30)
+    cw.drop = False
+    cw.run(value=30)
+    calls = cw.services(n0)
+    for s, e, d in calls:
+        if s not in ALLOWED_ACTIONS:
+            bad.append(f"service {s}")
+        elif s == "input_number.set_value" and e != HELPER:
+            bad.append(f"input_number.set_value on {e}")
+        elif s == "input_text.set_value" and e != RESULT:
+            bad.append(f"input_text.set_value on {e}")
+        elif s.startswith("persistent_notification") and d.get("notification_id") != NOTE:
+            bad.append(f"a notification other than {NOTE}")
+    touched = {e for _t, e, _s in cw.w.history[h0:]}
+    if touched - {HELPER, RESULT, "script.ecco_reserve_set"}:
+        bad.append(f"states changed: {sorted(touched - {HELPER, RESULT, 'script.ecco_reserve_set'})}")
+    if not any(s == "input_number.set_value" for s, _e, _d in calls) or not any(s == "persistent_notification.dismiss" for s, _e, _d in calls):
+        bad.append("the session did not exercise the write and the dismissal")
+    if cw.w.warnings and any("already running" in w for w in cw.w.warnings):
+        bad.append("a run found the script still running")
+    return bad
+
+
+def sc_restart(text: str) -> list:
+    """A Home Assistant restart runs nothing of this package (it has no trigger), the helper and the result text come back as they were, the script works afterwards, and a helper that
+    comes back unreadable is refused (never a guess)."""
+    bad = []
+    cw = M.ControlWorld(text, reserve=5)
+    res = cw.run(value=10)
+    if not res.startswith("OK "):
+        bad.append(f"the first request reads {res!r}")
+    n0 = len(cw.w.service_log)
+    cw.pw.restart()
+    cw.w.run_until(cw.w.t + 300)
+    if cw.services(n0):
+        bad.append(f"a restart ran services: {cw.services(n0)[:2]}")
+    if float(cw.owner()) != 10.0 or "your reserve is now 10 percent" not in cw.result:
+        bad.append("the helper or the result text did not come back after a restart")
+    res = cw.run(value=10)
+    if "NO CHANGE" not in res:
+        bad.append(f"the same value after a restart reads {res!r}")
+    res = cw.run(value=12)
+    if not res.startswith("OK ") or float(cw.owner()) != 12.0:
+        bad.append(f"a raise after a restart reads {res!r}")
+    cw.pw.restart(numbers={HELPER: "unavailable"})
+    w0 = len(cw.write_log)
+    res = cw.run(value=20)
+    if not re.match(rf"^REFUSED HELPER_UNREADABLE {STAMP} - ", res) or len(cw.write_log) != w0:
+        bad.append(f"a helper that comes back unavailable reads {res!r}")
+    return bad
+
+
+BATTERY = [("static", lambda t: static_problems(t)), ("table", sc_table), ("values", sc_values), ("unreadable", sc_unreadable), ("failure", sc_failure), ("text", sc_text),
+           ("vocabulary", sc_vocabulary), ("restart", sc_restart)]
+
+
+def battery(text: str, kill: bool = False, prefer: str | None = None, info: dict | None = None) -> list:
+    found = []
+    for name, fn in sorted(BATTERY, key=lambda b: 0 if b[0] == prefer else 1):
+        try:
+            probs = fn(text)
+        except Exception as exc:  # noqa: BLE001 - a mutant that breaks the model is caught
+            probs = [f"{type(exc).__name__}: {str(exc)[:100]}"]
+        if probs:
+            found += [f"[{name}] {p}" for p in probs]
+            if info is not None:
+                info["section"] = name
+            if kill:
+                return found
+    return found
+
+
+# ===========================================================================================================================
+print("[0] static: the file, its vocabulary, its reads, its words")
+# ===========================================================================================================================
+check("the package parses and satisfies every static rule (one script, one helper, the write vocabulary, the reads, the words, hygiene, the header)", static_problems(PKG_TEXT) == [],
+      str(static_problems(PKG_TEXT)[:3]))
+check("the static rules are live: each flags an injected breach",
+      all(static_problems(m) for m in (PKG_TEXT + "\n# 203.0.113.5\n", PKG_TEXT.replace("persistent_notification.dismiss", "button.press"), PKG_TEXT + "\t",
+                                       PKG_TEXT.replace("input_number.ecco_minimum_reserve_soc\n        data:", "input_number.ecco_normal_max_charge_target\n        data:"),
+                                       PKG_TEXT.replace("sensor.ecco_plan_effective_reserve') | float(none) -%}\n            {{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}\n          stamp",
+                                                        "sensor.ecco_clock_dongle_ecco_battery_shutdown') | float(none) -%}\n            {{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}\n          stamp"),
+                                       PKG_TEXT.replace("    max: 255", "    max: 255\n    initial: x"))))
+class _TagTolerantLoader(UniqueKeyLoader):
+    pass
+
+
+_TagTolerantLoader.add_multi_constructor("!", lambda loader, suffix, node: loader.construct_scalar(node) if isinstance(node, yaml.ScalarNode) else None)   # !secret and the like
+
+
+def defined_ids(path_or_text) -> tuple:
+    """(entity ids, unique_ids, automation ids) a package defines."""
+    text = path_or_text.read_text(encoding="utf-8") if isinstance(path_or_text, Path) else path_or_text
+    d = yaml.load(text, Loader=_TagTolerantLoader) or {}
+    ents, uids = set(), set()
+    for dom in ("input_boolean", "input_datetime", "input_number", "input_text", "input_select", "script", "counter", "timer"):
+        for k in d.get(dom) or {}:
+            ents.add(f"{dom}.{k}")
+    for blk in d.get("template") or []:
+        for kind in ("sensor", "binary_sensor"):
+            for it in blk.get(kind) or []:
+                if isinstance(it, dict) and it.get("name"):
+                    ents.add(f"{kind}.{slug(it['name'])}")
+                    if it.get("unique_id"):
+                        uids.add(it["unique_id"])
+    autos = {a["id"] for a in d.get("automation") or [] if isinstance(a, dict) and a.get("id")}
+    return ents, uids, autos
+
+
+_mine = defined_ids(PKG_TEXT)
+_clash = []
+for _p in sorted(PKGS.glob("*.yaml")):
+    if _p.name == Path(PKG_REL).name:
+        continue
+    try:
+        _theirs = defined_ids(_p)
+    except Exception as exc:  # noqa: BLE001
+        _clash.append(f"{_p.name}: {exc}")
+        continue
+    for _a, _b, _what in zip(_mine, _theirs, ("entity", "unique_id", "automation id")):
+        if _a & _b:
+            _clash.append(f"{_p.name}: {_what} {sorted(_a & _b)[:2]}")
+check(f"every id the package defines ({sum(len(x) for x in _mine)}: entities, unique_ids, automation ids) is defined in no other package of the repository ({len(list(PKGS.glob('*.yaml'))) - 1} others)",
+      _clash == [] and sum(len(x) for x in _mine) >= 2, str(_clash[:3]))
+
+site = render.parse_site({"schema": "ecco-site/1", "device_slug": "site_dongle"})
+try:
+    rendered, counts = render.render_text(PKG_REL, PKG_TEXT, site, render.firmware_actions(ROOT))
+except render.RenderError as exc:
+    rendered, counts = "", {"error": str(exc)[:120]}
+check("the package names no dongle entity at all, so the site renderer has nothing to rewrite and leaves it unchanged", counts == {} and rendered == PKG_TEXT, str(counts))
+man = yaml.safe_load(MANIFEST_TEXT)
+stanza = [p for p in man["home_assistant_packages"] if p["source"] == PKG_REL]
+check("the deployment manifest lists the package exactly once, to /config/packages, by ssh_file_copy, with restart_required false (two reloads install it; the pin-chain entry rrb1 pins the stanza)",
+      stanza == [{"source": PKG_REL, "destination": "/config/packages/ecco_reserve_control.yaml", "method": "ssh_file_copy", "restart_required": False}], str(stanza))
+README = re.sub(r"\s+", " ", (PKGS / "README.md").read_text(encoding="utf-8"))
+CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+BULLET = next((ln for ln in CHANGELOG.splitlines() if "ecco_reserve_control.yaml" in ln), "")
+check("the packages README has a Reserve control section (the script, its fields, every refusal code, the confirmation rule, the power cut rule, the write vocabulary, the install reloads) and the CHANGELOG has one bullet "
+      "that says offline, nothing installed and that it writes only the reserve helper",
+      all(s in README for s in ("## Reserve control", "script.ecco_reserve_set", "input_text.ecco_reserve_set_result", "input_number.ecco_minimum_reserve_soc", "NOT_A_NUMBER", "OUT_OF_RANGE", "NOT_WHOLE",
+                                "HELPER_UNREADABLE", "RESERVE_UNREADABLE", "CONFIRM_NEEDED", "WRITE_NOT_CONFIRMED", "Prepare for power cut", "never writes an inverter", "Input texts and Scripts"))
+      and all(s in BULLET for s in ("nothing installed", "writes only", "CONFIRM_NEEDED", "no inverter, dongle, TOU, number, switch or button entity", "restart", "Input texts and Scripts")), BULLET[:80])
+check("the package, the model and this suite are ASCII with LF line ends", b"\r" not in PKG_RAW and all(ord(c) < 128 for c in PKG_TEXT)
+      and b"\r" not in (HERE / "_reserve_control_sim.py").read_bytes() and b"\r" not in Path(__file__).read_bytes())
+helper = M.helper_package()["input_number"]["ecco_minimum_reserve_soc"]
+check("the model's helper is the repository's own definition: 0 to 80, whole percent steps (the script's range is the helper's)", (helper["min"], helper["max"], helper["step"]) == (0, 80, 1), str(helper))
+ctl = M.ControlWorld(PKG_TEXT)
+ctl.pw.num(HELPER, 5)
+rej0 = len(ctl.pw.rejected)
+try:
+    ctl.w.call("input_number.set_value", [HELPER], {"value": 81})
+    raised = False
+except S.ServiceError:
+    raised = True
+check("the model's own control: the helper refuses a value outside its range, as Home Assistant's does (so a script that wrote 81 would fail loudly)", raised and len(ctl.pw.rejected) == rej0 + 1)
+
+# ===========================================================================================================================
+print("[1] to [5] the table, the values, the unreadable inputs, the failures, the text, the vocabulary")
+# ===========================================================================================================================
+for name, fn in BATTERY[1:]:
+    probs = fn(PKG_TEXT)
+    check({"table": "the table (18 cases): raise, lower, the same value, with and without confirm, the limits, a Prepare for power cut reserve, the owner-only lowering",
+           "values": "every kind of junk in the value field (a missing field, text, nan, infinity, a boolean, a list, out of range, fractional) is refused with its own code and writes nothing; the accepted numeric spellings are written; "
+                     "the confirm field is true only as the boolean true",
+           "unreadable": "the owner's reserve helper (every request) and the plan's effective reserve (a lowering) each missing, unavailable, unknown, empty or junk: a refusal with its code, a notification and no write; a raise and the same value go on",
+           "failure": "a write that does not stick, one that lands on another number and one that raises each end FAILED WRITE_NOT_CONFIRMED with one write, no retry, no compensating write and a notification that the next success dismisses",
+           "text": "every result is one line below the helper's 255 characters and the helper never rejects it, junk and a power cut included",
+           "vocabulary": "over a whole session the only service calls are input_number.set_value on the reserve helper, input_text.set_value on the result text and the notification create and dismiss; no other state changes",
+           "restart": "a restart runs nothing of this package, the helper and the result text come back, the script works afterwards, and a helper that comes back unavailable is refused"}[name],
+          probs == [], str(probs[:2]))
+
+# ===========================================================================================================================
+print("[6] mutation: in-memory mutants of the package, each caught")
+# ===========================================================================================================================
+MUTANTS = [
+    ("range: the lower bound becomes 1", "{%- elif f < 0 or f > 80 -%}OUT_OF_RANGE", "{%- elif f < 1 or f > 80 -%}OUT_OF_RANGE"),
+    ("range: the lower bound becomes -1", "{%- elif f < 0 or f > 80 -%}OUT_OF_RANGE", "{%- elif f < -1 or f > 80 -%}OUT_OF_RANGE"),
+    ("range: the upper bound becomes 81", "{%- elif f < 0 or f > 80 -%}OUT_OF_RANGE", "{%- elif f < 0 or f > 81 -%}OUT_OF_RANGE"),
+    ("range: the upper bound becomes 79", "{%- elif f < 0 or f > 80 -%}OUT_OF_RANGE", "{%- elif f < 0 or f > 79 -%}OUT_OF_RANGE"),
+    ("whole: the whole-percent rule is dropped", "{%- elif f != (f | round(0)) -%}NOT_WHOLE", "{%- elif false -%}NOT_WHOLE"),
+    ("number: a boolean is a number", "(x | float(none)) if (x is not boolean and x is not none) else none -%}\n            {%- if f is none", "(x | float(none)) if (x is not none) else none -%}\n            {%- if f is none"),
+    ("number: nan is not refused as a non-number", "{%- if f is none or f != f -%}NOT_A_NUMBER", "{%- if f is none -%}NOT_A_NUMBER"),
+    ("number: a missing value is not refused", "{%- if f is none or f != f -%}NOT_A_NUMBER", "{%- if f != f -%}NOT_A_NUMBER"),
+    ("helper: an unreadable helper is accepted", "{%- elif owner_now < 0 -%}HELPER_UNREADABLE", "{%- elif false -%}HELPER_UNREADABLE"),
+    ("helper: the helper's own bound is 50", "{{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}\n          eff_now", "{{ v if (v is number and v == v and v >= 0 and v <= 50) else -1 }}\n          eff_now"),
+    ("reserve: an unreadable plan reserve is accepted for a lowering", "{%- elif eff_now < 0 and f < owner_now -%}RESERVE_UNREADABLE", "{%- elif false -%}RESERVE_UNREADABLE"),
+    ("reserve: an unreadable plan reserve refuses a raise too", "{%- elif eff_now < 0 and f < owner_now -%}RESERVE_UNREADABLE", "{%- elif eff_now < 0 -%}RESERVE_UNREADABLE"),
+    ("reserve: an unreadable plan reserve refuses the same value too", "{%- elif f == owner_now -%}\n            {%- elif eff_now < 0 and f < owner_now", "{%- elif eff_now < 0 -%}RESERVE_UNREADABLE\n            {%- elif eff_now < 0 and f < owner_now"),
+    ("reserve: the plan reserve's bound is 50", "{{ v if (v is number and v == v and v >= 0 and v <= 100) else -1 }}\n          stamp", "{{ v if (v is number and v == v and v >= 0 and v <= 50) else -1 }}\n          stamp"),
+    ("same: the same value is no longer special", "{%- elif f == owner_now -%}\n", "{%- elif false -%}\n"),
+    ("confirm: the plan's reserve is not compared", "(f < owner_now or f < eff_now)", "(f < owner_now)"),
+    ("confirm: the owner's own reserve is not compared", "(f < owner_now or f < eff_now)", "(f < eff_now)"),
+    ("confirm: a value equal to the reserve asks", "(f < owner_now or f < eff_now)", "(f <= owner_now or f <= eff_now)"),
+    ("confirm: any truthy value confirms", "not (cf is boolean and cf)", "not cf"),
+    ("confirm: it is always confirmed", "not (cf is boolean and cf)", "false"),
+    ("write: another value is written", "          value: \"{{ want }}\"", "          value: \"{{ want + 1 }}\""),
+    ("write: a raising call ends the run", "        continue_on_error: true\n", ""),
+    ("verify: a larger helper passes", "{{ after == want }}", "{{ after >= want }}"),
+    ("verify: a smaller helper passes", "{{ after == want }}", "{{ after <= want }}"),
+    ("verify: the read-back is not judged", "{{ after == want }}", "{{ true }}"),
+    ("stop: a refusal does not stop", "              - stop: \"refused\"\n", ""),
+    ("stop: NO CHANGE does not stop", "              - stop: \"no change\"\n", ""),
+    ("notice: the question of a lowering raises a notification", "!= 'CONFIRM_NEEDED' }}\"", "!= 'NEVER' }}\""),
+    ("notice: a refusal raises no notification", "!= 'CONFIRM_NEEDED' }}\"", "== 'CONFIRM_NEEDED' }}\""),
+    ("notice: a success does not dismiss the notice", "              - action: persistent_notification.dismiss", "              - action: persistent_notification.create"),
+    ("text: the plan reserve is said to stay at equality", "if eff_after > want else", "if eff_after >= want else"),
+    ("text: a power cut is not named in the question", "if eff_now > owner_now else ''", "if false else ''"),
+    ("text: the success text is cut at 20 characters", "okmsg[:250]", "okmsg[:20]"),
+    ("text: the refusal text is cut at 20 characters", "value: \"{{ result[:250] }}\"", "value: \"{{ result[:20] }}\"", 0),
+    ("text: the refusal code of NOT_WHOLE changes", "REFUSED NOT_WHOLE {{ stamp }}", "REFUSED NOT_WHOLE_X {{ stamp }}"),
+    ("text: the time stamp is empty", "stamp: \"{{ now().strftime('%Y-%m-%d %H:%M:%S') }}\"", "stamp: \"\""),
+    ("text: the nothing-written claim of a success is removed", "Nothing was written to the inverter or the dongle.", "Done."),
+    ("target: another helper is written", "          entity_id: input_number.ecco_minimum_reserve_soc\n        data:\n          value: \"{{ want }}\"", "          entity_id: input_number.ecco_normal_max_charge_target\n        data:\n          value: \"{{ want }}\""),
+    ("target: the result goes to another text", "                  entity_id: input_text.ecco_reserve_set_result\n                data:\n                  value: \"{{ okmsg[:250] }}\"", "                  entity_id: input_text.ecco_plan_last_result\n                data:\n                  value: \"{{ okmsg[:250] }}\""),
+    ("vocabulary: a switch call replaces the write", "      - action: input_number.set_value\n        continue_on_error: true", "      - action: switch.turn_off\n        continue_on_error: true"),
+    ("reads: a dongle entity is read", "stamp: \"{{ now()", "zz: \"{{ states('sensor.ecco_clock_dongle_ecco_battery_shutdown') }}\"\n          stamp: \"{{ now()"),
+    ("mode: the script is queued", "    mode: single\n    fields:", "    mode: queued\n    fields:"),
+    ("wording: the header drops the effective-reserve rule", "does NOT lower the effective reserve", "lowers the effective reserve"),
+    ("hygiene: an address appears in a comment", "# NOT INSTALLED, NOT LIVE-PROVEN.", "# 198.51.100.7 NOT INSTALLED, NOT LIVE-PROVEN."),
+]
+total = len(MUTANTS)
+killed = 0
+survivors: list = []
+prefer: dict = {}
+for entry in MUTANTS:
+    label, old, new = entry[:3]
+    nth = entry[3] if len(entry) > 3 else None
+    if (nth is None and PKG_TEXT.count(old) != 1) or (nth is not None and PKG_TEXT.count(old) <= nth):
+        check(f"mutant anchor is unique: {label}", False, f"{PKG_TEXT.count(old)}x")
+        continue
+    if nth is None:
+        mutated = PKG_TEXT.replace(old, new, 1)
+    else:
+        parts = PKG_TEXT.split(old)
+        mutated = old.join(parts[:nth + 1]) + new + old.join(parts[nth + 1:])
+    family = label.split(":", 1)[0]
+    info: dict = {}
+    found = battery(mutated, kill=True, prefer=prefer.get(family), info=info)
+    if found:
+        killed += 1
+        prefer[family] = info.get("section")
+        print(f"  PASS  mutant caught: {label} ({found[0][:90]})")
+    else:
+        survivors.append(label)
+        FAILURES.append(f"mutant survived: {label}")
+        print(f"  FAIL  mutant survived: {label}")
+check(f"{total} mutants (the range and whole-percent rules, the number test, the unreadable inputs, the lowering rule, the confirmation, the write and its read-back, the stops, the notification, the texts, "
+      "the targets, the vocabulary and the words): all caught", killed == total and total >= 25, f"{killed}/{total} {survivors[:3]}")
+_harmless = PKG_TEXT.replace("# WHY. The owner's reserve", "# WHY, restated. The owner's reserve")
+check("a harmless rewrite (a comment) survives the battery, and a rewrite of a rule does not", _harmless != PKG_TEXT and battery(_harmless, kill=True) == []
+      and battery(PKG_TEXT.replace("f > 80 -%}OUT_OF_RANGE", "f > 8000 -%}OUT_OF_RANGE"), kill=True) != [])
+
+if FAILURES:
+    print(f"\nFAILED: {len(FAILURES)} check(s)")
+    for f in FAILURES:
+        print("  -", f)
+    sys.exit(1)
+print("\nAll reserve control checks passed.")
+print("These prove the package against the repository's own models; nothing was installed, nothing was written live, and the script writes only the owner's reserve helper.")
