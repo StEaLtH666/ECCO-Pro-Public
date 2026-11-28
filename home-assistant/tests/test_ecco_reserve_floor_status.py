@@ -17,6 +17,7 @@ fact exists to base one on). Nothing was installed and nothing was written live.
   [5] notification  the opt-in, the 10 minute debounce, a flap, a reload, a restart, dismissal
   [6] no writes   the model saw no service call but the notification, and no state outside the package's own entities and helper
   [4b] limits     F4: the dongle's Configuration Online flag off for more than 1800 s and any single PENDING cause older than 6 hours read UNREADABLE (last_changed), and a reason never moves with time
+  [4e] long-off   R1: only a cause ages toward the 6 hour limit: after hours of off / NONE, one cause that begins now is PENDING, for each of the ten causes; the reason names the cause that decides
   [4c] vocabulary F9: every recovery text the firmware publishes, and invented ones, against the clear/open rule
   [4d] charging   F5: the charging slots' targets are listed (slot, source, target) and not judged; every reason says so
   [5b] flips      F9: a BELOW/UNREADABLE flip does not restart the debounce; a reload of the template entities or of the opt-in helper dismisses nothing; the notice's words
@@ -903,6 +904,97 @@ def sc_limits(text: str) -> list:
     return bad
 
 
+LONG_S = 30000      # 8 h 20 min: longer than the 6 hour limit
+
+
+def _all_long_off(fw, seconds: float = LONG_S, skip: tuple = ()) -> None:
+    """Every flag and both recovery states have held their clear state (off / NONE) for `seconds`, and the online flag has been on for a day; then every template renders again."""
+    now = fw.w.t + fw.w.clock_offset
+    for e in list(M.FLAGS) + [M.REC_FP, M.REC_DG]:
+        if e not in skip:
+            fw.w.changed_at[e] = now - seconds
+    fw.w.changed_at[M.ONLINE] = now - 86400
+    fw.force()
+
+
+def sc_long_off(text: str) -> list:
+    """R1 (the age lines): only a cause counts toward the 6 hour limit. A flag that has read OFF, or a recovery state that has read NONE, for a long time is not a cause and has no age that counts: in a normal idle house
+    every flag is off for days, so when ONE cause begins now the verdict is PENDING (never UNREADABLE), for each of the eight flags and both recovery states, from every clear text. The cause's own 6 hours count from its start;
+    the reason names the cause that decides (the oldest, the first in the order flags, Free Power recovery, Dump recovery on a tie), never a clear state."""
+    bad = []
+    causes = dict(CAUSES)
+    fw = world(text, live=True)
+    _all_long_off(fw)
+    if rec(fw).get("v") != "MATCH" or fw.state(M.BINARY) != "off":
+        bad.append(f"an idle house that has been clear for hours reads {rec(fw).get('v')}/{fw.state(M.BINARY)}, wanted MATCH/off")
+    # (a) every cause, starting now after more than 6 hours of off / NONE: PENDING (binary off), for every clear text of a recovery state
+    starts = [(e, "off", causes[e]) for e in M.FLAGS] + [(M.REC_FP, "NONE", "LOCKED_ORIGINAL"), (M.REC_FP, "NONE", "RESTORE OWED"),
+                                                         (M.REC_DG, "NONE", "LOCKED - operator decision required"), (M.REC_DG, "NONE - idle", "PENDING - outstanding snapshot"),
+                                                         (M.REC_DG, "ACCEPTED - operator chose to keep the live inverter state", "LOCKED - operator decision required")]
+    for e, clear, val in starts:
+        fw.put(e, clear)
+        _all_long_off(fw)
+        if rec(fw).get("v") != "MATCH":
+            bad.append(f"{e[-40:]} {clear!r} for hours reads {rec(fw).get('v')}, wanted MATCH")
+        fw.put(e, val)
+        r = rec(fw)
+        if r.get("v") != "PENDING" or fw.state(M.BINARY) != "off" or "more than 6 hours" in r.get("why", ""):
+            bad.append(f"{e[-40:]}: {clear!r} for hours, then {val!r} starts now: {r.get('v')}/{fw.state(M.BINARY)}/{r.get('why')!r}, wanted PENDING/off")
+        fw.put(e, clear)
+        _all_long_off(fw)
+    # two causes starting at the same moment, a flag and a recovery state, after hours of rest
+    fw.put(M.FLAGS[0], "on")
+    fw.put(M.REC_DG, causes[M.REC_DG])
+    if rec(fw).get("v") != "PENDING" or fw.state(M.BINARY) != "off":
+        bad.append(f"two causes that begin now after hours of rest read {rec(fw).get('v')}/{fw.state(M.BINARY)}, wanted PENDING/off")
+    fw.put(M.FLAGS[0], "off")
+    fw.put(M.REC_DG, "NONE")
+    _all_long_off(fw)
+    # the cause's own 6 hours count from ITS start, not from the rest before it: a flag and both recovery states, in real time
+    for e, clear in ((M.FLAGS[0], "off"), (M.REC_FP, "NONE"), (M.REC_DG, "NONE")):
+        fw.put(e, causes[e])
+        fw.advance(21600)
+        r = rec(fw)
+        if r.get("v") != "PENDING":
+            bad.append(f"{e[-40:]} {causes[e]!r} for 21600 s of real time (after hours of rest) reads {r.get('v')}, wanted PENDING")
+        fw.advance(61)
+        r = rec(fw)
+        if r.get("v") != "UNREADABLE" or e not in r.get("why", ""):
+            bad.append(f"{e[-40:]} {causes[e]!r} for 21661 s of real time reads {r.get('v')}/{r.get('why')!r}, wanted UNREADABLE naming it")
+        fw.put(e, clear)
+        _all_long_off(fw)
+        if rec(fw).get("v") != "MATCH":
+            bad.append(f"{e[-40:]}: the cause ended and the verdict is {rec(fw).get('v')}")
+    # (b) the reason names the cause that decides, never a clear state that is older: one old cause (30000 s) among states that have been clear for 40000 s
+    for e, val in CAUSES:
+        _all_long_off(fw, 40000, skip=(e,))
+        fw.put(e, val)
+        _aged_change(fw, e, LONG_S)
+        r = rec(fw)
+        others = [x for x in list(M.FLAGS) + [M.REC_FP, M.REC_DG] if x != e]
+        if r.get("v") != "UNREADABLE" or e not in r.get("why", "") or any(x in r.get("why", "") for x in others):
+            bad.append(f"{e[-40:]} {val!r} for 30000 s among states clear for 40000 s: {r.get('v')}/{r.get('why')!r}, wanted UNREADABLE naming only it")
+        fw.put(e, "off" if e in M.FLAGS else "NONE")
+        _all_long_off(fw)
+    # ties: two causes of the same age; the first in the order flags, Free Power recovery, Dump recovery is named
+    for pair, first in (((M.FLAGS[1], M.FLAGS[4]), M.FLAGS[1]), ((M.FLAGS[7], M.REC_FP), M.FLAGS[7]), ((M.REC_FP, M.REC_DG), M.REC_FP), ((M.FLAGS[3], M.REC_DG), M.FLAGS[3])):
+        for e in pair:
+            fw.put(e, causes[e])
+        for e in pair:
+            _aged_change(fw, e, LONG_S)
+        r = rec(fw)
+        if r.get("v") != "UNREADABLE" or first not in r.get("why", "") or any(x in r.get("why", "") for x in pair if x != first):
+            bad.append(f"two causes of the same age ({[x[-30:] for x in pair]}): {r.get('v')}/{r.get('why')!r}, wanted UNREADABLE naming {first[-30:]} only")
+        for e in pair:
+            fw.put(e, "off" if e in M.FLAGS else "NONE")
+        _all_long_off(fw)
+    if rec(fw).get("v") != "MATCH":
+        bad.append("the long-off sweep did not restore the idle house")
+    if fw.errors:
+        bad.append(f"template errors {fw.errors[:2]}")
+    return bad
+
+
 FW_FP_TEXTS = sorted(set(re.findall(r'"(NONE|LOCKED_[A-Z]+|REVIEWED|ACCEPT_RUNNING)"', FW_TEXT)))
 FW_DG_TEXTS = sorted(set(re.findall(r'dump_recovery_state\)\.publish_state\("([^"]*)"\)', FW_TEXT)))
 
@@ -1050,7 +1142,7 @@ def sc_flips(text: str) -> list:
 
 BATTERY = [("static", lambda t: static_problems(t)), ("table", sc_table), ("attributes", sc_attributes), ("pending", sc_pending), ("unreadable", sc_unreadable),
            ("binary", sc_binary), ("reasons", sc_reasons), ("notify", sc_notify), ("reload-restart", sc_reload_restart), ("time", sc_time), ("writes", sc_writes),
-           ("limits", sc_limits), ("recovery", sc_recovery), ("charging", sc_charging), ("flips", sc_flips)]
+           ("limits", sc_limits), ("recovery", sc_recovery), ("charging", sc_charging), ("flips", sc_flips), ("longoff", sc_long_off)]
 
 
 def battery(text: str, kill: bool = False, prefer: str | None = None, info: dict | None = None) -> list:
@@ -1208,7 +1300,9 @@ for name, fn in BATTERY[1:8] + [BATTERY[9]] + BATTERY[11:]:
                      "the oldest cause decides; a lease explains a lost read; a cause that ends and begins again starts again; the reasons carry no age",
            "recovery": "F9: every recovery text the firmware publishes (Free Power NONE, LOCKED_*, REVIEWED, ACCEPT_RUNNING; Dump to Grid NONE, PENDING, LOCKED, ACCEPTED) and invented ones (NEITHER, FOREIGN, CRITICAL, N, garbage): clear only for the exact rule, otherwise open (PENDING)",
            "charging": "F5: the charging slots' targets are listed as slot, source, target and not judged (slot 1 on Grid at 40 with a reserve of 80 still MATCHES the other slots); every MATCH, BELOW and ABOVE reason says charging slots not judged",
-           "flips": "F9: BELOW to UNREADABLE and back inside the debounce does not restart it (the binary sensor stays on), a reload of the template entities or the opt-in helper (unavailable, unknown) dismisses nothing, the notice says the reserve is software only until proof R6 and never says held or enforced"}[name],
+           "flips": "F9: BELOW to UNREADABLE and back inside the debounce does not restart it (the binary sensor stays on), a reload of the template entities or the opt-in helper (unavailable, unknown) dismisses nothing, the notice says the reserve is software only until proof R6 and never says held or enforced",
+           "longoff": "R1: only a cause ages toward the 6 hour limit: after more than 6 hours with every flag off and both recovery states NONE (or NONE - idle, or ACCEPTED), ONE cause that begins now reads PENDING (binary off), for each of the ten causes and every clear text, in real time too; "
+                      "the reason names the cause that decides (never a clear state that is older), and the first in order on a tie"}[name],
           probs == [], str(probs[:2]))
 check("the restart and reload rules: a reload reads unavailable once and creates nothing; the restored window shows the old state for milliseconds and creates nothing; a restart with the dongle gone reads UNREADABLE or "
       "unavailable and raises nothing; the dongle's return reads MATCH; a persistent BELOW after a restart raises the notice only after the debounce", sc_reload_restart(PKG_TEXT) == [], str(sc_reload_restart(PKG_TEXT)[:2]))
@@ -1335,6 +1429,28 @@ MUTANTS = [
     ("new vocabulary: Free Power ACCEPT_RUNNING reads as clear", "{%- set rfp_open = rfp != 'NONE' -%}", "{%- set rfp_open = rfp not in ['NONE', 'ACCEPT_RUNNING'] -%}"),
     ("new vocabulary: Free Power REVIEWED reads as clear", "{%- set rfp_open = rfp != 'NONE' -%}", "{%- set rfp_open = rfp not in ['NONE', 'REVIEWED'] -%}"),
     ("new vocabulary: a Free Power text that starts with N is clear", "{%- set rfp_open = rfp != 'NONE' -%}", "{%- set rfp_open = not rfp.startswith('N') -%}"),
+    # --- NEW (R1): the age lines. Only a CAUSE (a flag that is on, a recovery state that is open) ages toward the 6 hour limit. The first three survived the whole battery before the long-off scenario existed (an independent recheck found the first); the others
+    # sit on the same lines and are killed by the limits and long-off scenarios. Not listed, because they change nothing anyone can observe: dropping `states(e) == 'on'` for `!= 'off'` (an unreadable flag is UNREADABLE earlier), the `not in bad` guards of the two recovery
+    # lines (a state that cannot be read is UNREADABLE earlier), the age macro's value for a missing entity (the same), and an initial oldest of -1 instead of 0 (the name is used only past the limit).
+    ("new age: an off flag's age counts as a pending cause", "{%- if states(e) == 'on' and (age(e) | int) > c.oldest -%}", "{%- if (age(e) | int) > c.oldest -%}"),
+    ("new age: a clear Free Power recovery state's age counts (rfp_open dropped)", "{%- if rfp_open and rfp not in bad and", "{%- if rfp not in bad and"),
+    ("new age: a clear Dump recovery state's age counts (rdg_open dropped)", "{%- if rdg_open and rdg not in bad and", "{%- if rdg not in bad and"),
+    ("new age: a tie between flags names the later one", "(age(e) | int) > c.oldest -%}{%- set c.oldest = age(e) | int", "(age(e) | int) >= c.oldest -%}{%- set c.oldest = age(e) | int"),
+    ("new age: a tie between a flag and the Free Power recovery state names the recovery state", "(age('sensor.ecco_clock_dongle_free_power_recovery_state') | int) > c.oldest -%}{%- set c.oldest",
+     "(age('sensor.ecco_clock_dongle_free_power_recovery_state') | int) >= c.oldest -%}{%- set c.oldest"),
+    ("new age: a tie with the Dump recovery state names the Dump recovery state", "(age('sensor.ecco_clock_dongle_dump_to_grid_recovery_state') | int) > c.oldest -%}{%- set c.oldest",
+     "(age('sensor.ecco_clock_dongle_dump_to_grid_recovery_state') | int) >= c.oldest -%}{%- set c.oldest"),
+    ("new age: the Free Power age line reads the Dump recovery state's age", "rfp not in bad and (age('sensor.ecco_clock_dongle_free_power_recovery_state')", "rfp not in bad and (age('sensor.ecco_clock_dongle_dump_to_grid_recovery_state')"),
+    ("new age: the Dump age line reads the Free Power recovery state's age", "rdg not in bad and (age('sensor.ecco_clock_dongle_dump_to_grid_recovery_state')", "rdg not in bad and (age('sensor.ecco_clock_dongle_free_power_recovery_state')"),
+    ("new age: the Free Power age is set from the Dump recovery state's age", "{%- set c.oldest = age('sensor.ecco_clock_dongle_free_power_recovery_state') | int -%}", "{%- set c.oldest = age('sensor.ecco_clock_dongle_dump_to_grid_recovery_state') | int -%}"),
+    ("new age: the Free Power age line names the Dump recovery state", "{%- set c.oldname = 'sensor.ecco_clock_dongle_free_power_recovery_state' -%}", "{%- set c.oldname = 'sensor.ecco_clock_dongle_dump_to_grid_recovery_state' -%}"),
+    ("new age: a flag cause names no cause", "{%- set c.oldest = age(e) | int -%}{%- set c.oldname = e -%}", "{%- set c.oldest = age(e) | int -%}"),
+    ("new age: the age macro reads last_updated", "as_timestamp(o.last_changed, 0)", "as_timestamp(o.last_updated, 0)"),
+    ("new age: the oldest cause starts above the limit", "oldest=0, oldname=''", "oldest=21601, oldname=''"),
+    ("new age: every flag is aged by the first flag's age", "states(e) == 'on' and (age(e) | int) > c.oldest", "states(e) == 'on' and (age('binary_sensor.ecco_clock_dongle_free_power_active') | int) > c.oldest"),
+    ("new age: the age is in minutes", "{{- ((as_timestamp(now()) - as_timestamp(o.last_changed, 0)) | round(0) | int)", "{{- ((as_timestamp(now()) - as_timestamp(o.last_changed, 0)) / 60 | round(0) | int)"),
+    ("new age: the Free Power age line needs a flag cause too", "{%- if rfp_open and rfp not in bad and", "{%- if rfp_open and c.busy != '' and rfp not in bad and"),
+    ("new age: an accepted Dump recovery state is open for the age", "{%- set rdg_open = not (rdg.startswith('NONE') or rdg.startswith('ACCEPTED')) -%}", "{%- set rdg_open = not rdg.startswith('NONE') -%}"),
 ]
 total = len(MUTANTS)
 killed = survived = 0
@@ -1364,8 +1480,8 @@ for entry in MUTANTS:
         FAILURES.append(f"mutant survived: {label}")
         print(f"  FAIL  mutant survived: {label}")
 _new = len([m for m in MUTANTS if m[0].startswith("new ")])
-check(f"{total} mutants, {_new} of them new for F3, F4, F5 and F9 (every bound on both sides, every unreadable branch, every pending cause, the floor rule, the verdict ladder, the binary sensor's allow-list, the record, "
-      "the debounce on last_changed, the clear triggers, the opt-in, the two limits, the charging slots, the recovery vocabulary, the names and the words): all caught", killed == total and total >= 90 and _new >= 15, f"{killed}/{total} {survivors[:3]}")
+check(f"{total} mutants, {_new} of them new for F3, F4, F5, F9 and R1 (every bound on both sides, every unreadable branch, every pending cause, the floor rule, the verdict ladder, the binary sensor's allow-list, the record, "
+      "the debounce on last_changed, the clear triggers, the opt-in, the two limits, the charging slots, the recovery vocabulary, the names and the words): all caught", killed == total and total >= 116 and _new >= 56, f"{killed}/{total} {survivors[:3]}")
 _harmless = PKG_TEXT.replace("# WHY. ECCO's battery reserve is a plan value", "# WHY, restated. ECCO's battery reserve is a plan value")
 check("a harmless rewrite (a comment) survives the battery, and a rewrite of a rule does not", _harmless != PKG_TEXT and battery(_harmless, kill=True) == []
       and battery(PKG_TEXT.replace("cage > 150) else 'fresh'", "cage > 15000) else 'fresh'"), kill=True) != [])
