@@ -92,7 +92,7 @@ ENDING_PREFIXES = ("RESTORING", "END REQUESTED", "END DEFERRED", "FORCE RESTORE 
                    "RECOVERY OBLIGATION RESOLVED", "ACTIVATION WRITE FAILED", "ACTIVATION VERIFY FAILED", "FORCE RESTORE ORIGINAL SUCCESS - hardware",
                    "ACCEPT CURRENT STATE SUCCESS - accepted")
 STARTING_PREFIXES = ("STARTING", "Snapshot durably committed", "SNAPSHOT DURABLY COMMITTED")
-DONE_PREFIXES = ("Inactive", "RECOVERY RESOLVED OK", "FORCE RESTORE ORIGINAL SUCCESS - original", "ACCEPT CURRENT STATE SUCCESS - current", "END IGNORED", "REJECTED", "START FAILED")
+DONE_PREFIXES = ("Inactive", "RECOVERY RESOLVED OK", "FORCE RESTORE ORIGINAL SUCCESS - original", "ACCEPT CURRENT STATE SUCCESS - current", "ACCEPTED CURRENT STATE -", "END IGNORED", "REJECTED", "START FAILED")
 RESTORED_PREFIX = "RESTORED OK - "
 
 
@@ -161,7 +161,12 @@ UNREADABLE_ORDER = ("GATE", "TIME", "ACTIVE", "OPERATION", "SNAPSHOT", "OTHER_AC
 READY_SENTENCES = {
     "IDLE": "Nothing is running and the start gate is open.",
     "PLANNED": "A scheduled start is armed and the start gate is open.",
-    "ASSISTED": "ECCO has a valid proposal and the start gate is open.",
+    "ASSISTED": "The start gate is open and the guarded Start would run the Charge Battery request you staged on the dongle, as it stands.",
+}
+# Export: the guarded Start runs the numbers STAGED on the dongle; ECCO's proposal is for the schedule path (CS-01). ASSISTED is RESERVED for it until the slice S-C1 binds the Start to the proposal.
+READY_SENTENCES_EXPORT = {
+    "IDLE": "Nothing is running and the start gate is open. The guarded Start runs the numbers staged on the dongle; the ECCO proposal is for the schedule path and is information only.",
+    "PLANNED": READY_SENTENCES["PLANNED"],
 }
 OTHER_SENTENCES = {
     "ENDING": "The dongle is ending the lease and restoring the saved inverter settings.",
@@ -173,7 +178,7 @@ OTHER_SENTENCES = {
 }
 RUNNING_SENTENCES = {
     "charge": "Charge Battery is running: the dongle holds the charge rate fixed since the start until the lease ends.",
-    "export": "Export to Grid is running: the dongle loop holds the net export target above the latched Stop SOC until the lease ends.",
+    "export": "Export to Grid is running: the dongle loop works toward the net export target and ends the lease at the latched Stop SOC.",
 }
 NEXT_SENTENCES = {
     "UNKNOWN": "Wait for the unreadable inputs to return; nothing can be shown as ready until then.",
@@ -182,10 +187,11 @@ NEXT_SENTENCES = {
     "RUNNING": "Let it run, or press End and Restore to stop it.",
     "ARMED": "Wait for the start to finish, or switch the write enable off.",
     "NOT_READY": "Clear the cause named in why; the start gate must read on first.",
-    "ASSISTED": "Start it with the guarded Start when you want it: one press.",
+    "ASSISTED": "Press the guarded Start when you want it: it runs the Charge Battery request you staged, as it stands.",
     "PLANNED": "Nothing to do: the scheduled start runs at its time; cancel the schedule to stop it.",
     "IDLE": "Start it when you want, or arm a schedule.",
 }
+NEXT_IDLE_EXPORT = "Start it with the guarded Start when you want it (it runs the numbers staged on the dongle, not the ECCO proposal), or arm a schedule."
 OWNER_NOTES = {
     "NONE": "No lease and no manual write holds the inverter settings. Only the firmware refusal keeps two functions apart; a persisted owner needs a later firmware step.",
     "CHARGE": "Charge Battery (Free Power) holds the inverter settings; the firmware refuses Export to Grid while it does.",
@@ -207,13 +213,16 @@ CEILING_VALUES = ("ABOVE PROVEN LEVEL", "AT PROVEN LEVEL", "BELOW PROVEN LEVEL",
 
 # the wiring of this base, which the notes say (each slice that binds a path removes its note in its own commit)
 NOTES_CHARGE = ("SOFT_GATE", "CARD_START_NOT_GATED", "SCHEDULE_NOT_GATED", "RATE_FIXED_AT_START", "NO_TARGET_REACHED_END")
-NOTES_EXPORT = ("SOFT_GATE", "GUARDED_START_NOT_GATED", "SCHEDULE_NOT_GATED", "NO_END_GUARD")
+NOTES_EXPORT = ("SOFT_GATE", "GUARDED_START_NOT_GATED", "PROPOSAL_FOR_SCHEDULE_PATH", "SCHEDULE_NOT_GATED", "NO_END_GUARD")
+# the dongle loop's own word in the ACTIVE text of a running Export lease, as a note (CS-07): the first needle that the text contains, else LOOP_OTHER
+LOOP_NEEDLES = ((" - SETTLING - ", "LOOP_SETTLING"), (" - TRACKING - ", "LOOP_TRACKING"), (" - SATURATED LOW - ", "LOOP_SATURATED_LOW"), (" - SATURATED HIGH - ", "LOOP_SATURATED_HIGH"),
+                (" - TARGET INFEASIBLE LOW - ", "LOOP_TARGET_INFEASIBLE_LOW"), (" - TARGET INFEASIBLE HIGH - ", "LOOP_TARGET_INFEASIBLE_HIGH"), (" - NO RESPONSE - ", "LOOP_NO_RESPONSE"))
 
 FUNCS = {
     "charge": dict(label="Charge Battery", lease="Free Power", other_lease="Dump to Grid", sensor=CHARGE, gate=CG, a=FA, o=FO, s=FS, xa=DA, xo=DO, xs=DS, status=FT, ends=FE,
-                   arm=FW, sched=FSS, guard=FSG, armed=FARM, sstat=FSTAT),
+                   arm=FW, sched=FSS, guard=FSG, armed=FARM, sstat=FSTAT, busy_codes=("DUMP_ACTIVE", "DUMP_OPERATION", "DUMP_SNAPSHOT", "MANUAL_WRITE")),
     "export": dict(label="Export to Grid", lease="Dump to Grid", other_lease="Free Power", sensor=EXPORT, gate=EG, a=DA, o=DO, s=DS, xa=FA, xo=FO, xs=FS, status=DT, ends=DE,
-                   arm=DW, sched=DSS, guard=DSG, armed=DARM, sstat=DSTAT),
+                   arm=DW, sched=DSS, guard=DSG, armed=DARM, sstat=DSTAT, busy_codes=("FREE_POWER_ACTIVE", "FREE_POWER_OPERATION", "FREE_POWER_SNAPSHOT", "MANUAL_WRITE")),
 }
 
 # ---- the healthy world: nothing runs, both gates read on, the time is trusted --------------------------------------------------------------------------------------------
@@ -355,28 +364,35 @@ def function_rules(raw: dict, fn: str) -> dict:
     if t in BAD or fam == "OTHER":
         unreadable.append("STATUS")
     codes = _strings(gl)
-    incons = g in ("on", "off") and gl is not None and ((g == "on") != (len(gl) == 0))
+    sn = len(codes)
+    # CS-04: an OFF gate with no string code left in its list (an empty list, [5], [None]) disagrees with itself as much as an ON gate with a cause
+    incons = g in ("on", "off") and gl is not None and ((g == "on" and len(gl) > 0) or (g == "off" and sn == 0))
+    # CS-05: the other function's three flags and the manual write flag are the cause of a start that cannot run, whatever the gate says
+    busy = ya == "on" or yo == "on" or ys == "on" or mw == "on"
     if tl == "off" and "TIME_LEASES" not in codes:
         codes.append("TIME_LEASES")
     if incons:
         codes.append("GATE_INCONSISTENT")
+    for code, v in zip(F["busy_codes"], (ya, yo, ys, mw)):
+        if v == "on" and code not in codes:
+            codes.append(code)
     unk = bool(unreadable)
     open_ = g == "on" and gl is not None and len(gl) == 0 and tl == "on"
     conflict = la == "on" and ya == "on"
     owed = ls == "on" and la == "off" and lo == "off"
-    assisted = False
-    if fn == "export":
-        assisted = open_ and _state(raw, PROP) == "VALID" and _attr(raw, PROP, "actionable") is True
+    assisted = False          # CS-01: neither function reads ASSISTED on a proposal alone (the guarded Start runs the numbers staged on the dongle, not the proposal)
+    # CS-03: a refused raw Start press during a healthy lease leaves a REJECTED text (the DONE family) that stays until the END: the lease still runs
+    refused = la == "on" and lo == "off" and ls == "on" and fam == "DONE" and t.startswith("REJECTED")
     if unk:
         st = "UNKNOWN"
     elif conflict or fam == "FAULT" or owed:
         st = "FAULT"
-    elif lo == "on" and fam == "STARTING":
+    elif lo == "on" and (fam == "STARTING" or (la == "on" and fam == "ACTIVE")):      # CS-07: the ACTIVE text is published before the operation flag clears
         st = "ARMED"
     elif lo == "on":
         st = "ENDING"
     elif la == "on":
-        st = {"ACTIVE": "RUNNING", "ENDING": "ENDING", "STARTING": "ARMED"}.get(fam, "FAULT")
+        st = "RUNNING" if refused else {"ACTIVE": "RUNNING", "ENDING": "ENDING", "STARTING": "ARMED"}.get(fam, "FAULT")
     elif ar == "on" or sc == "on" or gd == "on":
         st = "ARMED"
     elif assisted:
@@ -385,8 +401,8 @@ def function_rules(raw: dict, fn: str) -> dict:
         st = "PLANNED"
     else:
         st = "IDLE"
-    ok = open_ and st in ("IDLE", "PLANNED", "ASSISTED")
-    return dict(g=g, gl=gl, tl=tl, fam=fam, unreadable=unreadable, codes=codes, incons=incons, unk=unk, open=open_, conflict=conflict, owed=owed, st=st, ok=ok, la=la)
+    ok = open_ and not busy and st in ("IDLE", "PLANNED", "ASSISTED")
+    return dict(g=g, gl=gl, tl=tl, fam=fam, unreadable=unreadable, codes=codes, incons=incons, unk=unk, open=open_, conflict=conflict, owed=owed, st=st, ok=ok, la=la, busy=busy, refused=refused, t=t)
 
 
 def why_of(fn: str, r: dict) -> str:
@@ -407,7 +423,7 @@ def why_of(fn: str, r: dict) -> str:
     if r["st"] in ("ENDING", "ARMED"):
         return OTHER_SENTENCES[r["st"]]
     if r["ok"]:
-        return READY_SENTENCES[r["st"]]
+        return (READY_SENTENCES_EXPORT if fn == "export" else READY_SENTENCES)[r["st"]]
     code0 = r["codes"][0] if r["codes"] else ""
     if r["tl"] == "off":
         nr = GATE_SENTENCES["TIME_LEASES"]
@@ -420,12 +436,14 @@ def why_of(fn: str, r: dict) -> str:
     return "Not ready: " + nr
 
 
-def next_of(r: dict) -> str:
+def next_of(r: dict, fn: str = "charge") -> str:
     st = r["st"]
     if st in ("UNKNOWN", "FAULT", "ENDING", "RUNNING", "ARMED"):
         return NEXT_SENTENCES[st]
     if not r["ok"]:
         return NEXT_SENTENCES["NOT_READY"]
+    if fn == "export" and st == "IDLE":
+        return NEXT_IDLE_EXPORT
     return NEXT_SENTENCES[st]
 
 
@@ -445,7 +463,7 @@ def lease_of(raw: dict, fn: str) -> dict:
     return {"ends_at": ends, "export_w": "NOT_READ" if pw is None else pw, "duration_min": "NOT_READ" if dm is None else dm, "stop_soc": "NOT_READ" if sp is None else sp}
 
 
-def notes_of(raw: dict, fn: str) -> list:
+def notes_of(raw: dict, fn: str, r: dict) -> list:
     F = FUNCS[fn]
     ss = _state(raw, F["sstat"])
     if fn == "charge":
@@ -462,6 +480,10 @@ def notes_of(raw: dict, fn: str) -> list:
             notes.append("PROPOSAL_NOT_INSTALLED")
     if ss == "FAILED":
         notes.append("SCHEDULE_LAST_RUN_FAILED")
+    if r["refused"]:
+        notes.append("LAST_PRESS_REFUSED")
+    if fn == "export" and r["st"] == "RUNNING" and r["fam"] == "ACTIVE":
+        notes.append(next((code for needle, code in LOOP_NEEDLES if needle in r["t"]), "LOOP_OTHER"))
     return notes
 
 
@@ -469,7 +491,7 @@ def proposal_of(raw: dict, r: dict) -> dict:
     ps0 = _state(raw, PROP)
     pstate = "NOT_INSTALLED" if ps0 in BAD else (ps0 if ps0 in PROPOSAL_STATES else "UNKNOWN")
     pb = _list_of(_attr(raw, PROP, "blocked_by"))
-    return {"state": pstate, "actionable": r["st"] == "ASSISTED", "blocked_by": _strings(pb), "floor_pct": _int_in(_num(raw, P_FLOOR), 0, 100), "net_export_w": _int_in(_num(raw, P_NET), 0, 30000)}
+    return {"state": pstate, "used_by_guarded_start": False, "note": "PROPOSAL_FOR_SCHEDULE_PATH", "blocked_by": _strings(pb), "floor_pct": _int_in(_num(raw, P_FLOOR), 0, 100), "net_export_w": _int_in(_num(raw, P_NET), 0, 30000)}
 
 
 def retarget_of(raw: dict) -> dict:
@@ -534,8 +556,8 @@ def reference(raw: dict) -> dict:
     for fn in ("charge", "export"):
         F = FUNCS[fn]
         r = function_rules(raw, fn)
-        attrs = {"why": why_of(fn, r), "next_action": next_of(r), "blocked_by": ["UNREADABLE_" + c for c in r["unreadable"]] + r["codes"], "start_allowed": r["ok"],
-                 "start_path": "GUARDED_SCRIPT", "end_path": "END_BUTTON", "lease": lease_of(raw, fn), "notes": notes_of(raw, fn)}
+        attrs = {"why": why_of(fn, r), "next_action": next_of(r, fn), "blocked_by": ["UNREADABLE_" + c for c in r["unreadable"]] + r["codes"], "start_allowed": r["ok"],
+                 "start_path": "GUARDED_SCRIPT", "end_path": "END_BUTTON", "lease": lease_of(raw, fn), "notes": notes_of(raw, fn, r)}
         if fn == "export":
             attrs["proposal"] = proposal_of(raw, r)
             attrs["retarget"] = retarget_of(raw)

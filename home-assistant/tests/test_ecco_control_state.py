@@ -29,6 +29,7 @@ Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
 
 from __future__ import annotations
 
+import itertools
 import random
 import re
 import sys
@@ -77,7 +78,7 @@ OWN_IDS = set(X.OWN)
 EXPECTED_READS = {X.TL, X.CG, X.EG, X.FA, X.FO, X.FS, X.DA, X.DO, X.DS, X.MW, X.FT, X.DT, X.FE, X.DE, X.FW, X.DW, X.FSS, X.FSG, X.DSS, X.DSG, X.FARM, X.DARM, X.FSTAT, X.DSTAT, X.FREQP, X.FREQD,
                   X.DREQP, X.DREQD, X.DREQS, X.CEIL, X.HOLD, X.RES, X.LATCHED, X.LIM, X.CAS, X.PROP, X.P_FLOOR, X.P_NET, X.RETG}
 # the exact (entity, attribute) pairs read through state_attr: nothing else (a pin by entity id alone would let a measurement in through an attribute of an entity that is allowed)
-EXPECTED_STATE_ATTRS = {(X.CG, "blocked_by"), (X.EG, "blocked_by"), (X.PROP, "actionable"), (X.PROP, "blocked_by"), (X.RETG, "reasons"), (X.RETG, "changes"), (X.HOLD, "held_by")}
+EXPECTED_STATE_ATTRS = {(X.CG, "blocked_by"), (X.EG, "blocked_by"), (X.PROP, "blocked_by"), (X.RETG, "reasons"), (X.RETG, "changes"), (X.HOLD, "held_by")}
 STATE_ATTR_RE = re.compile(r"state_attr\(\s*'([^']+)'\s*,\s*'([^']+)'\s*\)")
 ENTITY_RE = re.compile(r"(?<![A-Za-z0-9_.])(?:sensor|binary_sensor|input_text|input_number|input_boolean|input_datetime|number|script|button|switch|select|automation|light|climate)\.[a-z0-9_]+")
 FORBIDDEN_FORECAST = re.compile(r"forecast|solcast|predict|pv_tomorrow|estimate|intel_|house_power|battery_soc|pv_power|grid_power|battery_power|energy_above", re.I)
@@ -90,7 +91,7 @@ EXPECTED_ATTRS = {
     X.OWNER: ["live_match", "note"],
 }
 # how many templates of each sensor carry the shared rule block (the rest are tails that read nothing of it)
-CORE_COUNT = {X.CHARGE: 5, X.EXPORT: 6, X.OWNER: 2}
+CORE_COUNT = {X.CHARGE: 6, X.EXPORT: 7, X.OWNER: 2}
 HEADER_PINS = ("NOT INSTALLED, NOT LIVE-PROVEN", "DISPLAY ONLY", "DISPLAY, NEVER A GATE", "THE READ MODEL WRITES NOTHING", "no automation, no script, no helper, no trigger, no action, no service call",
                "NO PACKAGE MAY READ IT", "THE GATES ARE SOFT", "Start buttons", "THE STATES (first match wins", "UNKNOWN, FAULT, ENDING, RUNNING, ARMED, ASSISTED, PLANNED, IDLE", "start_allowed is true ONLY when",
                "never true while", "from a closed list", "a measured number never appears in a sentence", "WHAT IT COMBINES", "the leases consumer ONLY", "gates' number-bearing reasons are NOT copied",
@@ -99,7 +100,8 @@ HEADER_PINS = ("NOT INSTALLED, NOT LIVE-PROVEN", "DISPLAY ONLY", "DISPLAY, NEVER
                "RESTART, RELOAD AND FIRST STATE", "13 to 27 s", "RESTORED state for tens of", "wait 60 s after a start", "Core process time zone", "`this` is not used", "THE NOTES", "SOFT_GATE",
                "CARD_START_NOT_GATED", "GUARDED_START_NOT_GATED", "SCHEDULE_NOT_GATED", "NO_END_GUARD", "PROPOSAL_NOT_INSTALLED", "LIMITS, stated plainly", "display, never proof", "persisted owner",
                "Recalled from Home Assistant core", "NOT verified on a real Home Assistant", "INSTALL", "needs the owner's go", "template.reload", "no restart", "Install ONLY with NO Dump to Grid or Free Power lease running",
-               "OUTSIDE any armed scheduled Export or charge run", "window end plus 10 minutes", "re-creates EVERY template entity", "It changes no existing entity")
+               "OUTSIDE any armed scheduled Export or charge run", "window end plus 10 minutes", "re-creates EVERY template entity", "It changes no existing entity",
+               "PROPOSAL_FOR_SCHEDULE_PATH", "RESERVED", "LAST_PRESS_REFUSED", "LOOP_TRACKING", "guarded Start runs the numbers staged on the dongle")
 
 
 # ===========================================================================================================================
@@ -145,13 +147,13 @@ def run_row(label: str, raw: dict, w: "X.CtlWorld | None" = None, text: str | No
     return [f"{label}: {b}" for b in compare(w, raw)]
 
 
-READY_SENTENCES = set(X.READY_SENTENCES.values())
+READY_SENTENCES = set(X.READY_SENTENCES.values()) | set(X.READY_SENTENCES_EXPORT.values())
 NOT_READY_RE = re.compile(r"^Not ready: ")
 
 
 def all_sentences() -> set:
     out = set(X.GATE_SENTENCES.values()) | set(X.READY_SENTENCES.values()) | set(X.OTHER_SENTENCES.values()) | set(X.RUNNING_SENTENCES.values()) | set(X.NEXT_SENTENCES.values())
-    out |= set(X.OWNER_NOTES.values())
+    out |= set(X.OWNER_NOTES.values()) | set(X.READY_SENTENCES_EXPORT.values()) | {X.NEXT_IDLE_EXPORT}
     for fn in ("charge", "export"):
         for lab in X.UNREADABLE_LABELS.values():
             out.add(lab.format(lease=X.FUNCS[fn]["lease"], other_lease=X.FUNCS[fn]["other_lease"]) + " cannot be read, so nothing is shown as ready.")
@@ -183,7 +185,7 @@ def property_problems(snap: dict, label: str = "") -> list[str]:
         why, nxt, blocked = a.get("why", ""), a.get("next_action", ""), a.get("blocked_by")
         if not isinstance(why, str) or not why_is_closed(why):
             bad.append(f"{label}{eid}: why is not a closed sentence: {str(why)[:80]!r}")
-        if not isinstance(nxt, str) or nxt not in X.NEXT_SENTENCES.values():
+        if not isinstance(nxt, str) or nxt not in (set(X.NEXT_SENTENCES.values()) | {X.NEXT_IDLE_EXPORT}):
             bad.append(f"{label}{eid}: next_action is not a closed sentence: {str(nxt)[:80]!r}")
         if re.search(r"\d", str(why)) or re.search(r"\d", str(nxt)):
             bad.append(f"{label}{eid}: a digit in a sentence (a measured number must never appear in one)")
@@ -204,8 +206,16 @@ def property_problems(snap: dict, label: str = "") -> list[str]:
         bad.append(f"{label}both functions read RUNNING (the one-lease rule)")
     if snap[X.OWNER][0] not in X.OWNERS:
         bad.append(f"{label}owner {snap[X.OWNER][0]!r} is not in the closed list")
-    if snap[X.EXPORT][1].get("proposal", {}).get("actionable") and snap[X.EXPORT][0] != "ASSISTED":
-        bad.append(f"{label}the proposal says actionable while the state is {snap[X.EXPORT][0]}")
+    # CS-01: ASSISTED is RESERVED (no function reads it today): the guarded Start runs the numbers staged on the dongle, never the proposal
+    if "ASSISTED" in (snap[X.CHARGE][0], snap[X.EXPORT][0]):
+        bad.append(f"{label}a function reads ASSISTED: the guarded Start does not run ECCO's proposal")
+    prop = snap[X.EXPORT][1].get("proposal", {})
+    if prop.get("used_by_guarded_start") is not False or prop.get("note") != "PROPOSAL_FOR_SCHEDULE_PATH" or "actionable" in prop:
+        bad.append(f"{label}the proposal attribute claims a use or loses its note: {prop.get('used_by_guarded_start')!r} {prop.get('note')!r}")
+    if "PROPOSAL_FOR_SCHEDULE_PATH" not in snap[X.EXPORT][1].get("notes", []):
+        bad.append(f"{label}the Export notes lose PROPOSAL_FOR_SCHEDULE_PATH")
+    if snap[X.EXPORT][0] == "IDLE" and snap[X.EXPORT][1]["start_allowed"] and ("staged on the dongle" not in snap[X.EXPORT][1]["why"] or "staged on the dongle" not in snap[X.EXPORT][1]["next_action"]):
+        bad.append(f"{label}an Export that may be started does not say that the guarded Start runs the staged numbers")
     return bad
 
 
@@ -270,6 +280,7 @@ def inputs_problems(text: str | None = None, first_only: bool = False) -> list[s
     return bad
 
 
+MWID = X.MW
 STATUS_BY_FAMILY = {
     "ACTIVE": (X.FP_ACTIVE_TEXT, X.DG_ACTIVE_TEXT),
     "FAULT": ("OPERATOR DECISION REQUIRED - automatic recovery is blocked; Review Live State before retrying", "RECOVERY BLOCKED - durable recovery state UNKNOWN (marker could not be read from NVS at boot)"),
@@ -303,7 +314,7 @@ def combo_rows() -> list[tuple]:
         v.update({e: ("on" if bits >> i & 1 else "off") for i, e in ((0, X.DSS), (1, X.DSG), (2, X.DARM))})
         rows.append((f"arm/scripts/armed {bits:05b}", H(v, proposal=True)))
     gate_states = (("on", []), ("on", ["TIME_LEASES"]), ("off", []), ("off", ["TIME_LEASES", "TIME_SCHEDULES"]), ("off", ["DUMP_ACTIVE"]), ("off", ["SOME_NEW_CODE"]), ("off", ["x" * 60]),
-                   ("off", ["IMPORT_HEADROOM", "OVERRIDE_ACTIVE"]), ("on", [3]), ("off", [None, "MANUAL_WRITE"]))
+                   ("off", ["IMPORT_HEADROOM", "OVERRIDE_ACTIVE"]), ("on", [3]), ("off", [None, "MANUAL_WRITE"]), ("off", [5]), ("off", [None]))
     for code in sorted(X.GATE_SENTENCES):                      # every code the gate can name, alone, on both gates: its sentence is the one the model says
         rows.append((f"gate code {code}", H({X.CG: ("off", {"blocked_by": [code]}), X.EG: ("off", {"blocked_by": [code]})}, proposal=True)))
     for tl in ("on", "off", "unavailable"):
@@ -345,6 +356,44 @@ def combo_rows() -> list[tuple]:
     return rows
 
 
+def new_rows() -> list[tuple]:
+    """The rows of the review round: CS-03 (a refused press during a healthy lease), CS-04 (an OFF gate with no string code), CS-05 (the other function's flags with an open gate), CS-07 (the ACTIVE text
+    published before the operation flag clears; the loop's word), TEST-08 (one schedule status FAILED, the Stop SOC and the re-target code at their limits)."""
+    rows = []
+    H = X.merged
+    refusals = {"charge": "REJECTED - Free Power already active", "export": "REJECTED - Dump to Grid already active"}
+    for fn in ("charge", "export"):
+        F = X.FUNCS[fn]
+        for txt in (refusals[fn], "REJECTED - saved snapshot pending restore/recovery", "REJECTED - RECOVERY BLOCKED: durable recovery marker exists but its snapshot data cannot be trusted",
+                    "START FAILED - could not capture complete inverter snapshot; nothing written", "Inactive", X.DONE_TEXT, "ACCEPTED CURRENT STATE - recovery obligation cleared; no inverter write performed"):
+            for a, o, s in itertools.product(("on", "off"), repeat=3):
+                rows.append((f"{fn} lease {a} op {o} snap {s} {txt[:28]!r}", H({F["a"]: a, F["o"]: o, F["s"]: s, F["status"]: txt})))
+        for txt in (X.FP_ACTIVE_TEXT if fn == "charge" else X.DG_ACTIVE_TEXT, "STARTING - taking fresh inverter snapshot", "RESTORING - writing back original inverter settings"):
+            for a, o, s in itertools.product(("on", "off"), repeat=3):
+                rows.append((f"{fn} start path lease {a} op {o} snap {s} {txt[:24]!r}", H({F["a"]: a, F["o"]: o, F["s"]: s, F["status"]: txt})))
+    for gs, gl in (("off", [5]), ("off", [None]), ("off", [5, None]), ("off", [5, "X_CODE"]), ("off", [""]), ("off", []), ("on", [5]), ("on", [])):
+        for tl in ("on", "off"):
+            rows.append((f"gates {gs}{gl} tl {tl}", H({X.TL: tl, X.CG: (gs, {"blocked_by": gl}), X.EG: (gs, {"blocked_by": gl})}, proposal=True)))
+    for fn in ("charge", "export"):
+        F = X.FUNCS[fn]
+        for flag in (F["xa"], F["xo"], F["xs"], MWID):
+            for gcodes in ([], ["TELEMETRY_STALE"]):
+                gate = ("on", {"blocked_by": []}) if not gcodes else ("off", {"blocked_by": gcodes})
+                rows.append((f"{fn} open gate, {flag} on, gate codes {gcodes}", H({flag: "on", F["gate"]: gate})))
+        rows.append((f"{fn} open gate, all four flags on", H({F["xa"]: "on", F["xo"]: "on", F["xs"]: "on", MWID: "on"})))
+    for fs, ds in (("FAILED", "IDLE"), ("IDLE", "FAILED"), ("FAILED", "FAILED"), ("IDLE", "IDLE")):
+        rows.append((f"schedule status free power {fs} dump {ds}", H({X.FSTAT: fs, X.DSTAT: ds})))
+    for val in ("100", "100.0", "100.4", "100.6", "99.5", "101", "0", "-0.4"):
+        rows.append((f"stop soc {val}", H({X.DREQS: val})))
+    for code in ("A" * 39, "A" * 40, "A" * 41, "A_" * 20, "A_" * 21):
+        rows.append((f"retarget code of {len(code)} characters", H({X.RETG: ("WAIT", {"reasons": [code + ": x"], "changes": []})}, proposal=True)))
+    for fn in ("charge", "export"):
+        F = X.FUNCS[fn]
+        for txt in FILLED + [X.FP_ACTIVE_TEXT, X.DG_ACTIVE_TEXT]:
+            rows.append((f"{fn} lease running, text {txt[:50]!r}", H({F["a"]: "on", F["s"]: "on", F["status"]: txt})))
+    return rows
+
+
 def vocab_rows() -> list[tuple]:
     """Every kind of status text of the spec, on both functions, with the lease flag off and on: the family decides the state."""
     rows = []
@@ -359,7 +408,7 @@ def vocab_rows() -> list[tuple]:
 def rows_problems(text: str | None = None, first_only: bool = False, step: int = 1) -> list[str]:
     bad: list[str] = []
     w = new_world(text)
-    for label, raw in [("healthy", X.merged()), ("healthy with the proposal", X.merged(proposal=True))] + table_rows(step) + combo_rows() + vocab_rows():
+    for label, raw in [("healthy", X.merged()), ("healthy with the proposal", X.merged(proposal=True))] + table_rows(step) + combo_rows() + vocab_rows() + new_rows():
         bad += run_row(label, raw, w)
         bad += property_problems(w.snapshot(), f"{label}: ")
         if first_only and bad:
@@ -495,8 +544,8 @@ def lifecycle_problems(text: str | None = None) -> list[str]:
     snap = cw.snapshot()
     restored = X.merged(proposal=True)
     bad += [f"restart, restored values: {b}" for b in compare(cw, restored)]
-    if not (ready(snap, X.CHARGE) and ready(snap, X.EXPORT)) or snap[X.EXPORT][0] != "ASSISTED":
-        bad.append("restored values: the read model shows what the gates show (ready), and the proposal as the coordinator shows it")
+    if not (ready(snap, X.CHARGE) and ready(snap, X.EXPORT)) or snap[X.EXPORT][0] != "IDLE" or snap[X.EXPORT][1]["proposal"]["state"] != "VALID":
+        bad.append("restored values: the read model shows what the gates show (ready), and the proposal as information (never ASSISTED)")
     off = {**restored, X.TL: "off", X.CG: dip, X.EG: dip}
     cw.bulk(off)
     snap = cw.snapshot()
@@ -559,7 +608,16 @@ FILLED = ["SNAPSHOT DURABLY COMMITTED - 4000W at 52.0V -> 77A grid charge target
           "RESTORE BLOCKED - register 244 context changed since this lease started (a context)", "ACCEPT REFUSED - Free Power residue: 230", "ACCEPT REFUSED - implausible value: 232=99999",
           "ACTIVE - VERIFIED OK; target 3000W export - TRACKING - battery ceiling 3800W; Stop SOC 40%", "ACTIVE - VERIFIED OK; target 3000W export - SATURATED LOW - battery ceiling 500W (PV export already exceeds target); Stop SOC 40%",
           "ACTIVE - VERIFIED OK; target 3000W export - NO RESPONSE - holding ~60s before a bounded retry (1 of 3 retries used); battery ceiling 3800W; Stop SOC 40%",
-          "ACCEPT REFUSED - no Dump to Grid operator decision is pending"]
+          "ACCEPT REFUSED - no Dump to Grid operator decision is pending",
+          "ACTIVE - VERIFIED OK; target 3000W export - TARGET INFEASIBLE LOW - battery ceiling 500W (natural PV surplus already exceeds the target by ~700W; Dump does not command battery charging); Stop SOC 40%",
+          "ACTIVE - VERIFIED OK; target 3000W export - TARGET INFEASIBLE HIGH - battery ceiling 3800W (required discharge ~9000W exceeds the 3800W controller ceiling); Stop SOC 40%",
+          "ACTIVE - VERIFIED OK; target 3000W export - SATURATED HIGH - battery ceiling 3800W (target not fully achievable); Stop SOC 40%",
+          "ACTIVE - VERIFIED OK; target 3000W export - SETTLING - battery ceiling 3800W (feed-forward start: house 800W, PV 0W); Stop SOC 40%",
+          "ACTIVE - VERIFIED OK; target 3000W export - WAITING FOR FRESH GRID - battery ceiling 3800W; Stop SOC 40%",
+          "ACTIVE - VERIFIED OK; target 3000W export - NO RESPONSE - awaiting fresh telemetry to retry (1 of 3 retries used); battery ceiling 3800W; Stop SOC 40%",
+          "ACCEPTED CURRENT STATE - recovery obligation cleared; no inverter write performed", "ACCEPTED CURRENT STATE - Free Power residue: 230; export is not enabled; no inverter write performed",
+          "REJECTED - Free Power already active", "REJECTED - Dump to Grid already active", "REJECTED - natural PV export surplus ~700W already exceeds the target",
+          "REJECTED - lease window overlaps TOU slot 2, which would change the lease"]
 # the formats the firmware builds with snprintf (checked to exist in the firmware: a firmware change that removes one fails the suite until the model is looked at again)
 FORMATS = ["SNAPSHOT DURABLY COMMITTED - %.0fW at %.1fV -> %uA grid charge target", "ACTIVE - VERIFIED OK; %uA grid charge; automatic restore armed",
            "RESTORE BLOCKED - register 244 context changed since this lease started (%s)", "ACCEPT REFUSED - Free Power residue: %s", "ACCEPT REFUSED - implausible value: %s",
@@ -585,16 +643,66 @@ EXPECTED_FAMILY = {
     "Inactive": "DONE", "RESTORED OK - original inverter settings verified": "DONE", "RECOVERY RESOLVED OK - durable recovery marker cleared": "DONE",
     "FORCE RESTORE ORIGINAL SUCCESS - original inverter settings verified, durable recovery marker cleared": "DONE",
     "ACCEPT CURRENT STATE SUCCESS - current live configuration accepted, durable recovery marker cleared": "DONE", "END IGNORED - no saved Free Power snapshot": "DONE",
+    "ACCEPTED CURRENT STATE - recovery obligation cleared; no inverter write performed": "DONE", "ACCEPTED CURRENT STATE - Free Power residue: 230; export is not enabled; no inverter write performed": "DONE",
     "REJECTED - arm Free Power Write Enable first": "DONE", "REJECTED - Dump to Grid already active": "DONE", "START FAILED - could not capture complete inverter snapshot; nothing written": "DONE",
     "": "OTHER", "unknown": "OTHER", "unavailable": "OTHER", "a text nobody knows": "OTHER", "active - verified ok": "OTHER", "ACTIVE": "OTHER",
 }
 
 
+STATUS_CALL_RE = re.compile(r"id\((free_power_status|dump_status)\)\.publish_state\(")
+LITERAL_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+FORMAT_RE = re.compile(r"%%|%[-+ #0-9.]*[a-zA-Z]+")
+
+
+def balanced_args(text: str, i: int):
+    """The argument text of a call whose opening parenthesis is just before text[i]: up to the balanced close (string literals and // comments are skipped, so a parenthesis inside either does not count)."""
+    depth, j, n = 1, i, len(text)
+    while j < n:
+        c = text[j]
+        if c == '"':
+            j += 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+        elif c == "/" and text[j:j + 2] == "//":
+            while j < n and text[j] != "\n":
+                j += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return text[i:j]
+        j += 1
+    return None
+
+
+def fill_format(f: str) -> str:
+    return FORMAT_RE.sub(lambda m: "%" if m.group(0) == "%%" else "0", f)
+
+
+def status_calls() -> list:
+    """Every publish_state call on the Free Power and Dump status sensors: (sensor, line, texts). The texts are the FIRST string literal of the argument (multi-line literals and std::string
+    concatenations included), or, for a message built beforehand (`publish_state(msg)`), the snprintf formats written into that buffer since its declaration. No text = a call no family can be shown for."""
+    out = []
+    for m in STATUS_CALL_RE.finditer(FW_TEXT):
+        args = balanced_args(FW_TEXT, m.end())
+        line = FW_TEXT.count("\n", 0, m.start()) + 1
+        texts: list = []
+        if args is not None:
+            clean = re.sub(r"//[^\n]*", "", args)
+            if clean.strip() == "msg":
+                d = FW_TEXT.rfind("char msg[", 0, m.start())
+                seg = FW_TEXT[d:m.start()] if d >= 0 else ""
+                texts = [fill_format(f) for f in re.findall(r'snprintf\(\s*msg\s*,\s*sizeof\(msg\)\s*,\s*"((?:[^"\\]|\\.)*)"', seg)]
+            else:
+                lm = LITERAL_RE.search(clean)
+                texts = [lm.group(1)] if lm else []
+        out.append((m.group(1), line, texts))
+    return out
+
+
 def firmware_status_literals() -> list:
-    lits = []
-    for sensor in ("free_power_status", "dump_status"):
-        lits += re.findall(rf'id\({sensor}\)\.publish_state\("((?:[^"\\]|\\.)*)"', FW_TEXT)
-    return sorted(set(lits))
+    return sorted({tx for _s, _l, texts in status_calls() for tx in texts})
 
 
 def template_family(text: str | None, fn: str, t: str) -> str:
@@ -612,6 +720,17 @@ def vocabulary_problems(text: str | None = None) -> list[str]:
     lits = firmware_status_literals()
     if len(lits) < 80:
         bad.append(f"only {len(lits)} status literals found in the firmware: the extraction is broken")
+    calls = status_calls()
+    for sensor in ("free_power_status", "dump_status"):
+        mine = [c for c in calls if c[0] == sensor]
+        if len(mine) < 40:
+            bad.append(f"only {len(mine)} publish_state calls found for {sensor}: the scan is broken")
+        for _s, line, texts in mine:
+            if not texts:
+                bad.append(f"{sensor} line {line}: a publish_state call with no text a family can be shown for")
+            for tx in texts:
+                if X.family(tx) == "OTHER":
+                    bad.append(f"{sensor} line {line}: the text {tx[:80]!r} lands in no family")
     for t in lits + FILLED:
         fam = X.family(t)
         if fam == "OTHER":
@@ -903,7 +1022,7 @@ def static_problems(text: str) -> list[str]:
             if MARKER not in v and k in ("state", "attributes.why", "attributes.next_action", "attributes.blocked_by", "attributes.start_allowed", "attributes.note"):
                 bad.append(f"{e['name']} {k} carries no rule block")
     # the closed sentences: every one is in the file, and none has a digit
-    for table in (X.GATE_SENTENCES, X.READY_SENTENCES, X.OTHER_SENTENCES, X.RUNNING_SENTENCES, X.NEXT_SENTENCES, X.OWNER_NOTES):
+    for table in (X.GATE_SENTENCES, X.READY_SENTENCES, X.READY_SENTENCES_EXPORT, X.OTHER_SENTENCES, X.RUNNING_SENTENCES, X.NEXT_SENTENCES, X.OWNER_NOTES, {"idle_export": X.NEXT_IDLE_EXPORT}):
         for k, s in table.items():
             if s not in text:
                 bad.append(f"the sentence {k} is not in the file: {s[:50]!r}")
@@ -925,7 +1044,7 @@ def static_problems(text: str) -> list[str]:
         for pre in table:
             if f"'{pre}'" not in text:
                 bad.append(f"the status prefix {pre!r} is not in the file")
-    for note in X.NOTES_CHARGE + X.NOTES_EXPORT + ("IMPORT_NOT_CONFIGURED", "IMPORT_CEILING_NOT_READ", "PROPOSAL_NOT_INSTALLED", "SCHEDULE_LAST_RUN_FAILED"):
+    for note in X.NOTES_CHARGE + X.NOTES_EXPORT + ("IMPORT_NOT_CONFIGURED", "IMPORT_CEILING_NOT_READ", "PROPOSAL_NOT_INSTALLED", "SCHEDULE_LAST_RUN_FAILED", "LAST_PRESS_REFUSED") + tuple(c for _n, c in X.LOOP_NEEDLES) + ("LOOP_OTHER",):
         if f"'{note}'" not in text:
             bad.append(f"the note {note} is not in the file")
     # hygiene
@@ -984,7 +1103,7 @@ def battery(text: str, deep: bool = False) -> list[str]:
 # the mutants: (label, old, new); every occurrence of `old` is replaced (a consistent change of a rule) unless the label starts with "one copy:"
 # ===========================================================================================================================
 OPEN = "{%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}"
-OK_LINE = "{%- set ok = open and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}"
+OK_LINE = "{%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}"
 MUTANTS = [
     ("the gate's time is not part of open", OPEN, "{%- set open = g == 'on' and gl is not none and (gl | length) == 0 -%}"),
     ("the gate's list is not part of open", OPEN, "{%- set open = g == 'on' and tl == 'on' -%}"),
@@ -1011,9 +1130,9 @@ MUTANTS = [
     ("a restore is owed while an operation runs", "{%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}", "{%- set owed = ls == 'on' and la == 'off' -%}"),
     ("a snapshot with a lease running is owed", "{%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}", "{%- set owed = ls == 'on' and lo == 'off' -%}"),
     ("two leases are only a conflict for the first", "{%- set conflict = la == 'on' and ya == 'on' -%}", "{%- set conflict = la == 'on' and ya == 'on' and lo == 'off' -%}"),
-    ("a lease is RUNNING without a verified status", "(('RUNNING' if fam == 'ACTIVE' else", "(('RUNNING' if true else"),
+    ("a lease is RUNNING without a verified status", "(('RUNNING' if (fam == 'ACTIVE' or refused) else", "(('RUNNING' if true else"),
     ("an operation in progress is not ENDING", "else ('ENDING' if lo == 'on'", "else ('ENDING' if false"),
-    ("a start in progress is not ARMED", "else ('ARMED' if (lo == 'on' and fam == 'STARTING')", "else ('ARMED' if false"),
+    ("a start in progress is not ARMED", "else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))", "else ('ARMED' if false"),
     ("the write enable does not arm", "else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')", "else ('ARMED' if (sc == 'on' or gd == 'on')"),
     ("the guarded start script does not arm", "else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')", "else ('ARMED' if (ar == 'on' or sc == 'on')"),
     ("the scheduled start script does not arm", "else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')", "else ('ARMED' if (ar == 'on' or gd == 'on')"),
@@ -1021,14 +1140,10 @@ MUTANTS = [
     ("a running lease with an ending status is RUNNING", "('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'", "('RUNNING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'"),
     ("a lease that is not confirmed is not a fault", "('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'", "('ARMED' if fam == 'STARTING' else 'IDLE'))) if la == 'on'"),
     ("UNKNOWN comes after the others", "{%- set st = 'UNKNOWN' if unk", "{%- set st = 'UNKNOWN' if false"),
-    ("a proposal is assisted without an open gate", "{%- set assisted = open and ps == 'VALID' and pa is sameas true -%}", "{%- set assisted = ps == 'VALID' and pa is sameas true -%}"),
-    ("a proposal is assisted without the actionable flag", "{%- set assisted = open and ps == 'VALID' and pa is sameas true -%}", "{%- set assisted = open and ps == 'VALID' -%}"),
-    ("an INVALID proposal is assisted", "{%- set assisted = open and ps == 'VALID' and pa is sameas true -%}", "{%- set assisted = open and ps in ['VALID', 'INVALID'] and pa is sameas true -%}"),
-    ("the actionable flag is read as truthy", "and pa is sameas true -%}", "and pa -%}"),
     ("Charge Battery is assisted too", "{%- set assisted = false -%}", "{%- set assisted = open -%}"),
     ("a consumer that reads off adds no code", "(['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else [])", "[]"),
     ("an inconsistent gate adds no code", "(['GATE_INCONSISTENT'] if incons else [])", "[]"),
-    ("an inconsistent gate is not detected", "((g == 'on') != ((gl | length) == 0))", "false"),
+    ("an inconsistent gate is not detected", "((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0))", "false"),
     ("the gate's codes are cut at 80", "c[:40]", "c[:80]"),
     ("the gate's codes are not cut", "c[:40]", "c"),
     ("blocked_by drops the gate's codes", "{{ ns.u + ns.c }}", "{{ ns.u }}"),
@@ -1042,7 +1157,7 @@ MUTANTS = [
     ("a gate sentence is changed", "The inverter data are not fresh.", "The data are fine."),
     ("a ready sentence is changed", "Nothing is running and the start gate is open.", "Nothing is running."),
     ("the next action when not ready is changed", "Clear the cause named in why; the start gate must read on first.", "Start it."),
-    ("the running sentence of Export is changed", "the dongle loop holds the net export target above the latched Stop SOC until the lease ends.", "the dongle loop does something."),
+    ("the running sentence of Export is changed", "the dongle loop works toward the net export target and ends the lease at the latched Stop SOC.", "the dongle loop does something."),
     ("a status family loses a prefix", "'RESTORE BLOCKED', ", ""),
     ("a status family gains the bare word ACTIVE", "'END IGNORED', 'REJECTED', 'START FAILED'", "'END IGNORED', 'REJECTED', 'START FAILED', 'ACTIVE'"),
     ("a verified restore whose record is pending is unknown", "'RESTORE VERIFIED', ", ""),
@@ -1057,7 +1172,6 @@ MUTANTS = [
     ("the proposal note is dropped", "(['PROPOSAL_NOT_INSTALLED'] if pe in bad else [])", "[]"),
     ("a missing proposal is a state of its own", "'NOT_INSTALLED' if ps in bad", "'NONE' if ps in bad"),
     ("a proposal state it does not know is passed on", "(ps if ps in ['VALID', 'INVALID', 'UNVERIFIED', 'HOLD', 'NOT ALLOWED'] else 'UNKNOWN')", "ps"),
-    ("the proposal's actionable flag is the coordinator's", "'actionable': st == 'ASSISTED'", "'actionable': pa is sameas true"),
     ("a floor that is not a number is shown", "(pf | round(0) | int) if (pf is number and pf == pf and pf >= 0 and pf <= 100) else none", "pf"),
     ("the re-target message is empty", "'ECCO would end this export; no END guard is installed: press END.'", "''"),
     ("a re-target state it does not know is passed on", "(rs if rs in ['NOT RUNNING', 'UNKNOWN', 'NO CHANGE', 'WAIT', 'ALLOWED', 'END NOW'] else 'UNKNOWN')", "rs"),
@@ -1076,6 +1190,45 @@ MUTANTS = [
     ("the owner does not see the other function's restore owed", " or (ds == 'on' and da == 'off' and dq == 'off')", ""),
     ("two functions at once are not unknown for the owner", "('UNKNOWN' if ((fa == 'on' or fo == 'on') and (da == 'on' or dq == 'on')) else", "("),
     ("an unreadable manual write flag is no owner problem", " or (mw not in ['on', 'off'])", ""),
+    # the review round (CS-01 to CS-07, TEST-08)
+    ("CS-01: Export reads ASSISTED on a valid proposal", "{%- set assisted = false -%}", "{%- set assisted = open and states('sensor.ecco_export_proposal') == 'VALID' -%}"),
+    ("CS-01: the Export idle sentence claims that the guarded Start runs the proposal", "the ECCO proposal is for the schedule path and is information only.", "the guarded Start runs the ECCO proposal."),
+    ("CS-01: the Export next action claims that the guarded Start runs the proposal", "(it runs the numbers staged on the dongle, not the ECCO proposal)", "(it runs the ECCO proposal)"),
+    ("CS-01: the proposal attribute says the guarded Start uses it", "'used_by_guarded_start': false", "'used_by_guarded_start': true"),
+    ("CS-01: the proposal attribute loses its note code", "'note': 'PROPOSAL_FOR_SCHEDULE_PATH'", "'note': ''"),
+    ("CS-01: the notes lose the schedule-path code", "'GUARDED_START_NOT_GATED', 'PROPOSAL_FOR_SCHEDULE_PATH', ", "'GUARDED_START_NOT_GATED', "),
+    ("CS-01: the Charge ASSISTED sentence claims a proposal", "the guarded Start would run the Charge Battery request you staged on the dongle, as it stands.", "ECCO has a valid proposal."),
+    ("CS-01: the Charge ASSISTED next action claims a proposal", "it runs the Charge Battery request you staged, as it stands.", "it runs the ECCO proposal."),
+    ("CS-02: the DONE family loses the accepted-current-state text", "'ACCEPTED CURRENT STATE -', ", ""),
+    ("CS-03: a refused press makes a healthy lease FAULT", "(('RUNNING' if (fam == 'ACTIVE' or refused) else", "(('RUNNING' if (fam == 'ACTIVE') else"),
+    ("CS-03: a refused press needs no snapshot", "and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED')", "and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED')"),
+    ("CS-03: a refused press during an operation", "and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED')", "and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED')"),
+    ("CS-03: any DONE text keeps a lease RUNNING", "and fam == 'DONE' and t.startswith('REJECTED') -%}", "and fam == 'DONE' -%}"),
+    ("CS-03: a recovery-blocked refusal keeps a lease RUNNING", "and fam == 'DONE' and t.startswith('REJECTED') -%}", "and t.startswith('REJECTED') -%}"),
+    ("CS-03: a refusal without the lease flag counts", "{%- set refused = la == 'on' and lo == 'off'", "{%- set refused = lo == 'off'"),
+    ("CS-03: the refusal note is dropped", " + (['LAST_PRESS_REFUSED'] if refused else [])", ""),
+    ("CS-03: the refusal note is always on", "(['LAST_PRESS_REFUSED'] if refused else [])", "(['LAST_PRESS_REFUSED'] if true else [])"),
+    ("CS-04: an off gate with no string code is not inconsistent", "(g == 'off' and sn == 0)", "(g == 'off' and (gl | length) == 0)"),
+    ("CS-04: the string codes are counted with the unreadable inputs", "{%- set sn = ns.c | length -%}", "{%- set sn = (ns.c | length) + 1 -%}"),
+    ("CS-04: an on gate with a list is not inconsistent", "((g == 'on' and (gl | length) > 0) or", "((false) or"),
+    ("CS-05: the other function's flags do not stop a start", "{%- set ok = open and not busy and", "{%- set ok = open and"),
+    ("CS-05: the other function's lease flag is not busy", "{%- set busy = ya == 'on' or yo == 'on'", "{%- set busy = yo == 'on'"),
+    ("CS-05: the other function's operation flag is not busy", "or yo == 'on' or ys == 'on' or mw == 'on' -%}", "or ys == 'on' or mw == 'on' -%}"),
+    ("CS-05: the other function's snapshot flag is not busy", "or ys == 'on' or mw == 'on' -%}", "or mw == 'on' -%}"),
+    ("CS-05: the manual write flag is not busy", "or ys == 'on' or mw == 'on' -%}", "or ys == 'on' -%}"),
+    ("CS-05: a busy flag is not named", "if v == 'on' and code not in ns.c -%}", "if false -%}"),
+    ("CS-05: a busy flag is named twice", "if v == 'on' and code not in ns.c -%}", "if v == 'on' -%}"),
+    ("CS-07: an ACTIVE text while the operation flag clears reads ENDING", "(fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE'))", "fam == 'STARTING'"),
+    ("CS-07: an ACTIVE text with the operation flag on and no lease is ARMED", "(fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE'))", "(fam == 'STARTING' or fam == 'ACTIVE')"),
+    ("CS-07: the loop's own status is dropped from the notes", " + loop }}", " }}"),
+    ("CS-07: the loop code is given outside a running lease", "(['LOOP_OTHER'] if (st == 'RUNNING' and fam == 'ACTIVE') else [])", "(['LOOP_OTHER'] if st == 'RUNNING' else [])"),
+    ("CS-07: the loop code is the first needle only", "(' - TRACKING - ', 'LOOP_TRACKING'), ", ""),
+    ("CS-07: an unknown loop word has no code", "(['LOOP_OTHER'] if (st == 'RUNNING' and fam == 'ACTIVE') else [])", "[]"),
+    ("TEST-08: the Charge notes read the Dump schedule status", "{%- set ss = states('sensor.ecco_free_power_schedule_status') -%}", "{%- set ss = states('sensor.ecco_dump_to_grid_schedule_status') -%}"),
+    ("TEST-08: the Export notes read the Free Power schedule status", "{%- set ss = states('sensor.ecco_dump_to_grid_schedule_status') -%}", "{%- set ss = states('sensor.ecco_free_power_schedule_status') -%}"),
+    ("TEST-08: a Stop SOC of 100 is not a reading", "(sx is number and sx == sx and sx >= 0 and sx <= 100)", "(sx is number and sx == sx and sx >= 0 and sx < 100)"),
+    ("TEST-08: a re-target code of 40 characters is not one", "(k | length) <= 40", "(k | length) < 40"),
+    ("TEST-08: a re-target code of 41 characters is one", "(k | length) <= 40", "(k | length) <= 41"),
     # what the package must never contain
     ("the package reads the clock", "{%- set bad = ['unknown', 'unavailable', 'none', ''] -%}", "{%- set bad = ['unknown', 'unavailable', 'none', ''] -%}{%- set zz = now() -%}"),
     ("the package reads its own previous state", "{%- set bad = ['unknown', 'unavailable', 'none', ''] -%}", "{%- set bad = ['unknown', 'unavailable', 'none', ''] -%}{%- set zz = this.state -%}"),
@@ -1157,8 +1310,8 @@ def main() -> int:
     print("[3] properties")
     n_sweep = 2400
     sw, seen = sweep_problems(n_sweep, 20261127)
-    check(f"{n_sweep} seeded random inputs: the template equals the reference on every one, the properties hold on every answer, and every state of both functions was reached "
-          f"({sorted(seen)})", sw == [] and set(seen) >= set(X.STATES), str(sw[:3]))
+    check(f"{n_sweep} seeded random inputs: the template equals the reference on every one, the properties hold on every answer, and every state of both functions but the RESERVED ASSISTED was reached, and ASSISTED never "
+          f"({sorted(seen)})", sw == [] and set(seen) >= set(X.STATES) - {"ASSISTED"} and "ASSISTED" not in seen, str(sw[:3]))
     ones = [(f, c) for f in ("charge", "export") for c in (True,)]
     both_running = 0
     wr = new_world()
