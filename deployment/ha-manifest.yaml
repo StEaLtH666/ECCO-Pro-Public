@@ -156,6 +156,24 @@ home_assistant_packages:
     method: ssh_file_copy
     restart_required: true
 
+  # Reserve floor read-back - rrb1 (READ-ONLY; NOT installed, NOT LIVE-PROVEN). Reads back what the inverter's registers say about the battery reserve (the lowest target SOC of the non-charging TOU slots and the
+  # shutdown SOC, from the dongle's configuration read) and compares it with the plan's effective reserve: MATCH, BELOW, ABOVE, PENDING or UNREADABLE, one binary sensor (binary_sensor.ecco_reserve_floor_registers_below_reserve,
+  # on only for BELOW and UNREADABLE) and one opt-in notification. A register is not behaviour: it makes no claim of enforcement (the behavioural NOT HOLDING check is NOT built), it lists the charging slots' targets without judging
+  # them, and it has no DRIFT state. Configuration Online off for more than 1800 s, or any one pending cause older than 6 hours, reads UNREADABLE. It writes nothing but that notification. Needs the plan helper package and the
+  # TOU target SOC editor package. Install = copy the file, check the configuration and RELOAD three domains (Developer tools, YAML): Template entities, Input booleans and Automations; no restart, which is why restart_required is false here.
+  - source: home-assistant/packages/ecco_reserve_floor_status.yaml
+    destination: /config/packages/ecco_reserve_floor_status.yaml
+    method: ssh_file_copy
+    restart_required: false
+
+  # Dongle lost during a lease - rrb1 (READ-ONLY; NOT installed, NOT LIVE-PROVEN). Two automations: when a Free Power or Dump to Grid lease (or the restore a start that failed half-way still owes: Snapshot Valid or Operation In Progress on with Active off) was reported and the dongle's telemetry has then stayed offline for 5 minutes,
+  # ONE persistent notification says that no firmware guard may be running and what the owner can do; it dismisses itself when telemetry returns. It presses and writes nothing. Install = copy the file, check the
+  # configuration and RELOAD the Automations; no restart, which is why restart_required is false here.
+  - source: home-assistant/packages/ecco_dongle_lost_alert.yaml
+    destination: /config/packages/ecco_dongle_lost_alert.yaml
+    method: ssh_file_copy
+    restart_required: false
+
 dashboard:
   source: home-assistant/dashboards/ecco_pro.yaml
   destination: /config/ecco/dashboards/ecco_pro.yaml

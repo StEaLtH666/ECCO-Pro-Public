@@ -139,6 +139,7 @@ import _r9_scope as _r9  # noqa: E402
 import _pex0_scope as _pex0  # noqa: E402
 import _ptt1_scope as _ptt1  # noqa: E402
 import _pub0_scope as _pub0  # noqa: E402
+import _rrb1_scope as _rrb1  # noqa: E402
 import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
@@ -1516,7 +1517,27 @@ EPC4 = Entry(
          "model's constants, which the card never calls, and 975 minifier renames); the model stays read only: ZERO firmware, Home "
          "Assistant package, deployment, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no service call",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4)
+# rrb1 (the battery reserve: the inverter-register READ-BACK and the dongle-LOST alert; offline, nothing installed; _rrb1_scope.py): made on the export after epc4 (the
+# newest entry on main when it was written), so its parent is epc4; when another entry merges first this entry's fingerprint must be sealed again (registry/tests/_pex.py `sealed`, the tool
+# reseal.py of the merge sequence) and, if that entry edits the manifest too, its manifest checkpoint recomputed. The id is rrb1, not rsv1: rsv1 is an older entry (the reserve helper's first-run
+# value). ADDED: two Home Assistant packages (ecco_reserve_floor_status.yaml, ecco_dongle_lost_alert.yaml), a test model and a suite for each, and the scope module. The guarded reserve set
+# script (reserve control) is NOT part of this entry: it is a second writer of the reserve helper and has its own entry (rrs1). CHAIN-PINNED edit: the deployment manifest (two stanzas with their
+# comment blocks). Measured, not declared: no delta, no op path; ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; ZERO Modbus operation. Neither package writes
+# anything but persistent notifications (no inverter, dongle, TOU slot, register or helper).
+RRB1 = Entry(
+    id="rrb1", pr="RRB1", commit="unmerged",
+    reverts=dict(_rrb1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after rrb1
+        HA_MANIFEST: "ff216a7bb0c333d8e55c216e4c2b39b7e5895eb22092fa492d91649235b446cc",
+    },
+    added_files=_rrb1.ADDED_FILES,
+    # _pex.fingerprint(RRB1): hashes its parent epc4's fingerprint and every declaration above
+    fingerprint="f45e078bbe7fcad5f7cc5f91212b94a54613edbadb4cddb9932ed1533775220d",
+    note="the battery reserve, two packages: the read-back of what the inverter's registers say about the reserve (a floor from the non-charging TOU slots and the shutdown SOC, compared with the "
+         "plan's effective reserve; a register is not behaviour, so no claim of enforcement, and no behavioural check), and a notice that no firmware guard may be running when the dongle is "
+         "lost while a lease, or the restore a half-made start owes, is reported; ZERO firmware, registry data, Intelligence or ecco_core change, ZERO Modbus operation, no inverter, dongle or helper write",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, RRB1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
