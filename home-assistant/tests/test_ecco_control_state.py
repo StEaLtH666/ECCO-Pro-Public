@@ -1395,6 +1395,8 @@ NTH_MUTANTS = [
     ("AK-01 occurrence: the Export why does not name the refusal", "{%- elif refused -%}{{ RS['FAULT_REFUSED'] }}", "{%- elif false -%}x", [2]),
     ("AK-01 occurrence: the Charge refusal code is dropped from its blocked_by", "(['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else [])", "[]", [4]),
     ("AK-01 occurrence: the Export refusal code is dropped from its blocked_by", "(['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else [])", "[]", [10]),
+    ("AK-01 occurrence: the Export notes template sees no refusal (AK-C17 of the review)", "{%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}", "{%- set refused = false -%}", [12]),
+    ("AK-01 occurrence: the Charge blocked_by template sees no refusal", "{%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}", "{%- set refused = false -%}", [4]),
     ("AK-01 occurrence: the Export state template ignores the lease flag in the refusal", "{%- set refused = la == 'on' and lo == 'off'", "{%- set refused = lo == 'off'", [7]),
 ]
 
