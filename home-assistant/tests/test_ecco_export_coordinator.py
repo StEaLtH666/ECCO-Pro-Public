@@ -1584,7 +1584,7 @@ def lease_sweep_problems(n: int, seed: int, text: str | None = None, first_only:
         want_age = None if (flag != "on" or ref["age"] is None) else math.floor(ref["age"] / 60)
         if got["rt_attrs"].get("lease_age_min") != want_age:
             bad.append(f"{label}: lease_age_min {got['rt_attrs'].get('lease_age_min')} != {want_age}")
-        for key, want in (("stop_soc_difference", ref["d_stop"]), ("export_w_difference", ref["d_exp"]), ("battery_w_difference", ref["d_bat"]), ("battery_w_loop_difference", ref["d_loop"])):
+        for key, want in (("stop_soc_difference", ref["d_stop"]), ("export_w_difference", ref["d_exp_pub"]), ("battery_w_difference", ref["d_bat"]), ("battery_w_loop_difference", ref["d_loop"])):
             have = m.get(key)
             if (have is None) != (want is None) or (want is not None and abs(have - want) > 0.06):
                 bad.append(f"{label}: {key} {have} != {want}")
@@ -1756,6 +1756,14 @@ def churn_problems(text: str | None = None) -> list[str]:
     for e in X.OWN:
         if e != X.MODEL and (snap[e][0] != new[e][0] or not keys(snap[e][1], new[e][1]) <= allowed):
             bad.append(f"a lease: {e} published again with {sorted(keys(snap[e][1], new[e][1]) - allowed)}")
+    # CS-06: the live export of a running lease is published rounded to 100 W, and the difference from the proposal with it, while the decision to re-target stays on the exact difference (200 W deadband)
+    for exp, want in (("2800.1", "IN LINE"), ("3199.9", "IN LINE"), ("2800.0", "DIFFERS"), ("2799.9", "DIFFERS"), ("3200.0", "DIFFERS"), ("3200.1", "DIFFERS")):
+        wl = lease_world(text)
+        wl.sched_lease_on(stop=40, export=float(exp), command=3800, age_min=45)
+        sl = lease_state(wl)
+        ca = sl["cmp_attrs"]
+        if sl["cmp"] != want or ca.get("export_w_lease") != round(float(exp) / 100) * 100 or ca.get("export_w_difference") != 3000 - round(float(exp) / 100) * 100:
+            bad.append(f"a live export of {exp} W: the comparison {sl['cmp']} (wanted {want}), published {ca.get('export_w_lease')} W and {ca.get('export_w_difference')} W")
     # CS-06: a PV surplus the target cannot hold is INVALID with a reason that names the surplus rounded UP to a step: a PV that wanders inside the step publishes nothing again
     w = lease_world(text, over={X.PV: "4000.0"})
     w.advance(30)
@@ -2598,6 +2606,10 @@ MUTANTS = [
     ("CS-06: the duration is rounded up to 5 minutes", "{%- set dur_i = ((((dur / 5) | round(0, 'floor')) * 5) | int)", "{%- set dur_i = ((((dur / 5) | round(0, 'ceil')) * 5) | int)"),
     ("CS-06: the loop duration is rounded up to 5 minutes", "{%- set ldur_i = ((((ldur / 5) | round(0, 'floor')) * 5) | int)", "{%- set ldur_i = ((((ldur / 5) | round(0, 'ceil')) * 5) | int)"),
     ("CS-06: the raw requirement is rounded down", "{%- set raw_p_i = ((((raw_p / 500) | round(0, 'ceil')) * 500) | int)", "{%- set raw_p_i = ((((raw_p / 500) | round(0, 'floor')) * 500) | int)"),
+    ("CS-06: the live export of a lease is published unrounded", "'export_w_lease': l_exp_i,", "'export_w_lease': l_exp,"),
+    ("CS-06: the export difference is published unrounded", "'export_w_difference': d_exp_i,", "'export_w_difference': d_exp,"),
+    ("CS-06: the re-target decision is taken on the rounded export", "{%- set dev_exp = d_exp is not none and (d_exp | abs) >= 200 -%}", "{%- set dev_exp = d_exp_i is not none and (d_exp_i | abs) >= 200 -%}"),
+    ("CS-06: the live export is rounded to 1000 W", "(l_exp / 100) | round(0, 'common')) * 100", "(l_exp / 1000) | round(0, 'common')) * 1000"),
     ("CS-06: the PV surplus text carries the live surplus", "{%- set surplus_i = ((((surplus / 500) | round(0, 'ceil')) * 500) | int)", "{%- set surplus_i = (surplus | round(0))"),
     ("an open gate needs no empty list", "{%- set g_open = g_read and egs == 'on' and (egl | length) == 0 -%}", "{%- set g_open = g_read and egs == 'on' -%}"),
     ("an unknown gate state is read", "{%- set g_read = egs in ['on', 'off'] and egl is not none -%}", "{%- set g_read = egs in ['on', 'off', 'unknown'] and egl is not none -%}"),

@@ -1564,11 +1564,11 @@ EXC1 = Entry(
     id="exc1", pr="EXC1", commit="unmerged",
     reverts=dict(_exc1.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after exc1
-        HA_MANIFEST: "e52572e787cfcc998b1cab18a44b3981a43a8b5826841ade56cd7bb10951a6a0",
+        HA_MANIFEST: "43a63face1f5fbb7e8f534f5b8cd5ceea0e77f71645ec47c8f9f50c3627843c7",
     },
     added_files=_exc1.ADDED_FILES,
     # _pex.fingerprint(EXC1): hashes its parent sgt1's fingerprint and every declaration above
-    fingerprint="17247b62220fcaa224e72ec8aa0405cbf12323462903ccc6837bb0308a621f1d",
+    fingerprint="802f7cf508c6cc0320243745f92157d09e6115cde435bb029b505813544908da",
     note="the export coordinator v0 (nine template sensors: a proposal for an Export to Grid start from measured values, a re-target shadow and a comparison with the running lease); a read-only shadow, "
          "only the control state read model reads it, the gates are soft, it reads the Export start gate and the leases consumer of the time trust package only as far as the two pinned reader lists (widened deliberately, D-PIN) allow, "
          "its model carries no time of its evaluation, every missing or implausible input makes it INVALID; "
@@ -1585,11 +1585,11 @@ CSM1 = Entry(
     id="csm1", pr="CSM1", commit="unmerged",
     reverts=dict(_csm1.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after csm1
-        HA_MANIFEST: "dcdd47be9ef991563b3711ad7c87ef6d98834153dd0508b049ba62305543be2b",
+        HA_MANIFEST: "768c9930236febaf441fee156b01d71e01e38447f5288e290a256e355cb87a71",
     },
     added_files=_csm1.ADDED_FILES,
     # _pex.fingerprint(CSM1): hashes its parent exc1's fingerprint and every declaration above
-    fingerprint="9a9e645af9afc2b766cb69b536655c8316b854874d89cffb7cd9c03b04c55ecd",
+    fingerprint="ce0deff43143ca0497fd2059c353ae8ea97e348c2e0fcba52bcb465368502ddb",
     note="the control state read model (three template sensors: a lifecycle state, why, the next action, what blocks a start and what the lease holds for Charge Battery and for Export to Grid, and who holds the "
          "inverter settings); a display, never a gate, nothing may read it, the gates are soft, every unreadable input makes it UNKNOWN and never ready, no measurement and no moving time in an attribute; "
          "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",

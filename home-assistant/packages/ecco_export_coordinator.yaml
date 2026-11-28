@@ -41,8 +41,8 @@
 #   sensor.ecco_export_shadow_comparison        while a lease runs: IN LINE | DIFFERS | UNKNOWN, the proposal against the lease's latched Stop SOC, target export and end time
 # THE ROW RATE (CS-06, measured offline with 10 s polls and a house load that wanders up to 150 W a poll: 358 rows an hour for the model before this change, 61 after; a house that changes load in one poll in ten, 40 before and 7 after;
 # the proposal, its power and the shadow comparison follow the model, the duration a little less): the published powers move in steps of POWER_STEP_W and the durations in steps of DURATION_STEP_MIN, so a row is written when a step is
-# crossed. THE RECORDER EXCLUSION OF THE MODEL AND OF THE LOOKUPS REMAINS MANDATORY (see INSTALL): until Core has been restarted with it, the measured row rate above applies. The lease-time live figures of the shadow comparison
-# (the export and the battery power the dongle reports) are measurements and move with the lease; they exist only while a lease the schedule started runs.
+# crossed (the live export of a running lease and its difference from the proposal are published rounded to 100 W, the decision to re-target stays on the exact difference; the battery ceiling the dongle commands moves with the dongle's own
+# steps, at least 45 s apart, and the two counters in whole minutes move once a minute). THE RECORDER EXCLUSION OF THE MODEL AND OF THE LOOKUPS REMAINS MANDATORY (see INSTALL): until Core has been restarted with it, the measured row rate above applies.
 # Every numeric proposal sensor is UNAVAILABLE (never 0) unless the proposal itself is VALID or UNVERIFIED (its state is then VALID, UNVERIFIED or, while the start gate does not allow a start, NOT ALLOWED: the numbers describe the proposal, they are not a permission).
 # A consumer tests is_state('sensor.ecco_export_proposal', 'VALID') and never "not INVALID". `actionable` (and a VALID proposal) is NOT a promise that the guarded Start runs these numbers: the guarded Start runs the numbers STAGED on the
 # dongle, these are for the schedule path (the control state read model says so: PROPOSAL_FOR_SCHEDULE_PATH, and Export never reads ASSISTED).
@@ -183,8 +183,8 @@
 # which the Export schedule's press-time recheck reads and fails closed on: a hold or a reserve that is momentarily unknown ends a waiting run as BLOCKED and disarms the schedule for that night
 # (ecco_dump_to_grid_schedule.yaml). Then one file copy to /config/packages/ecco_export_coordinator.yaml, a configuration check, then reload the template entities (Developer tools, YAML, Template entities, or the
 # template.reload service): no restart, no helper to create, no other file. It needs ecco_plan_helpers.yaml, ecco_dump_limits.yaml, ecco_dump_to_grid_schedule.yaml, ecco_canonical_telemetry.yaml and
-# ecco_battery_runtime.yaml (without them the proposal reads INVALID and says which input is missing). It changes no existing entity. Exclude sensor.ecco_export_coordinator_model and the lookups that follow it (sensor.ecco_export_proposal, sensor.ecco_export_proposal_power, sensor.ecco_export_proposal_duration, sensor.ecco_export_shadow_comparison) from the recorder (MANDATORY: with a moving house load
-# they publish a row at every step crossed, 61 an hour for the model in the measured worst case; the exclusion takes effect only at the next Core restart, lab D6, so until then the measured row rate applies and the owner's no-needless-restarts rule decides when): recorder: exclude: entities:. Remove: delete the file and reload the template entities (the same cautions). Nothing here is meant to be exposed to a voice assistant.
+# ecco_battery_runtime.yaml (without them the proposal reads INVALID and says which input is missing). It changes no existing entity. Exclude sensor.ecco_export_coordinator_model and the lookups that follow it (sensor.ecco_export_proposal, sensor.ecco_export_proposal_power, sensor.ecco_export_proposal_duration, sensor.ecco_export_retarget, sensor.ecco_export_shadow_comparison) from the recorder (MANDATORY: with a moving house load
+# they publish a row at every step crossed, 61 an hour for the model in the measured worst case without a lease, and while a lease runs about 360 an hour for the model, 210 for the re-target and 300 for the comparison when the live export wanders 100 W a poll, which no template-only rounding removes: the live comparison is live; the exclusion takes effect only at the next Core restart, lab D6, so until then the measured row rate applies and the owner's no-needless-restarts rule decides when): recorder: exclude: entities:. Remove: delete the file and reload the template entities (the same cautions). Nothing here is meant to be exposed to a voice assistant.
 
 template:
   - sensor:
@@ -353,8 +353,10 @@ template:
             {%- set l_exp = rng(states('sensor.ecco_clock_dongle_dump_to_grid_active_export_power'), 0, 30000) | float(none) -%}
             {%- set l_cmd = rng(states('sensor.ecco_clock_dongle_dump_to_grid_commanded_battery_ceiling'), 0, 30000) | float(none) -%}
             {%- set cmp_ok = num and origin -%}
+            {%- set l_exp_i = ((((l_exp / 100) | round(0, 'common')) * 100) | int) if l_exp is not none else none -%}
             {%- set d_stop = (floor - l_stop) if (cmp_ok and l_stop is not none) else none -%}
             {%- set d_exp = (net - l_exp) if (cmp_ok and l_exp is not none) else none -%}
+            {%- set d_exp_i = ((net | round(0, 'floor')) - l_exp_i) if (cmp_ok and l_exp_i is not none) else none -%}
             {%- set d_bat = (p_i - l_cmd) if (cmp_ok and l_cmd is not none) else none -%}
             {%- set d_loop = (lp_i - l_cmd) if (cmp_ok and l_cmd is not none) else none -%}
             {%- set d_end = ((lp_end - l_end_ts) / 60) if (cmp_ok and lp_end is not none and l_end_ts is not none) else none -%}
@@ -393,7 +395,7 @@ template:
             {%- set chg = namespace(l=[]) -%}
             {%- if rt in ['WAIT', 'ALLOWED', 'END NOW'] -%}
             {%- if dev_stop -%}{%- set chg.l = chg.l + ['STOP_SOC ' ~ l_stop ~ ' -> ' ~ floor ~ ' (a raise: the lease would otherwise stop below the floor)'] -%}{%- endif -%}
-            {%- if dev_exp -%}{%- set chg.l = chg.l + ['EXPORT_TARGET ' ~ l_exp ~ ' -> ' ~ net ~ ' W'] -%}{%- endif -%}
+            {%- if dev_exp -%}{%- set chg.l = chg.l + ['EXPORT_TARGET ' ~ l_exp_i ~ ' -> ' ~ net ~ ' W'] -%}{%- endif -%}
             {%- if dev_end -%}{%- set chg.l = chg.l + ['END ' ~ (l_end_ts | timestamp_custom('%H:%M', true, '?')) ~ ' -> ' ~ (lp_end | timestamp_custom('%H:%M', true, '?')) ~ ' (the energy lasts ' ~ (d_end | round(0)) ~ ' minutes beyond the lease, inside the schedule window)'] -%}{%- endif -%}
             {%- endif -%}
             {%- set w_age = (l_start_ts + 1800) if (age is not none and age < 1800) else 0 -%}
@@ -423,8 +425,8 @@ template:
                   'stop_soc_lease': l_stop,
                   'stop_soc_difference': d_stop,
                   'export_w_proposed': (net | round(0, 'floor')) if num else none,
-                  'export_w_lease': l_exp,
-                  'export_w_difference': d_exp,
+                  'export_w_lease': l_exp_i,
+                  'export_w_difference': d_exp_i,
                   'battery_w_proposed': p_i if num else none,
                   'battery_w_loop': lp_i if num else none,
                   'battery_w_commanded': l_cmd,

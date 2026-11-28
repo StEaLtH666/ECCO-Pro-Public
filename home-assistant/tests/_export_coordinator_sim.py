@@ -621,6 +621,7 @@ def reference_lease(prop: dict, *, lease: str, l_stop_raw, l_exp_raw, l_cmd_raw,
     cmp_ok = numeric and origin                                  # a difference against the schedule's numbers only for a lease the schedule started
     d_stop = (floor - l_stop) if (cmp_ok and l_stop is not None) else None
     d_exp = (net - l_exp) if (cmp_ok and l_exp is not None) else None
+    d_exp_pub = (math.floor(net) - round(l_exp / 100) * 100) if (cmp_ok and l_exp is not None) else None       # CS-06: the PUBLISHED live export and difference are rounded to 100 W; the decision (dev_exp) stays on the exact difference
     d_bat = (p - l_cmd) if (cmp_ok and l_cmd is not None) else None
     d_loop = (lp - l_cmd) if (cmp_ok and l_cmd is not None) else None
     d_end = ((lp_end - l_end_ts) / 60) if (cmp_ok and lp_end is not None and l_end_ts is not None) else None
@@ -697,7 +698,7 @@ def reference_lease(prop: dict, *, lease: str, l_stop_raw, l_exp_raw, l_cmd_raw,
             changes.append("EXPORT_TARGET")
         if dev_end:
             changes.append("END")
-    return {"cmp_state": cmp_state, "rt_state": rt, "rt_entry": entry, "dev_stop": dev_stop, "dev_exp": dev_exp, "dev_end": dev_end, "d_stop": d_stop, "d_exp": d_exp,
+    return {"cmp_state": cmp_state, "rt_state": rt, "rt_entry": entry, "dev_stop": dev_stop, "dev_exp": dev_exp, "dev_end": dev_end, "d_stop": d_stop, "d_exp": d_exp, "d_exp_pub": d_exp_pub, "l_exp_pub": (round(l_exp / 100) * 100) if l_exp is not None else None,
             "d_bat": d_bat, "d_loop": d_loop, "d_end": d_end, "age": age, "lp_end": lp_end, "origin": origin, "end_now": end_now, "end_hold": end_hold, "end_res": end_res,
             "l_end_ts": l_end_ts, "complete": complete, "recent": recent, "mem_young": mem_young, "codes": codes, "wait_until": wait_until, "changes": changes,
             "mem_since": math.floor(now_ts - mem_age), "lease_origin": (("SCHEDULE" if origin else "OTHER") if on else "")}
