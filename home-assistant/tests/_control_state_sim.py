@@ -175,6 +175,8 @@ OTHER_SENTENCES = {
     "FAULT_TEXT": "The dongle status says a restore or recovery is blocked, failed or waiting for a decision.",
     "FAULT_OWED": "A saved snapshot of the inverter settings is waiting for a restore and nothing is running.",
     "FAULT_UNCONFIRMED": "The lease reads active but the dongle status does not confirm that it is running normally.",
+    # AK-01 (OWNER DECISION (a)): a REJECTED text overwrites the dongle's status, so with the lease flag on it cannot tell a healthy lease from a lockout: FAULT, never RUNNING
+    "FAULT_REFUSED": "The last press was refused, so the status of the dongle no longer shows whether the lease is healthy.",
 }
 RUNNING_SENTENCES = {
     "charge": "Charge Battery is running: the dongle holds the charge rate fixed since the start until the lease ends.",
@@ -185,6 +187,7 @@ NEXT_SENTENCES = {
     "FAULT": "Needs you: read the dongle status text and recover with its End and recovery controls; do not start anything.",
     "ENDING": "Wait for the restore to finish; do not start anything.",
     "RUNNING": "Let it run, or press End and Restore to stop it.",
+    "REFUSED": "Check the status and the recovery controls of the dongle: End and Restore stops a healthy lease; do not press Start again.",
     "ARMED": "Wait for the start to finish, or switch the write enable off.",
     "NOT_READY": "Clear the cause named in why; the start gate must read on first.",
     "ASSISTED": "Press the guarded Start when you want it: it runs the Charge Battery request you staged, as it stands.",
@@ -365,6 +368,9 @@ def function_rules(raw: dict, fn: str) -> dict:
         unreadable.append("STATUS")
     codes = _strings(gl)
     sn = len(codes)
+    # AK-01 (OWNER DECISION (a)): a REJECTED text (a refused raw press) overwrites the dongle's status and cannot tell a healthy lease from a lockout (the firmware leaves the lease flag on in an
+    # operator-needed lockout and a raw press then publishes REJECTED): with the lease flag on and no operation in progress it is never RUNNING, it is FAULT with its own sentence and code
+    refused = la == "on" and lo == "off" and fam == "DONE" and t.startswith("REJECTED")
     # CS-04: an OFF gate with no string code left in its list (an empty list, [5], [None]) disagrees with itself as much as an ON gate with a cause
     incons = g in ("on", "off") and gl is not None and ((g == "on" and len(gl) > 0) or (g == "off" and sn == 0))
     # CS-05: the other function's three flags and the manual write flag are the cause of a start that cannot run, whatever the gate says
@@ -376,13 +382,13 @@ def function_rules(raw: dict, fn: str) -> dict:
     for code, v in zip(F["busy_codes"], (ya, yo, ys, mw)):
         if v == "on" and code not in codes:
             codes.append(code)
+    if refused:
+        codes.append("STATUS_HIDDEN_BY_REFUSED_PRESS")
     unk = bool(unreadable)
     open_ = g == "on" and gl is not None and len(gl) == 0 and tl == "on"
     conflict = la == "on" and ya == "on"
     owed = ls == "on" and la == "off" and lo == "off"
     assisted = False          # CS-01: neither function reads ASSISTED on a proposal alone (the guarded Start runs the numbers staged on the dongle, not the proposal)
-    # CS-03: a refused raw Start press during a healthy lease leaves a REJECTED text (the DONE family) that stays until the END: the lease still runs
-    refused = la == "on" and lo == "off" and ls == "on" and fam == "DONE" and t.startswith("REJECTED")
     if unk:
         st = "UNKNOWN"
     elif conflict or fam == "FAULT" or owed:
@@ -392,7 +398,7 @@ def function_rules(raw: dict, fn: str) -> dict:
     elif lo == "on":
         st = "ENDING"
     elif la == "on":
-        st = "RUNNING" if refused else {"ACTIVE": "RUNNING", "ENDING": "ENDING", "STARTING": "ARMED"}.get(fam, "FAULT")
+        st = {"ACTIVE": "RUNNING", "ENDING": "ENDING", "STARTING": "ARMED"}.get(fam, "FAULT")      # AK-01: a refusal (DONE family) is FAULT, never RUNNING
     elif ar == "on" or sc == "on" or gd == "on":
         st = "ARMED"
     elif assisted:
@@ -416,6 +422,8 @@ def why_of(fn: str, r: dict) -> str:
         return OTHER_SENTENCES["FAULT_TEXT"]
     if r["owed"]:
         return OTHER_SENTENCES["FAULT_OWED"]
+    if r["refused"]:
+        return OTHER_SENTENCES["FAULT_REFUSED"]
     if r["st"] == "FAULT":
         return OTHER_SENTENCES["FAULT_UNCONFIRMED"]
     if r["st"] == "RUNNING":
@@ -438,6 +446,8 @@ def why_of(fn: str, r: dict) -> str:
 
 def next_of(r: dict, fn: str = "charge") -> str:
     st = r["st"]
+    if st == "FAULT" and r["refused"] and not r["conflict"]:
+        return NEXT_SENTENCES["REFUSED"]
     if st in ("UNKNOWN", "FAULT", "ENDING", "RUNNING", "ARMED"):
         return NEXT_SENTENCES[st]
     if not r["ok"]:

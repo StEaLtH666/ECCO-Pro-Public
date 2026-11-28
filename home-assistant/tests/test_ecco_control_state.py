@@ -101,7 +101,8 @@ HEADER_PINS = ("NOT INSTALLED, NOT LIVE-PROVEN", "DISPLAY ONLY", "DISPLAY, NEVER
                "CARD_START_NOT_GATED", "GUARDED_START_NOT_GATED", "SCHEDULE_NOT_GATED", "NO_END_GUARD", "PROPOSAL_NOT_INSTALLED", "LIMITS, stated plainly", "display, never proof", "persisted owner",
                "Recalled from Home Assistant core", "NOT verified on a real Home Assistant", "INSTALL", "needs the owner's go", "template.reload", "no restart", "Install ONLY with NO Dump to Grid or Free Power lease running",
                "OUTSIDE any armed scheduled Export or charge run", "window end plus 10 minutes", "re-creates EVERY template entity", "It changes no existing entity",
-               "PROPOSAL_FOR_SCHEDULE_PATH", "RESERVED", "LAST_PRESS_REFUSED", "LOOP_TRACKING", "guarded Start runs the numbers staged on the dongle")
+               "PROPOSAL_FOR_SCHEDULE_PATH", "RESERVED", "LAST_PRESS_REFUSED", "LOOP_TRACKING", "guarded Start runs the numbers staged on the dongle",
+               "OWNER DECISION (a)", "STATUS_HIDDEN_BY_REFUSED_PRESS", "overwrites the status of the dongle", "never RUNNING")
 
 
 # ===========================================================================================================================
@@ -147,6 +148,7 @@ def run_row(label: str, raw: dict, w: "X.CtlWorld | None" = None, text: str | No
     return [f"{label}: {b}" for b in compare(w, raw)]
 
 
+HIDDEN_CODE = "STATUS_HIDDEN_BY_REFUSED_PRESS"
 READY_SENTENCES = set(X.READY_SENTENCES.values()) | set(X.READY_SENTENCES_EXPORT.values())
 NOT_READY_RE = re.compile(r"^Not ready: ")
 
@@ -202,6 +204,14 @@ def property_problems(snap: dict, label: str = "") -> list[str]:
             bad.append(f"{label}{eid}: start_allowed in {st}")
         if a.get("start_path") != "GUARDED_SCRIPT" or a.get("end_path") != "END_BUTTON":
             bad.append(f"{label}{eid}: start_path / end_path changed")
+        # AK-01 (OWNER DECISION (a)): a refused press (a REJECTED text with the lease flag on, no operation) hides the status of the dongle: the note, the code and the state agree, and it is never RUNNING
+        hidden = HIDDEN_CODE in (blocked or [])
+        if hidden != ("LAST_PRESS_REFUSED" in a.get("notes", [])):
+            bad.append(f"{label}{eid}: the refusal note and the code {HIDDEN_CODE} disagree: {a.get('notes')} {blocked}")
+        if hidden and (st not in ("FAULT", "UNKNOWN") or a["start_allowed"]):
+            bad.append(f"{label}{eid}: a refused press with the lease flag on reads {st} (start_allowed {a['start_allowed']}): it must be FAULT, never RUNNING")
+        if why == X.OTHER_SENTENCES["FAULT_REFUSED"] and (st != "FAULT" or not hidden):
+            bad.append(f"{label}{eid}: the refused-press sentence with state {st}")
     if snap[X.CHARGE][0] == "RUNNING" and snap[X.EXPORT][0] == "RUNNING":
         bad.append(f"{label}both functions read RUNNING (the one-lease rule)")
     if snap[X.OWNER][0] not in X.OWNERS:
@@ -392,6 +402,90 @@ def new_rows() -> list[tuple]:
         for txt in FILLED + [X.FP_ACTIVE_TEXT, X.DG_ACTIVE_TEXT]:
             rows.append((f"{fn} lease running, text {txt[:50]!r}", H({F["a"]: "on", F["s"]: "on", F["status"]: txt})))
     return rows
+
+
+def refused_texts(fn: str) -> list[str]:
+    """Every REJECTED text the firmware can publish as the status of the function (the balanced publish_state scan), and the formatted ones of this suite: the texts a raw press can leave on the status."""
+    sensor = "free_power_status" if fn == "charge" else "dump_status"
+    lits = {tx for s, _l, texts in status_calls() if s == sensor for tx in texts if tx.startswith("REJECTED")}
+    return sorted(lits | {t for t in FILLED if t.startswith("REJECTED")})
+
+
+FAULT_BEFORE = {
+    "charge": ["ACTIVE - reboot recovery pending", "OPERATOR DECISION REQUIRED - automatic recovery is blocked; Review Live State before retrying", "RECOVERY REQUIRED - saved snapshot found",
+               "RESTORE BLOCKED - register 244 context changed since this lease started (a context)", "RESTORE VERIFY FAILED - snapshot retained for retry", "END BLOCKED - RECOVERY BLOCKED: x"],
+    "export": ["OPERATOR DECISION REQUIRED - repeated verify mismatch restoring Dump to Grid; use Force Restore Original or Accept Current State",
+               "ACTIVE - reboot recovery pending", "RECOVERY BLOCKED - durable recovery state UNKNOWN (marker could not be read from NVS at boot)", "RESTORE WRITE FAILED - snapshot retained; will retry automatically",
+               "ACCEPT REFUSED - state is ORIGINAL, not NEITHER", "FORCE RESTORE REFUSED - LIVE STATE CHANGED SINCE REVIEW - review again"],
+}
+
+
+def deep_texts(texts: list[str]) -> list[str]:
+    return [r for r in texts if "already active" in r or "RECOVERY BLOCKED" in r or "Recovery Arm" in r or "restore is in progress" in r or "snapshot pending" in r]
+
+
+def refusal_sequence_problems(text: str | None = None, first_only: bool = False) -> list[str]:
+    """AK-01: a lease whose status is a FAULT text (or a healthy one), then a raw press whose REJECTED text overwrites the status, with the lease and snapshot flags on and no operation in progress: the model
+    reads FAULT after it (never RUNNING: the status can no longer say whether the lease is healthy), with the refusal sentence, the code, the note and no start; the End brings IDLE back."""
+    bad: list[str] = []
+    w = new_world(text)
+    for fn in ("charge", "export"):
+        F = X.FUNCS[fn]
+        closed = ("off", {"blocked_by": ["FREE_POWER_ACTIVE" if fn == "charge" else "DUMP_ACTIVE"]})
+        active = X.FP_ACTIVE_TEXT if fn == "charge" else X.DG_ACTIVE_TEXT
+        refusals = refused_texts(fn)
+        for before in FAULT_BEFORE[fn] + [active]:
+            for after in sorted(set(refusals[::3]) | set(deep_texts(refusals))):
+                steps = []
+                for label, txt in (("before", before), ("after the press", after)):
+                    raw = X.merged({F["a"]: "on", F["s"]: "on", F["status"]: txt, X.CG: closed, X.EG: closed})
+                    bad += run_row(f"{fn} {label} {txt[:40]!r}", raw, w)
+                    snap = w.snapshot()
+                    bad += property_problems(snap, f"{fn} {label} {txt[:40]!r}: ")
+                    steps.append(snap[F["sensor"]])
+                (st0, _a0), (st1, a1) = steps
+                want0 = "RUNNING" if before == active else "FAULT"
+                if st0 != want0:
+                    bad.append(f"{fn} before the press ({before[:40]!r}): {st0}, wanted {want0}")
+                if st1 != "FAULT" or a1["start_allowed"]:
+                    bad.append(f"{fn} after the press ({before[:30]!r} then {after[:40]!r}): {st1} (start_allowed {a1['start_allowed']}): the lease flag is on, so a refusal reads FAULT and never RUNNING")
+                if X.family(after) == "DONE" and (a1["why"] != X.OTHER_SENTENCES["FAULT_REFUSED"] or a1["next_action"] != X.NEXT_SENTENCES["REFUSED"] or HIDDEN_CODE not in a1["blocked_by"]
+                                                  or "LAST_PRESS_REFUSED" not in a1["notes"]):
+                    bad.append(f"{fn} after the press ({after[:40]!r}): the sentence, the next action, the code or the note is missing: {a1['why'][:50]!r} {a1['blocked_by']}")
+                if first_only and bad:
+                    return bad
+        raw = X.merged({F["a"]: "off", F["s"]: "off", F["status"]: X.DONE_TEXT})
+        bad += run_row(f"{fn} after the End", raw, w)
+        if w.state(F["sensor"]) != "IDLE":
+            bad.append(f"{fn} after the End: {w.state(F['sensor'])}, wanted IDLE")
+    return bad
+
+
+def refusal_grid_problems(text: str | None = None, step: int = 1, text_step: int = 1) -> list[str]:
+    """AK-01 property: with the lease flag on and ANY REJECTED text the firmware can publish, over the whole flag grid (the three flags of the function, the three of the other and the manual write flag), the
+    state is never RUNNING, IDLE, PLANNED, ARMED or ASSISTED and start_allowed is false; with no operation in progress it is FAULT, with one it is ENDING or FAULT. Every answer also equals the reference."""
+    bad: list[str] = []
+    w = new_world(text)
+    for fn in ("charge", "export"):
+        F = X.FUNCS[fn]
+        closed = ("off", {"blocked_by": ["FREE_POWER_ACTIVE" if fn == "charge" else "DUMP_ACTIVE"]})
+        texts = refused_texts(fn)
+        deep = deep_texts(texts)
+        for txt in sorted(set(texts[::text_step]) | set(deep)):
+            for bits in range(0, 128, step):
+                la, lo, ls, ya, yo, ys, mw = (("on" if bits >> i & 1 else "off") for i in range(7))
+                for gate in ((closed,) if la == "on" else (X.OPEN_GATE,)) + ((X.OPEN_GATE,) if (la == "on" and txt in deep) else ()):
+                    raw = X.merged({F["a"]: la, F["o"]: lo, F["s"]: ls, F["xa"]: ya, F["xo"]: yo, F["xs"]: ys, MWID: mw, F["status"]: txt, F["gate"]: gate})
+                    bad += run_row(f"{fn} {bits:07b} {txt[:36]!r}", raw, w)
+                    snap = w.snapshot()
+                    bad += property_problems(snap, f"{fn} {bits:07b} {txt[:36]!r}: ")
+                    st, a = snap[F["sensor"]]
+                    if la == "on":
+                        if st in ("RUNNING", "IDLE", "PLANNED", "ARMED", "ASSISTED") or a["start_allowed"] or st not in ("FAULT", "ENDING") or (lo == "off" and st != "FAULT"):
+                            bad.append(f"{fn} {bits:07b} {txt[:40]!r} lease on: the state is {st} (start_allowed {a['start_allowed']}): a REJECTED text with the lease flag on is never RUNNING and never startable")
+                    if len(bad) > 3:
+                        return bad
+    return bad
 
 
 def vocab_rows() -> list[tuple]:
@@ -1044,7 +1138,7 @@ def static_problems(text: str) -> list[str]:
         for pre in table:
             if f"'{pre}'" not in text:
                 bad.append(f"the status prefix {pre!r} is not in the file")
-    for note in X.NOTES_CHARGE + X.NOTES_EXPORT + ("IMPORT_NOT_CONFIGURED", "IMPORT_CEILING_NOT_READ", "PROPOSAL_NOT_INSTALLED", "SCHEDULE_LAST_RUN_FAILED", "LAST_PRESS_REFUSED") + tuple(c for _n, c in X.LOOP_NEEDLES) + ("LOOP_OTHER",):
+    for note in X.NOTES_CHARGE + X.NOTES_EXPORT + ("IMPORT_NOT_CONFIGURED", "IMPORT_CEILING_NOT_READ", "PROPOSAL_NOT_INSTALLED", "SCHEDULE_LAST_RUN_FAILED", "LAST_PRESS_REFUSED", HIDDEN_CODE) + tuple(c for _n, c in X.LOOP_NEEDLES) + ("LOOP_OTHER",):
         if f"'{note}'" not in text:
             bad.append(f"the note {note} is not in the file")
     # hygiene
@@ -1093,6 +1187,12 @@ def battery(text: str, deep: bool = False) -> list[str]:
         bad += churn_problems(text)
         if bad:
             return bad
+        bad += refusal_sequence_problems(text, first_only=True)
+        if bad:
+            return bad
+        bad += refusal_grid_problems(text, step=9, text_step=7)
+        if bad:
+            return bad
         bad += lifecycle_problems(text)
     except Exception as exc:  # noqa: BLE001 - a package that breaks the model is a dead mutant, not a crash
         bad.append(f"the model raised {type(exc).__name__}: {str(exc)[:120]}")
@@ -1130,7 +1230,7 @@ MUTANTS = [
     ("a restore is owed while an operation runs", "{%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}", "{%- set owed = ls == 'on' and la == 'off' -%}"),
     ("a snapshot with a lease running is owed", "{%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}", "{%- set owed = ls == 'on' and lo == 'off' -%}"),
     ("two leases are only a conflict for the first", "{%- set conflict = la == 'on' and ya == 'on' -%}", "{%- set conflict = la == 'on' and ya == 'on' and lo == 'off' -%}"),
-    ("a lease is RUNNING without a verified status", "(('RUNNING' if (fam == 'ACTIVE' or refused) else", "(('RUNNING' if true else"),
+    ("a lease is RUNNING without a verified status", "(('RUNNING' if fam == 'ACTIVE' else", "(('RUNNING' if true else"),
     ("an operation in progress is not ENDING", "else ('ENDING' if lo == 'on'", "else ('ENDING' if false"),
     ("a start in progress is not ARMED", "else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))", "else ('ARMED' if false"),
     ("the write enable does not arm", "else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')", "else ('ARMED' if (sc == 'on' or gd == 'on')"),
@@ -1200,14 +1300,36 @@ MUTANTS = [
     ("CS-01: the Charge ASSISTED sentence claims a proposal", "the guarded Start would run the Charge Battery request you staged on the dongle, as it stands.", "ECCO has a valid proposal."),
     ("CS-01: the Charge ASSISTED next action claims a proposal", "it runs the Charge Battery request you staged, as it stands.", "it runs the ECCO proposal."),
     ("CS-02: the DONE family loses the accepted-current-state text", "'ACCEPTED CURRENT STATE -', ", ""),
-    ("CS-03: a refused press makes a healthy lease FAULT", "(('RUNNING' if (fam == 'ACTIVE' or refused) else", "(('RUNNING' if (fam == 'ACTIVE') else"),
-    ("CS-03: a refused press needs no snapshot", "and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED')", "and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED')"),
-    ("CS-03: a refused press during an operation", "and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED')", "and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED')"),
-    ("CS-03: any DONE text keeps a lease RUNNING", "and fam == 'DONE' and t.startswith('REJECTED') -%}", "and fam == 'DONE' -%}"),
-    ("CS-03: a recovery-blocked refusal keeps a lease RUNNING", "and fam == 'DONE' and t.startswith('REJECTED') -%}", "and t.startswith('REJECTED') -%}"),
-    ("CS-03: a refusal without the lease flag counts", "{%- set refused = la == 'on' and lo == 'off'", "{%- set refused = lo == 'off'"),
-    ("CS-03: the refusal note is dropped", " + (['LAST_PRESS_REFUSED'] if refused else [])", ""),
-    ("CS-03: the refusal note is always on", "(['LAST_PRESS_REFUSED'] if refused else [])", "(['LAST_PRESS_REFUSED'] if true else [])"),
+    # AK-01 (OWNER DECISION (a)): a REJECTED text with the lease flag on is FAULT, never RUNNING; the rows and the property of refusal_grid_problems and refusal_sequence_problems kill each of these
+    ("CS-03/AK-01: a refusal reads RUNNING in every copy (the over-broad rule of the review round)", "(('RUNNING' if fam == 'ACTIVE' else", "(('RUNNING' if (fam == 'ACTIVE' or refused) else"),
+    ("AK-01: a refusal reads RUNNING only while the snapshot flag is on", "(('RUNNING' if fam == 'ACTIVE' else", "(('RUNNING' if (fam == 'ACTIVE' or (refused and ls == 'on')) else"),
+    ("AK-01: a refusal reads RUNNING only while the gate reads off", "(('RUNNING' if fam == 'ACTIVE' else", "(('RUNNING' if (fam == 'ACTIVE' or (refused and g == 'off')) else"),
+    ("AK-01: a refusal reads RUNNING only for the already-active texts", "(('RUNNING' if fam == 'ACTIVE' else", "(('RUNNING' if (fam == 'ACTIVE' or (refused and 'already active' in t)) else"),
+    ("AK-01: any REJECTED text reads RUNNING with the lease flag on", "(('RUNNING' if fam == 'ACTIVE' else", "(('RUNNING' if (fam == 'ACTIVE' or t.startswith('REJECTED')) else"),
+    ("AK-01: a refusal reads IDLE", "('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'", "('ARMED' if fam == 'STARTING' else ('IDLE' if refused else 'FAULT')))) if la == 'on'"),
+    ("AK-01: a refusal reads ARMED", "('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'", "('ARMED' if (fam == 'STARTING' or refused) else 'FAULT'))) if la == 'on'"),
+    ("AK-01: a refusal reads PLANNED", "('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'", "('ARMED' if fam == 'STARTING' else ('PLANNED' if refused else 'FAULT')))) if la == 'on'"),
+    ("AK-01: a refusal is startable (start_allowed ignores it)", OK_LINE, "{%- set ok = (open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED']) or (open and refused) -%}"),
+    ("AK-01: the refusal code is dropped from blocked_by", "(['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else [])", "[]"),
+    ("AK-01: the refusal code is always listed", "(['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else [])", "(['STATUS_HIDDEN_BY_REFUSED_PRESS'] if true else [])"),
+    ("AK-01: the refusal code is renamed", "'STATUS_HIDDEN_BY_REFUSED_PRESS'", "'LAST_PRESS_REFUSED_CODE'"),
+    ("AK-01: the refusal sentence is the RUNNING sentence", "{%- elif refused -%}{{ RS['FAULT_REFUSED'] }}", "{%- elif refused -%}{{ RS['RUNNING'] }}"),
+    ("AK-01: the refusal sentence is the generic FAULT sentence", "{%- elif refused -%}{{ RS['FAULT_REFUSED'] }}", "{%- elif refused -%}{{ RS['FAULT_UNCONFIRMED'] }}"),
+    ("AK-01: the refusal sentence claims a certain fault", "The last press was refused, so the status of the dongle no longer shows whether the lease is healthy.", "The lease is faulty."),
+    ("AK-01: the refusal sentence claims health", "The last press was refused, so the status of the dongle no longer shows whether the lease is healthy.", "The last press was refused and the lease is healthy."),
+    ("AK-01: the refusal next action says Let it run", "{%- elif refused and not conflict -%}Check the status and the recovery controls of the dongle: End and Restore stops a healthy lease; do not press Start again.", "{%- elif refused and not conflict -%}Let it run, or press End and Restore to stop it."),
+    ("AK-01: the refusal next action invites a new Start", "do not press Start again.", "press Start again."),
+    ("AK-01: the refusal next action is dropped (the generic FAULT one is said)", "{%- elif refused and not conflict -%}", "{%- elif false -%}"),
+    ("AK-01: the refusal note is dropped", " + (['LAST_PRESS_REFUSED'] if refused else [])", ""),
+    ("AK-01: the refusal note is always on", "(['LAST_PRESS_REFUSED'] if refused else [])", "(['LAST_PRESS_REFUSED'] if true else [])"),
+    ("AK-01: a refusal needs the snapshot flag on", "{%- set refused = la == 'on' and lo == 'off' and fam == 'DONE'", "{%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE'"),
+    ("AK-01: a refusal needs the snapshot flag off", "{%- set refused = la == 'on' and lo == 'off' and fam == 'DONE'", "{%- set refused = la == 'on' and lo == 'off' and ls == 'off' and fam == 'DONE'"),
+    ("AK-01: a refusal during an operation", "{%- set refused = la == 'on' and lo == 'off' and fam == 'DONE'", "{%- set refused = la == 'on' and fam == 'DONE'"),
+    ("AK-01: any DONE text is a refusal", "and fam == 'DONE' and t.startswith('REJECTED') -%}", "and fam == 'DONE' -%}"),
+    ("AK-01: a recovery-blocked refusal is a refusal too", "and fam == 'DONE' and t.startswith('REJECTED') -%}", "and t.startswith('REJECTED') -%}"),
+    ("AK-01: a refusal without the lease flag counts", "{%- set refused = la == 'on' and lo == 'off'", "{%- set refused = lo == 'off'"),
+    ("AK-01: the recovery-blocked refusal text is a DONE text", "'ACCEPT REFUSED', 'ACCEPT FAILED', 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'", "'ACCEPT REFUSED', 'ACCEPT FAILED', 'ACTIVE - reboot recovery pending'"),
+    ("AK-01: the reboot-recovery text lands in no family", ", 'REJECTED - RECOVERY BLOCKED', 'ACTIVE - reboot recovery pending'))", ", 'REJECTED - RECOVERY BLOCKED'))"),
     ("CS-04: an off gate with no string code is not inconsistent", "(g == 'off' and sn == 0)", "(g == 'off' and (gl | length) == 0)"),
     ("CS-04: the string codes are counted with the unreadable inputs", "{%- set sn = ns.c | length -%}", "{%- set sn = (ns.c | length) + 1 -%}"),
     ("CS-04: an on gate with a list is not inconsistent", "((g == 'on' and (gl | length) > 0) or", "((false) or"),
@@ -1221,7 +1343,9 @@ MUTANTS = [
     ("CS-07: an ACTIVE text while the operation flag clears reads ENDING", "(fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE'))", "fam == 'STARTING'"),
     ("CS-07: an ACTIVE text with the operation flag on and no lease is ARMED", "(fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE'))", "(fam == 'STARTING' or fam == 'ACTIVE')"),
     ("CS-07: the loop's own status is dropped from the notes", " + loop }}", " }}"),
-    ("CS-07: the loop code is given outside a running lease", "(['LOOP_OTHER'] if (st == 'RUNNING' and fam == 'ACTIVE') else [])", "(['LOOP_OTHER'] if st == 'RUNNING' else [])"),
+    # (after AK-01 only an ACTIVE text reads RUNNING, so `st == 'RUNNING'` alone is EQUIVALENT to the package's `st == 'RUNNING' and fam == 'ACTIVE'`: the review round's mutant that dropped `fam == 'ACTIVE'` can no
+    # longer differ; the dual mutant, which drops the state, still can: a start finishing (the ACTIVE text with the operation flag on) reads ARMED and must carry no loop code)
+    ("CS-07: the loop code is given outside a running lease (the state is dropped from the condition)", "(['LOOP_OTHER'] if (st == 'RUNNING' and fam == 'ACTIVE') else [])", "(['LOOP_OTHER'] if fam == 'ACTIVE' else [])"),
     ("CS-07: the loop code is the first needle only", "(' - TRACKING - ', 'LOOP_TRACKING'), ", ""),
     ("CS-07: an unknown loop word has no code", "(['LOOP_OTHER'] if (st == 'RUNNING' and fam == 'ACTIVE') else [])", "[]"),
     ("TEST-08: the Charge notes read the Dump schedule status", "{%- set ss = states('sensor.ecco_free_power_schedule_status') -%}", "{%- set ss = states('sensor.ecco_dump_to_grid_schedule_status') -%}"),
@@ -1257,6 +1381,39 @@ def mutate(text: str, old: str, new: str, label: str = "") -> str | None:
         i = text.index(old)
         return text[:i] + new + text[i + len(old):]
     return text.replace(old, new)
+
+
+RUN_BRANCH = "(('RUNNING' if fam == 'ACTIVE' else"
+RUN_REFUSED = "(('RUNNING' if (fam == 'ACTIVE' or refused) else"
+NTH_MUTANTS = [
+    # the RUNNING branch is written once in each of the 13 rule blocks: Charge has the first 6 (state, why, next_action, blocked_by, start_allowed, notes), Export the next 7 (the same six, then proposal)
+    ("AK-01 occurrence: only Charge reads a refusal as RUNNING (all its templates)", RUN_BRANCH, RUN_REFUSED, [1, 2, 3, 4, 5, 6]),
+    ("AK-01 occurrence: only Export reads a refusal as RUNNING (all its templates)", RUN_BRANCH, RUN_REFUSED, [7, 8, 9, 10, 11, 12, 13]),
+    ("AK-01 occurrence: only the Charge state template reads a refusal as RUNNING", RUN_BRANCH, RUN_REFUSED, [1]),
+    ("AK-01 occurrence: only the Export state template reads a refusal as RUNNING", RUN_BRANCH, RUN_REFUSED, [7]),
+    ("AK-01 occurrence: the Charge why does not name the refusal", "{%- elif refused -%}{{ RS['FAULT_REFUSED'] }}", "{%- elif false -%}x", [1]),
+    ("AK-01 occurrence: the Export why does not name the refusal", "{%- elif refused -%}{{ RS['FAULT_REFUSED'] }}", "{%- elif false -%}x", [2]),
+    ("AK-01 occurrence: the Charge refusal code is dropped from its blocked_by", "(['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else [])", "[]", [4]),
+    ("AK-01 occurrence: the Export refusal code is dropped from its blocked_by", "(['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else [])", "[]", [10]),
+    ("AK-01 occurrence: the Export state template ignores the lease flag in the refusal", "{%- set refused = la == 'on' and lo == 'off'", "{%- set refused = lo == 'off'", [7]),
+]
+
+
+def mutate_nth(text: str, old: str, new: str, nth: list[int]) -> str | None:
+    """Replace only the listed 1-based occurrences of `old` (None when there are fewer occurrences than the highest listed)."""
+    if text.count(old) < max(nth):
+        return None
+    out, i, k = [], 0, 0
+    while True:
+        j = text.find(old, i)
+        if j < 0:
+            out.append(text[i:])
+            break
+        k += 1
+        out.append(text[i:j])
+        out.append(new if k in nth else old)
+        i = j + len(old)
+    return "".join(out)
 
 
 ONE_COPY_MUTANTS = [
@@ -1306,6 +1463,17 @@ def main() -> int:
     check(f"every combination of the three flags of both functions and the manual write flag with a status text of each family, the arm, the scripts and the armed helper, the gates and the time reading in "
           f"every combination, the proposal and the re-target in every state, the hold, the reserve, the latched Stop SOC, the limits, the end-time texts and the numbers: {len(table_rows())} flag rows and "
           f"{len(combo_rows())} more and {len(vocab_rows())} status rows, each equal to the reference with the properties holding", tb == [], str(tb[:3]))
+
+    print("[2b] refusals")
+    rsq = refusal_sequence_problems()
+    check("AK-01 (OWNER DECISION (a)): a lease whose status is a FAULT text (each of six per function) or a healthy one, then a raw press whose REJECTED text overwrites the status (every REJECTED text of the firmware "
+          "for the function, the already-active, saved-snapshot, recovery-blocked, Recovery Arm and restore-in-progress ones included), with the lease and snapshot flags on and no operation in progress: the state after "
+          "the press is FAULT, never RUNNING, with the refusal sentence, the refusal next action, the code STATUS_HIDDEN_BY_REFUSED_PRESS, the note LAST_PRESS_REFUSED and no start, for both functions; the End brings IDLE back", rsq == [], str(rsq[:3]))
+    nrej = {fn: len(refused_texts(fn)) for fn in ("charge", "export")}
+    rgr = refusal_grid_problems()
+    check(f"AK-01 property: with the lease flag on and ANY of the REJECTED texts the firmware can publish ({nrej['charge']} for Free Power, {nrej['export']} for Dump to Grid, found by the balanced publish_state scan), over the whole "
+          "flag grid (the three flags of the function, the three of the other and the manual write flag: 128 combinations), the state is never RUNNING, IDLE, PLANNED, ARMED or ASSISTED, start_allowed is false, "
+          "the state is FAULT with no operation in progress, and the answer equals the reference", rgr == [] and nrej["charge"] >= 12 and nrej["export"] >= 30, str(rgr[:3]) + str(nrej))
 
     print("[3] properties")
     n_sweep = 2400
@@ -1366,9 +1534,9 @@ def main() -> int:
 
     print("[9] mutation")
     killed, survived, total = 0, [], 0
-    for label, old, new in MUTANTS + ONE_COPY_MUTANTS:
+    for label, old, new, *nth in [m + (None,) if len(m) == 3 else m for m in MUTANTS + ONE_COPY_MUTANTS + NTH_MUTANTS]:
         total += 1
-        mutated = mutate(TEXT, old, new, label)
+        mutated = mutate_nth(TEXT, old, new, nth[0]) if nth[0] else mutate(TEXT, old, new, label)
         if mutated is None:
             check(f"mutant anchor: {label}", False, "anchor not found")
             continue
@@ -1400,7 +1568,8 @@ def main() -> int:
           "the owner's go, no lease running, what it needs)",
           bool(block) and all(s in bf for s in ("NOT installed, NOT LIVE-PROVEN", "Three template sensors", "display", "no automation, script, helper, trigger or service call", "nothing may read them",
                                                   "THE GATES ARE SOFT", "template entities", "no restart", "needs the owner's go", "NO Dump to Grid or Free Power lease running", "ecco_time_trust.yaml",
-                                                  "ecco_start_gate.yaml", "optional", "Delete the file and reload")), bf[:200])
+                                                  "ecco_start_gate.yaml", "optional", "Delete the file and reload", "OWNER DECISION (a)",
+                                                  "STATUS_HIDDEN_BY_REFUSED_PRESS")), bf[:200])
     rflat = flat(README_TEXT)
     sec = README_TEXT.split("## Control state", 1)[1].split("\n## ", 1)[0] if "## Control state" in README_TEXT else ""
     sflat = flat(sec)
@@ -1408,10 +1577,11 @@ def main() -> int:
           "inputs, the status families, the one-lease rule, the rows, the lab facts, the notes, the two deliberate pin widenings (D-PIN) and what each lists, the install and csm1",
           all(s in sflat for s in ("`sensor.ecco_charge_control_state`", "`sensor.ecco_export_control_state`", "`sensor.ecco_control_owner`", "display", "never a gate", "UNKNOWN, FAULT, ENDING, RUNNING, ARMED, ASSISTED, PLANNED, IDLE",
                                    "start_allowed", "closed", "UNREADABLE_", "families", "one-lease rule", "no recorder row", "13 to 27 s", "RESTORED", "wait 60 s", "SOFT_GATE", "NO_END_GUARD", "D-PIN",
-                                   "READERS", "leases consumer", "export coordinator", "csm1", "template reload", "NOT ESTABLISHED", "reseal")), str([s for s in ("D-PIN", "csm1", "reseal") if s not in sflat]))
+                                   "READERS", "leases consumer", "export coordinator", "csm1", "template reload", "NOT ESTABLISHED", "reseal", "OWNER DECISION (a)", "STATUS_HIDDEN_BY_REFUSED_PRESS", "never RUNNING")),
+          str([s for s in ("D-PIN", "csm1", "reseal", "OWNER DECISION (a)", "STATUS_HIDDEN_BY_REFUSED_PRESS", "never RUNNING") if s not in sflat]))
     bullet = next((ln for ln in CHANGELOG_TEXT.splitlines() if "ecco_control_state.yaml" in ln), "")
     check("the CHANGELOG has the bullet (control state read model, display only, three sensors, nothing installed, the two deliberate pin widenings)",
-          all(s in bullet for s in ("Control state read model", "display", "three template sensors", "nothing installed", "READERS", "D-PIN")), bullet[:120])
+          all(s in bullet for s in ("Control state read model", "display", "three template sensors", "nothing installed", "READERS", "D-PIN", "OWNER DECISION (a)", "STATUS_HIDDEN_BY_REFUSED_PRESS")), bullet[:120])
     del rflat
 
     if FAILURES:

@@ -21,11 +21,12 @@
 # THE STATES (first match wins, in this order: UNKNOWN, FAULT, ENDING, RUNNING, ARMED, ASSISTED, PLANNED, IDLE; the dongle's lease flags decide, its status text refines):
 #   UNKNOWN   an input the state needs cannot be read (missing, unavailable, unknown, not on or off, or a status text this model does not know): never shown as ready, the first one is named in why
 #   FAULT     needs the owner: a saved snapshot waits for a restore and nothing runs (restore owed), the status text says a restore or recovery is blocked, failed or waiting for a decision, both leases read active
-#             at once (the one-lease rule), or the lease reads active but the status does not confirm that it is running normally
+#             at once (the one-lease rule), or the lease reads active but the status does not confirm that it is running normally. A REJECTED text with the lease flag on and no operation in progress (the last press of a
+#             Start, an End-side button or a recovery button was refused) is the last case, never RUNNING: see OWNER DECISION (a) below
 #   ENDING    the lease is being ended and the saved inverter settings restored (an operation in progress, or a status text of the End and restore family)
 #   RUNNING   the lease is active and the dongle's status says ACTIVE - VERIFIED OK (Charge Battery: the rate was fixed at the START; Export to Grid: the dongle loop works toward the net export target and ends the lease at the
-#             latched Stop SOC; the loop's own word, TRACKING, SETTLING, SATURATED, TARGET INFEASIBLE or NO RESPONSE, is a note: LOOP_*). A raw Start press that the firmware refused during a healthy lease (REJECTED ... already active,
-#             the lease flag and the snapshot flag on, no operation in progress) leaves its text on the status until the END: the lease still runs, RUNNING, with the note LAST_PRESS_REFUSED
+#             latched Stop SOC; the loop's own word, TRACKING, SETTLING, SATURATED, TARGET INFEASIBLE or NO RESPONSE, is a note: LOOP_*). ONLY an ACTIVE-family text with the lease flag on reads RUNNING; a
+#             refusal never does
 #   ARMED     a start is under way: the write enable is on, or a start script (the scheduled one or the guarded one) is running, or the dongle reports a start in progress (both start paths publish the ACTIVE text before they
 #             clear the operation flag: an operation in progress with the lease flag on and the ACTIVE text is the start finishing, ARMED, never ENDING)
 #   ASSISTED  RESERVED: no function reads it today. It is for a start that runs a PROPOSAL of ECCO or the request the owner staged, with the gate open and nothing under way. Charge Battery would use it for the Free Power request the
@@ -57,8 +58,19 @@
 #
 # THE STATUS TEXTS. The dongle's own texts are classified by prefix into families: ACTIVE (ACTIVE - VERIFIED OK), FAULT (a recovery or restore blocked, failed, refused or waiting for a decision, and a lease that
 # a reboot left with its recovery pending), ENDING (RESTORING, END REQUESTED, END DEFERRED, a verified restore whose durable record is still pending ...), STARTING (STARTING, the snapshot committed) and DONE (nothing
-# under way: Inactive, restored OK, a refused or failed start). The suite reads every literal the firmware can publish as these two statuses and requires each to land in exactly one family; a text that matches none
+# under way: Inactive, restored OK, a refused or failed start; a REJECTED text with the lease flag on overwrites the status of the dongle and reads FAULT, see OWNER DECISION (a)). The suite reads every literal the firmware can publish as these two statuses and requires each to land in exactly one family; a text that matches none
 # is UNKNOWN, never ready. A stale text never decides alone: with every flag off a DONE or STARTING text is just IDLE; only a FAULT text is held against the owner until the dongle publishes another.
+#
+# OWNER DECISION (a), A REFUSED PRESS READS FAULT, NEVER RUNNING (review round AK-01; the coordinator's decision, recorded for the owner). A REJECTED text overwrites the status of the dongle, so it cannot tell a healthy
+# lease from a lockout: the firmware leaves the lease flag on during an operator-needed lockout, and a raw press (a Start, or a Force Restore or an Accept without the Recovery Arm) then publishes a REJECTED text over
+# the FAULT text. An earlier version of this file read such a lease as RUNNING (CS-03); that hid a lockout behind a healthy-looking state. Now, with the lease flag on and no operation in progress, ANY REJECTED text
+# (of the DONE family) reads FAULT for both functions, whatever the snapshot flag says: the lease reads active but the status can no longer confirm that it is healthy, the conservative state (a false alarm costs a
+# glance, a hidden lockout costs more). It has its own fixed sentence (the last press was refused, so the status of the dongle no longer shows whether the lease is healthy; it does not claim that a fault is
+# certain and it does not claim health), its own next action (check the status and the recovery controls of the dongle; End and Restore stops a healthy lease; do not press Start again), the code
+# STATUS_HIDDEN_BY_REFUSED_PRESS in blocked_by (listed after the gate's codes, so why and the list name the same cause), the note LAST_PRESS_REFUSED, and start_allowed false. The state is not new and the order
+# of the table is unchanged; a REJECTED text of the recovery-blocked kind keeps its own FAULT family and sentence. The cost is a FAULT alarm after a harmless refused press during a healthy lease, until the dongle
+# publishes another status (a press that is accepted, or the END). IF A FIRMWARE RECOVERY-STATE SIGNAL IS EVER READ (a new reader of the dongle, which needs a pin check and its own review), a healthy lease could be
+# told from a lockout again and RUNNING after a refusal could be restored; that is the owner's decision to take then, not this file's.
 #
 # THE ONE-LEASE RULE. Both functions never read RUNNING together: if both lease flags read on, both read FAULT (the firmware refuses a second function, so this is a contradiction, not a state), the owner reads
 # UNKNOWN, and nothing is startable.
@@ -81,7 +93,7 @@
 # bound by the gate), CARD_START_NOT_GATED (the card's Start Now presses the dongle's Start directly), GUARDED_START_NOT_GATED (the guarded Dump start does not read the gate), SCHEDULE_NOT_GATED (a schedule presses the
 # Start without reading the gate), RATE_FIXED_AT_START and NO_TARGET_REACHED_END (Charge Battery: nothing adapts the rate inside a lease and nothing ends it at a target), NO_END_GUARD (no guard ends an Export lease),
 # IMPORT_NOT_CONFIGURED and IMPORT_CEILING_NOT_READ (the grid import ceiling is 0 = none, or cannot be read), PROPOSAL_NOT_INSTALLED, PROPOSAL_FOR_SCHEDULE_PATH (Export: the proposal is for the schedule path), SCHEDULE_LAST_RUN_FAILED,
-# LAST_PRESS_REFUSED (a refused raw Start press during a healthy lease) and, for a running Export lease, LOOP_SETTLING, LOOP_TRACKING, LOOP_SATURATED_LOW, LOOP_SATURATED_HIGH, LOOP_TARGET_INFEASIBLE_LOW, LOOP_TARGET_INFEASIBLE_HIGH,
+# LAST_PRESS_REFUSED (a press was refused while the lease flag reads on: the status is hidden, OWNER DECISION (a); the code STATUS_HIDDEN_BY_REFUSED_PRESS of blocked_by goes with it) and, for a running Export lease, LOOP_SETTLING, LOOP_TRACKING, LOOP_SATURATED_LOW, LOOP_SATURATED_HIGH, LOOP_TARGET_INFEASIBLE_LOW, LOOP_TARGET_INFEASIBLE_HIGH,
 # LOOP_NO_RESPONSE or LOOP_OTHER (the dongle loop's own word in its ACTIVE text; it changes only when the loop changes regime).
 #
 # LIMITS, stated plainly (nothing here is a lock).
@@ -139,19 +151,20 @@ template:
           {%- set sn = ns.c | length -%}
           {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
           {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+          {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
           {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
           {%- for code, v in [('DUMP_ACTIVE', ya), ('DUMP_OPERATION', yo), ('DUMP_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+          {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
           {%- set unk = (ns.u | length) > 0 -%}
           {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
           {%- set conflict = la == 'on' and ya == 'on' -%}
           {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-          {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
           {%- set assisted = false -%}
           {%- set st = 'UNKNOWN' if unk
           else ('FAULT' if (conflict or fam == 'FAULT' or owed)
           else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
           else ('ENDING' if lo == 'on'
-          else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+          else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
           else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
           else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
           {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -191,19 +204,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('DUMP_ACTIVE', ya), ('DUMP_OPERATION', yo), ('DUMP_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -261,7 +275,8 @@ template:
             'FAULT_CONFLICT': 'Both leases read active at once, which the one-lease rule forbids.',
             'FAULT_TEXT': 'The dongle status says a restore or recovery is blocked, failed or waiting for a decision.',
             'FAULT_OWED': 'A saved snapshot of the inverter settings is waiting for a restore and nothing is running.',
-            'FAULT_UNCONFIRMED': 'The lease reads active but the dongle status does not confirm that it is running normally.'
+            'FAULT_UNCONFIRMED': 'The lease reads active but the dongle status does not confirm that it is running normally.',
+            'FAULT_REFUSED': 'The last press was refused, so the status of the dongle no longer shows whether the lease is healthy.'
             } -%}
             {%- set code0 = (ns.c[0] if (ns.c | length) > 0 else '') -%}
             {%- set nr = GS['TIME_LEASES'] if tl == 'off' else (GS['GATE_INCONSISTENT'] if incons else (GS[code0] if code0 in GS else 'the start gate is closed (' ~ code0 ~ ').')) -%}
@@ -269,6 +284,7 @@ template:
             {%- elif conflict -%}{{ RS['FAULT_CONFLICT'] }}
             {%- elif fam == 'FAULT' -%}{{ RS['FAULT_TEXT'] }}
             {%- elif owed -%}{{ RS['FAULT_OWED'] }}
+            {%- elif refused -%}{{ RS['FAULT_REFUSED'] }}
             {%- elif st == 'FAULT' -%}{{ RS['FAULT_UNCONFIRMED'] }}
             {%- elif st in ['ENDING', 'RUNNING', 'ARMED'] -%}{{ RS[st] }}
             {%- elif ok -%}{{ RS[st] }}
@@ -307,24 +323,26 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('DUMP_ACTIVE', ya), ('DUMP_OPERATION', yo), ('DUMP_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
             {#- RULES END -#}
             {%- if st == 'UNKNOWN' -%}Wait for the unreadable inputs to return; nothing can be shown as ready until then.
+            {%- elif refused and not conflict -%}Check the status and the recovery controls of the dongle: End and Restore stops a healthy lease; do not press Start again.
             {%- elif st == 'FAULT' -%}Needs you: read the dongle status text and recover with its End and recovery controls; do not start anything.
             {%- elif st == 'ENDING' -%}Wait for the restore to finish; do not start anything.
             {%- elif st == 'RUNNING' -%}Let it run, or press End and Restore to stop it.
@@ -367,19 +385,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('DUMP_ACTIVE', ya), ('DUMP_OPERATION', yo), ('DUMP_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -418,19 +437,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('DUMP_ACTIVE', ya), ('DUMP_OPERATION', yo), ('DUMP_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -481,19 +501,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('DUMP_ACTIVE', ya), ('DUMP_OPERATION', yo), ('DUMP_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -539,19 +560,20 @@ template:
           {%- set sn = ns.c | length -%}
           {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
           {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+          {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
           {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
           {%- for code, v in [('FREE_POWER_ACTIVE', ya), ('FREE_POWER_OPERATION', yo), ('FREE_POWER_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+          {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
           {%- set unk = (ns.u | length) > 0 -%}
           {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
           {%- set conflict = la == 'on' and ya == 'on' -%}
           {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-          {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
           {%- set assisted = false -%}
           {%- set st = 'UNKNOWN' if unk
           else ('FAULT' if (conflict or fam == 'FAULT' or owed)
           else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
           else ('ENDING' if lo == 'on'
-          else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+          else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
           else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
           else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
           {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -591,19 +613,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('FREE_POWER_ACTIVE', ya), ('FREE_POWER_OPERATION', yo), ('FREE_POWER_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -660,7 +683,8 @@ template:
             'FAULT_CONFLICT': 'Both leases read active at once, which the one-lease rule forbids.',
             'FAULT_TEXT': 'The dongle status says a restore or recovery is blocked, failed or waiting for a decision.',
             'FAULT_OWED': 'A saved snapshot of the inverter settings is waiting for a restore and nothing is running.',
-            'FAULT_UNCONFIRMED': 'The lease reads active but the dongle status does not confirm that it is running normally.'
+            'FAULT_UNCONFIRMED': 'The lease reads active but the dongle status does not confirm that it is running normally.',
+            'FAULT_REFUSED': 'The last press was refused, so the status of the dongle no longer shows whether the lease is healthy.'
             } -%}
             {%- set code0 = (ns.c[0] if (ns.c | length) > 0 else '') -%}
             {%- set nr = GS['TIME_LEASES'] if tl == 'off' else (GS['GATE_INCONSISTENT'] if incons else (GS[code0] if code0 in GS else 'the start gate is closed (' ~ code0 ~ ').')) -%}
@@ -668,6 +692,7 @@ template:
             {%- elif conflict -%}{{ RS['FAULT_CONFLICT'] }}
             {%- elif fam == 'FAULT' -%}{{ RS['FAULT_TEXT'] }}
             {%- elif owed -%}{{ RS['FAULT_OWED'] }}
+            {%- elif refused -%}{{ RS['FAULT_REFUSED'] }}
             {%- elif st == 'FAULT' -%}{{ RS['FAULT_UNCONFIRMED'] }}
             {%- elif st in ['ENDING', 'RUNNING', 'ARMED'] -%}{{ RS[st] }}
             {%- elif ok -%}{{ RS[st] }}
@@ -706,24 +731,26 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('FREE_POWER_ACTIVE', ya), ('FREE_POWER_OPERATION', yo), ('FREE_POWER_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
             {#- RULES END -#}
             {%- if st == 'UNKNOWN' -%}Wait for the unreadable inputs to return; nothing can be shown as ready until then.
+            {%- elif refused and not conflict -%}Check the status and the recovery controls of the dongle: End and Restore stops a healthy lease; do not press Start again.
             {%- elif st == 'FAULT' -%}Needs you: read the dongle status text and recover with its End and recovery controls; do not start anything.
             {%- elif st == 'ENDING' -%}Wait for the restore to finish; do not start anything.
             {%- elif st == 'RUNNING' -%}Let it run, or press End and Restore to stop it.
@@ -765,19 +792,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('FREE_POWER_ACTIVE', ya), ('FREE_POWER_OPERATION', yo), ('FREE_POWER_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -816,19 +844,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('FREE_POWER_ACTIVE', ya), ('FREE_POWER_OPERATION', yo), ('FREE_POWER_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -881,19 +910,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('FREE_POWER_ACTIVE', ya), ('FREE_POWER_OPERATION', yo), ('FREE_POWER_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
@@ -939,19 +969,20 @@ template:
             {%- set sn = ns.c | length -%}
             {%- set incons = g in ['on', 'off'] and gl is not none and ((g == 'on' and (gl | length) > 0) or (g == 'off' and sn == 0)) -%}
             {%- set busy = ya == 'on' or yo == 'on' or ys == 'on' or mw == 'on' -%}
+            {%- set refused = la == 'on' and lo == 'off' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set ns.c = ns.c + (['TIME_LEASES'] if (tl == 'off' and 'TIME_LEASES' not in ns.c) else []) + (['GATE_INCONSISTENT'] if incons else []) -%}
             {%- for code, v in [('FREE_POWER_ACTIVE', ya), ('FREE_POWER_OPERATION', yo), ('FREE_POWER_SNAPSHOT', ys), ('MANUAL_WRITE', mw)] if v == 'on' and code not in ns.c -%}{%- set ns.c = ns.c + [code] -%}{%- endfor -%}
+            {%- set ns.c = ns.c + (['STATUS_HIDDEN_BY_REFUSED_PRESS'] if refused else []) -%}
             {%- set unk = (ns.u | length) > 0 -%}
             {%- set open = g == 'on' and gl is not none and (gl | length) == 0 and tl == 'on' -%}
             {%- set conflict = la == 'on' and ya == 'on' -%}
             {%- set owed = ls == 'on' and la == 'off' and lo == 'off' -%}
-            {%- set refused = la == 'on' and lo == 'off' and ls == 'on' and fam == 'DONE' and t.startswith('REJECTED') -%}
             {%- set assisted = false -%}
             {%- set st = 'UNKNOWN' if unk
             else ('FAULT' if (conflict or fam == 'FAULT' or owed)
             else ('ARMED' if (lo == 'on' and (fam == 'STARTING' or (la == 'on' and fam == 'ACTIVE')))
             else ('ENDING' if lo == 'on'
-            else (('RUNNING' if (fam == 'ACTIVE' or refused) else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
+            else (('RUNNING' if fam == 'ACTIVE' else ('ENDING' if fam == 'ENDING' else ('ARMED' if fam == 'STARTING' else 'FAULT'))) if la == 'on'
             else ('ARMED' if (ar == 'on' or sc == 'on' or gd == 'on')
             else ('ASSISTED' if assisted else ('PLANNED' if sa == 'on' else 'IDLE'))))))) -%}
             {%- set ok = open and not busy and st in ['IDLE', 'PLANNED', 'ASSISTED'] -%}
