@@ -18,6 +18,7 @@ layer with Home Assistant's helper range checks), with the REAL owner reserve he
   [4c] lowering   F9: lowering from 1, 2, 3 or 80 with an unreadable plan reserve is refused (never a guess), whatever confirm says
   [5] vocabulary  over a whole session the only service calls are the four allowed ones, on the allowed entities, and no state outside the helper and the result text changes
   [6] mutation    in-memory mutants of the package, each caught
+  [7] callers     the caller pin: nothing under home-assistant/ or frontend/*/src calls the script (an EMPTY allow-list, no literal confirm true), with negative and positive controls and mutants of the pin itself
 
 Test-only. No Home Assistant, no network, no hardware. I/O: reads repo files.
 """
@@ -805,6 +806,364 @@ check(f"{total} mutants, {_new} of them new for F7, F8 and F9 (the range and who
 _harmless = PKG_TEXT.replace("# WHY. The owner's reserve", "# WHY, restated. The owner's reserve")
 check("a harmless rewrite (a comment) survives the battery, and a rewrite of a rule does not", _harmless != PKG_TEXT and battery(_harmless, kill=True) == []
       and battery(PKG_TEXT.replace("f > hi -%}OUT_OF_RANGE", "f > hi + 8000 -%}OUT_OF_RANGE"), kill=True) != [])
+
+# ===========================================================================================================================
+print("[7] callers: nothing calls the script; the allow-list of callers is EMPTY (the panel card is added to it deliberately)")
+# ===========================================================================================================================
+# The script is pinned, by test_ecco_reserve_default.py, as one of the two named WRITERS of the reserve helper. That does not limit who CALLS the script. This section does: no file under home-assistant/ (packages,
+# dashboards, prototypes and the tests, except the three that name the script as their subject) and no file under frontend/*/src may call it, in any spelling, unless the file is on ALLOWED_CALLERS. That list is EMPTY: there
+# is no caller today. A future panel card is added to it deliberately, with a `confirm_from` text saying how the confirm field is obtained from a person (a second press, a typed value), and a caller may never pass a literal
+# confirm true, allowed or not. This is a tripwire over text and parsed YAML / JSON, not a proof: a card that takes the script id from its own runtime configuration is out of its reach (each card's own suite pins the
+# scripts it may address).
+import functools  # noqa: E402
+
+SET_ID = "ecco_reserve" + "_set"
+DEFINING_REL = PKG_REL
+TEST_NAMERS = frozenset({"home-assistant/tests/_reserve_control_sim.py", "home-assistant/tests/test_ecco_reserve_control.py", "home-assistant/tests/test_ecco_reserve_default.py"})
+ALLOWED_CALLERS: dict = {}     # path -> {"confirm_from": "how a person gives the confirmation"}; EMPTY now. A future card is added here on purpose.
+GENERIC_CALLS = ("script.turn_on", "script.toggle", "script.turn_off", "homeassistant.turn_on", "homeassistant.toggle", "homeassistant.turn_off")
+CONFIRM_TEXT_RE = re.compile(r"""["']?confirm["']?\s*[:=]\s*(?:true\b|True\b|!0|1\b|["'](?:true|True)["'])""")
+RULES = {
+    "token": re.compile(r"reserve_set(?![A-Za-z0-9_])"),                           # the script id (and any id that ends in it); NOT its result text or its notification id
+    "frag": re.compile(r"""ecco_reserve_?(?:['"`]|\$\{|\{\{|\{%)"""),                # the id built from pieces: 'script.ecco_reserve_' + x, `ecco_reserve_${x}`
+    "dyn_ts": re.compile(r"""callService\s*\(\s*['"`]script['"`]\s*,\s*+(?!['"`])"""),   # a script-domain call whose service name is not a literal
+    "confirm_re": CONFIRM_TEXT_RE,
+    "suffixes": (".yaml", ".yml", ".json", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".py"),
+    "skip": (),                      # path prefixes not scanned
+    "frontend": True,
+    "tests": "scan",                 # scan | skip | exempt_all
+    "defining": "key",               # key | file: what of the defining package is exempt
+    "parse_errors": "problem",       # problem | ignore
+    "yaml_comments": "ignored",      # ignored | raw
+    "json_as": "yaml",               # yaml | text
+    "dyn_yaml": True,
+    "dyn_keys": ("action", "service", "perform_action"),
+    "generic": GENERIC_CALLS,
+    "dyn_ts_on": True,
+    "frag_on": True,
+    "confirm_check": True,
+    "confirm_from_required": True,
+}
+
+
+class _TolLoader(yaml.SafeLoader):
+    pass
+
+
+def _tolerant(loader, suffix, node):    # !secret, !include and the like: keep the content, never fail
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    return loader.construct_mapping(node, deep=True)
+
+
+_TolLoader.add_multi_constructor("!", _tolerant)
+
+
+@functools.lru_cache(maxsize=None)
+def _parsed(text: str, exempt_key: bool):
+    """(strings, dicts) of one YAML / JSON text, or None when it cannot be parsed. `exempt_key`: the defining package, whose own `script:` key `ecco_reserve_set` is the definition and not a call."""
+    try:
+        doc = yaml.load(text, Loader=_TolLoader)
+    except Exception:  # noqa: BLE001 - any parse failure is a failure to prove the file clean
+        return None
+    if exempt_key and isinstance(doc, dict) and isinstance(doc.get("script"), dict):
+        doc = {**doc, "script": {("__defined__" if k == SET_ID else k): v for k, v in doc["script"].items()}}
+    strings_: list = []
+    dicts_: list = []
+
+    def walk(n):
+        if isinstance(n, dict):
+            dicts_.append(n)
+            for k, v in n.items():
+                if isinstance(k, str):
+                    strings_.append(k)
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+        elif isinstance(n, str):
+            strings_.append(n)
+    walk(doc)
+    return tuple(strings_), tuple(dicts_)
+
+
+def _has_template(s: str) -> bool:
+    return "{{" in s or "{%" in s
+
+
+def _targets(call: dict) -> list:
+    data = call.get("data")
+    out: list = []
+    for part in (call.get("target"), call.get("entity_id"), data.get("entity_id") if isinstance(data, dict) else None):
+        stack = [part]
+        while stack:
+            x = stack.pop()
+            if isinstance(x, str):
+                out.append(x)
+            elif isinstance(x, dict):
+                stack.extend(x.values())
+            elif isinstance(x, list):
+                stack.extend(x)
+    return out
+
+
+def _literal_true(v) -> bool:
+    return v is True or (isinstance(v, int) and not isinstance(v, bool) and v == 1) or (isinstance(v, str) and v.strip().lower() in ("true", "yes", "on", "1", "{{ true }}", "{{true}}", "{{ 1 }}"))
+
+
+def file_problems(rel: str, text: str, rules: dict, allow: dict) -> list:
+    """Every way one file breaks the pin (empty = clean)."""
+    if not rel.endswith(rules["suffixes"]) or any(rel.startswith(p) for p in rules["skip"]):
+        return []
+    if rel.startswith("home-assistant/tests/"):
+        if rules["tests"] == "skip" or rules["tests"] == "exempt_all" or rel in TEST_NAMERS:
+            return []
+    elif not rel.startswith("home-assistant/") and not (rules["frontend"] and re.match(r"frontend/[^/]+/src/", rel)):
+        return []
+    if rel == DEFINING_REL and rules["defining"] == "file":
+        return []
+    allowed = rel in allow
+    probs: list = []
+    structured = rel.endswith((".yaml", ".yml")) or (rel.endswith(".json") and rules["json_as"] == "yaml")
+    if structured:
+        view = _parsed(text, rel == DEFINING_REL)
+        if view is None:
+            if rules["parse_errors"] == "problem":
+                probs.append(f"{rel}: cannot be parsed, so it cannot be shown to hold no call")
+        else:
+            strs, dicts = view
+            if not allowed:
+                for s in strs:
+                    if rules["token"].search(s):
+                        probs.append(f"{rel}: names the script ({s.strip()[:50]!r})")
+                    if rules["frag_on"] and rules["frag"].search(s):
+                        probs.append(f"{rel}: builds the script id from pieces ({s.strip()[:50]!r})")
+                if rules["dyn_yaml"]:
+                    for d in dicts:
+                        for name in [d[k] for k in rules["dyn_keys"] if isinstance(d.get(k), str)]:
+                            if _has_template(name):
+                                probs.append(f"{rel}: a templated action name could be the script ({name.strip()[:50]!r})")
+                            if name in rules["generic"]:
+                                for t in _targets(d):
+                                    if _has_template(t) or t.strip().lower() == "all":
+                                        probs.append(f"{rel}: {name} on a templated or open target could be the script ({t.strip()[:50]!r})")
+                        if isinstance(d.get("script"), str) and _has_template(d["script"]):
+                            probs.append(f"{rel}: a templated script step could be the script ({d['script'].strip()[:50]!r})")
+            if allowed and rules["confirm_check"]:
+                for d in dicts:
+                    if "confirm" in d and _literal_true(d["confirm"]):
+                        probs.append(f"{rel}: passes a literal confirm true")
+        if rules["yaml_comments"] == "raw" and not allowed and rules["token"].search(text):
+            probs.append(f"{rel}: names the script (raw text, comments included)")
+    elif not allowed:
+        if rules["token"].search(text):
+            probs.append(f"{rel}: names the script")
+        if rules["frag_on"] and rules["frag"].search(text):
+            probs.append(f"{rel}: builds the script id from pieces")
+        if rules["dyn_ts_on"] and rules["dyn_ts"].search(text):
+            probs.append(f"{rel}: a script call whose service name is not a literal")
+    if allowed:
+        if rules["confirm_check"] and rules["confirm_re"].search(text):
+            probs.append(f"{rel}: passes a literal confirm true")
+        why = allow[rel].get("confirm_from") if isinstance(allow[rel], dict) else None
+        if rules["confirm_from_required"] and not (isinstance(why, str) and len(why.strip()) >= 20):
+            probs.append(f"{rel}: its allow-list entry does not say how confirm is obtained from a person")
+    return probs
+
+
+def tree_problems(files: dict, rules: dict, allow: dict) -> list:
+    out: list = []
+    for rel in sorted(files):
+        out += file_problems(rel, files[rel], rules, allow)
+    return out
+
+
+def load_tree() -> dict:
+    files: dict = {}
+    roots = [ROOT / "home-assistant"] + sorted((ROOT / "frontend").glob("*/src"))
+    for base in roots:
+        for p in sorted(base.rglob("*")):
+            if p.is_file() and p.suffix in RULES["suffixes"] and "__pycache__" not in p.parts and "node_modules" not in p.parts:
+                files[p.relative_to(ROOT).as_posix()] = p.read_text(encoding="utf-8", errors="replace")
+    return files
+
+
+REAL = load_tree()
+DEF_TEXT = PKG_TEXT
+DEC_DASH = "home-assistant/dashboards/ecco_pro.yaml"
+DEC_ALLOW_OK = {"confirm_from": "the owner presses a second, separate Confirm button after reading the lowering text"}
+_CALL_TS = "this.hass.callService('script', 'ecco_reserve' + '_set', { value: 5 });"
+NEGATIVE = [
+    # (name, path, text, allow-list for this decoy): each must produce at least one problem
+    ("an automation at 03:00 that calls the script with value 0 and confirm true", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n  - id: night_reserve\n    alias: night reserve\n    trigger:\n      - platform: time\n        at: '03:00:00'\n    action:\n      - action: script.{SET_ID}\n        data:\n          value: 0\n          confirm: true\n", {}),
+    ("the same with the old service key", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n  - id: night_reserve\n    trigger:\n      - platform: time\n        at: '03:00:00'\n    action:\n      - service: script.{SET_ID}\n        data: {{value: 0, confirm: true}}\n", {}),
+    ("script.turn_on with the script as the target", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n  - id: a\n    trigger: []\n    action:\n      - action: script.turn_on\n        target:\n          entity_id: script.{SET_ID}\n        data:\n          variables: {{value: 0, confirm: true}}\n", {}),
+    ("script.turn_on with the script in the data entity_id", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n  - id: a\n    trigger: []\n    action:\n      - action: script.turn_on\n        data:\n          entity_id: script.{SET_ID}\n", {}),
+    ("homeassistant.turn_on with a list of entities", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n  - id: a\n    trigger: []\n    action:\n      - action: homeassistant.turn_on\n        target:\n          entity_id: [script.other, script.{SET_ID}]\n", {}),
+    ("a bare script step", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n  - id: a\n    trigger: []\n    action:\n      - script: {SET_ID}\n", {}),
+    ("an action name built by a template", "home-assistant/packages/ecco_night.yaml",
+     "automation:\n  - id: a\n    trigger: []\n    action:\n      - action: \"{{ 'script.ecco_reserve_' ~ 'set' }}\"\n", {}),
+    ("a service name built by a template (the old key)", "home-assistant/packages/ecco_night.yaml",
+     "automation:\n  - id: a\n    trigger: []\n    action:\n      - service: \"{{ s }}\"\n", {}),
+    ("script.turn_on on a templated entity id", "home-assistant/packages/ecco_night.yaml",
+     "automation:\n  - id: a\n    trigger: []\n    action:\n      - action: script.turn_on\n        target:\n          entity_id: \"script.{{ name }}\"\n", {}),
+    ("homeassistant.turn_on on every entity", "home-assistant/packages/ecco_night.yaml",
+     "automation:\n  - id: a\n    trigger: []\n    action:\n      - action: homeassistant.turn_on\n        target:\n          entity_id: all\n", {}),
+    ("a templated bare script step", "home-assistant/packages/ecco_night.yaml",
+     "automation:\n  - id: a\n    trigger: []\n    action:\n      - script: \"{{ which }}\"\n", {}),
+    ("the id held in a variable and called through it", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n  - id: a\n    trigger: []\n    variables:\n      s: script.{SET_ID}\n    action:\n      - action: \"{{{{ s }}}}\"\n", {}),
+    ("the id built from pieces in a template", "home-assistant/packages/ecco_night.yaml",
+     "template:\n  - sensor:\n      - name: x\n        state: \"{{ 'script.ecco_reserve_' ~ 'set' }}\"\n", {}),
+    ("an allowed-looking dashboard button (tap action, call-service)", DEC_DASH,
+     f"views:\n  - cards:\n      - type: button\n        tap_action:\n          action: call-service\n          service: script.{SET_ID}\n          data: {{value: 3, confirm: true}}\n", {}),
+    ("a dashboard button with perform-action", DEC_DASH,
+     f"views:\n  - cards:\n      - type: button\n        tap_action:\n          action: perform-action\n          perform_action: script.{SET_ID}\n", {}),
+    ("a dashboard as JSON", "home-assistant/dashboards/ecco_x.json",
+     f'{{"views": [{{"cards": [{{"tap_action": {{"action": "call-service", "service": "script.{SET_ID}"}}}}]}}]}}', {}),
+    ("a dashboard as JSON, templated through script.turn_on", "home-assistant/dashboards/ecco_x.json",
+     '{"views": [{"cards": [{"tap_action": {"action": "perform-action", "service": "script.turn_on", "target": {"entity_id": "{{ s }}"}}}]}]}', {}),
+    ("a prototype dashboard", "home-assistant/prototypes/intelligence-v1/ecco_x.yaml",
+     f"views:\n  - cards:\n      - tap_action: {{action: call-service, service: script.{SET_ID}}}\n", {}),
+    ("a prototype generator that writes the call", "home-assistant/prototypes/acs-stage1/x_transform.py",
+     f"OUT = \"action: script.{SET_ID}\"\n", {}),
+    ("a file that cannot be parsed", "home-assistant/packages/ecco_night.yaml",
+     f"automation:\n\t- action: script.{SET_ID}\n", {}),
+    ("the defining package with an automation appended that calls its script", DEFINING_REL,
+     DEF_TEXT + f"\nautomation:\n  - id: late\n    trigger: []\n    action:\n      - action: script.{SET_ID}\n", {}),
+    ("the defining package whose script calls itself", DEFINING_REL,
+     DEF_TEXT.replace("    sequence:\n", f"    sequence:\n      - action: script.{SET_ID}\n", 1), {}),
+    ("a card source with callService on the script", "frontend/ecco-reserve-card/src/card.ts", f"this.hass.callService('script', '{SET_ID}', {{ value: 5 }});", {}),
+    ("a card source with the string form through script.turn_on", "frontend/ecco-reserve-card/src/card.ts",
+     f"await hass.callService(\"script\", \"turn_on\", {{ entity_id: 'script.{SET_ID}', variables: {{ value: 5 }} }});", {}),
+    ("a card source that builds the id from pieces", "frontend/ecco-reserve-card/src/card.ts", "const id = 'script.ecco_reserve_' + name; hass.callService('script', 'turn_on', { entity_id: id });", {}),
+    ("a card source with a template literal", "frontend/ecco-reserve-card/src/card.ts", "const id = `script.ecco_reserve_${name}`;", {}),
+    ("a card source that builds the id from two pieces after the prefix", "frontend/ecco-reserve-card/src/card.ts", "const n = 'ecco_' + 'reserve_set'; hass.callService('script', 'turn_on', { entity_id: 'script.' + n });", {}),
+    ("a card source that calls a script domain service by a computed name", "frontend/ecco-reserve-card/src/card.ts", "hass.callService('script', name, { value: 5 });", {}),
+    ("a card source with callWS", "frontend/ecco-reserve-card/src/card.ts", f"hass.callWS({{ type: 'call_service', domain: 'script', service: '{SET_ID}' }});", {}),
+    ("a card source in a plain js file", "frontend/ecco-reserve-card/src/card.js", f"hass.callService('script', '{SET_ID}', {{}});", {}),
+    ("a card source in a comment (strict: any mention in code counts)", "frontend/ecco-reserve-card/src/card.ts", f"// TODO call script.{SET_ID}\n", {}),
+    ("a test file other than the three that name the script as their subject", "home-assistant/tests/test_ecco_something_else.py", f"CALL = 'script.{SET_ID}'\n", {}),
+    ("an allowed card that passes a literal confirm true", "frontend/ecco-reserve-card/src/card.ts",
+     f"hass.callService('script', '{SET_ID}', {{ value: 5, confirm: true }});", {"frontend/ecco-reserve-card/src/card.ts": DEC_ALLOW_OK}),
+    ("an allowed card that passes a minified confirm", "frontend/ecco-reserve-card/src/card.ts",
+     f"e.callService('script','{SET_ID}',{{value:5,confirm:!0}});", {"frontend/ecco-reserve-card/src/card.ts": DEC_ALLOW_OK}),
+    ("an allowed card with a quoted confirm", "frontend/ecco-reserve-card/src/card.ts",
+     f"hass.callService('script', '{SET_ID}', {{ value: 5, 'confirm': 'true' }});", {"frontend/ecco-reserve-card/src/card.ts": DEC_ALLOW_OK}),
+    ("an allowed dashboard button that passes confirm true", DEC_DASH,
+     f"views:\n  - cards:\n      - tap_action:\n          action: call-service\n          service: script.{SET_ID}\n          data: {{value: 3, confirm: true}}\n", {DEC_DASH: DEC_ALLOW_OK}),
+    ("an allowed dashboard button that passes confirm as the text true", DEC_DASH,
+     f"views:\n  - cards:\n      - tap_action:\n          action: call-service\n          service: script.{SET_ID}\n          data: {{value: 3, confirm: 'true'}}\n", {DEC_DASH: DEC_ALLOW_OK}),
+    ("an allowed card whose entry does not say how confirm is obtained", "frontend/ecco-reserve-card/src/card.ts",
+     f"hass.callService('script', '{SET_ID}', {{ value: 5, confirm: this._confirmed }});", {"frontend/ecco-reserve-card/src/card.ts": {}}),
+    ("an allowed card whose entry says nothing useful", "frontend/ecco-reserve-card/src/card.ts",
+     f"hass.callService('script', '{SET_ID}', {{ value: 5, confirm: this._confirmed }});", {"frontend/ecco-reserve-card/src/card.ts": {"confirm_from": "ok"}}),
+]
+POSITIVE = [
+    # (name, path, text, allow): each must be clean
+    ("the defining package itself (the script key, its own result text and notification id, and its comments)", DEFINING_REL, DEF_TEXT, {}),
+    ("a package that reads the result text and the plan reserve", "home-assistant/packages/ecco_other.yaml",
+     "template:\n  - sensor:\n      - name: x\n        state: \"{{ states('input_text.ecco_reserve_set_result') }} {{ states('sensor.ecco_reserve_floor_status') }}\"\n", {}),
+    ("a YAML comment that names the script (a comment calls nothing)", "home-assistant/packages/ecco_other.yaml", f"# the panel will call script.{SET_ID} one day\nautomation: []\n", {}),
+    ("an automation that turns on a different, literal script", "home-assistant/packages/ecco_other.yaml",
+     "automation:\n  - id: a\n    trigger: []\n    action:\n      - action: script.turn_on\n        target:\n          entity_id: script.something_else\n", {}),
+    ("a card that presses a button and sets a number", "frontend/ecco-x-card/src/card.ts",
+     "this.hass.callService('button', 'press', { entity_id: e }); this.hass.callService('script', 'turn_on', { entity_id: s });", {}),
+    ("a card that reads the result text and the read-back sensor", "frontend/ecco-x-card/src/card.ts", "const r = hass.states['input_text.ecco_reserve_set_result']; const f = 'sensor.ecco_reserve_floor_status';", {}),
+    ("an allowed card whose entry says how confirm is obtained and which passes a variable", "frontend/ecco-reserve-card/src/card.ts",
+     f"hass.callService('script', '{SET_ID}', {{ value: this._v, confirm: this._second_press }});", {"frontend/ecco-reserve-card/src/card.ts": DEC_ALLOW_OK}),
+    ("an allowed dashboard button that passes confirm from a helper", DEC_DASH,
+     f"views:\n  - cards:\n      - tap_action:\n          action: call-service\n          service: script.{SET_ID}\n          data: {{value: 3, confirm: \"{{{{ is_state('input_boolean.x', 'on') }}}}\"}}\n", {DEC_DASH: DEC_ALLOW_OK}),
+    ("one of the three test files that name the script as their subject", "home-assistant/tests/_reserve_control_sim.py", f"self.pw.run_script('{SET_ID}', data)\n", {}),
+]
+
+
+def pin_problems(rules: dict, allow: dict) -> list:
+    """The whole pin under `rules` and `allow`: the real tree is clean, the allow-list is empty, every negative control is caught and every positive control is clean."""
+    out = tree_problems(REAL, rules, allow)
+    if allow:
+        out.append(f"the allow-list of callers is not empty ({sorted(allow)[:2]})")
+    for name, rel, text, dec_allow in NEGATIVE:
+        if not file_problems(rel, text, rules, dec_allow):
+            out.append(f"negative control not caught: {name}")
+    for name, rel, text, dec_allow in POSITIVE:
+        got = file_problems(rel, text, rules, dec_allow)
+        if got:
+            out.append(f"positive control flagged: {name} ({got[0][:80]})")
+    return out
+
+
+_scanned = sorted(REAL)
+check("the real tree was read: files from the packages, the dashboards, the prototypes, the tests and the card sources are all in scope",
+      all(any(p.startswith(d) for p in _scanned) for d in ("home-assistant/packages/", "home-assistant/dashboards/", "home-assistant/prototypes/", "home-assistant/tests/", "frontend/")) and len(_scanned) >= 60,
+      str(len(_scanned)))
+_real = tree_problems(REAL, RULES, ALLOWED_CALLERS)
+check("no file under home-assistant/ and no card source under frontend/*/src calls the reserve set script (action, service, script.turn_on, a bare script step, a template, callService, callWS)", _real == [], str(_real[:3]))
+check("the allow-list of callers is EMPTY (the future panel card is added to it deliberately, with the text that says how its confirm comes from a person)", ALLOWED_CALLERS == {})
+check("the defining package is the one place that names the script, as its own `script:` key, and nothing in it calls it",
+      _parsed(DEF_TEXT, True) is not None and not any(RULES["token"].search(s) for s in _parsed(DEF_TEXT, True)[0]) and any(RULES["token"].search(s) for s in _parsed(DEF_TEXT, False)[0]))
+_neg = [n for n, rel, text, al in NEGATIVE if not file_problems(rel, text, RULES, al)]
+check(f"{len(NEGATIVE)} negative controls (an automation at 03:00 with confirm true, the script.turn_on and homeassistant.turn_on forms, a bare script step, a template, an allowed-looking dashboard button, "
+      "a card source in callService, callWS and string forms, a minified confirm, an allow-list entry with no confirm text) are each caught", _neg == [], str(_neg[:3]))
+_pos = [n for n, rel, text, al in POSITIVE if file_problems(rel, text, RULES, al)]
+check(f"{len(POSITIVE)} positive controls (the defining package, the result text, a comment, another script, other card calls, an allowed card with a variable confirm) are each clean", _pos == [], str(_pos[:3]))
+check("the whole pin is green on the repository", pin_problems(RULES, ALLOWED_CALLERS) == [], str(pin_problems(RULES, ALLOWED_CALLERS)[:2]))
+
+CALLER_MUTANTS = [
+    ("the script id is only recognised after a script. prefix", {"token": re.compile(r"script\.[a-z_]*reserve_set(?![A-Za-z0-9_])")}),
+    ("the script id needs the ecco_ prefix in one piece", {"token": re.compile(r"ecco_reserve_set(?![A-Za-z0-9_])")}),
+    ("the script id has no end boundary (its result text counts)", {"token": re.compile(r"reserve_set")}),
+    ("the id built from pieces is not looked for", {"frag_on": False}),
+    ("the piece pattern needs a quote only", {"frag": re.compile(r"""ecco_reserve_?['"]""")}),
+    ("the card sources are not scanned", {"frontend": False}),
+    ("the dashboards are not scanned", {"skip": ("home-assistant/dashboards/",)}),
+    ("the prototypes are not scanned", {"skip": ("home-assistant/prototypes/",)}),
+    ("the packages are not scanned", {"skip": ("home-assistant/packages/",)}),
+    ("the tests are not scanned", {"tests": "skip"}),
+    ("every test file is exempt", {"tests": "exempt_all"}),
+    ("TypeScript is not scanned", {"suffixes": (".yaml", ".yml", ".json", ".js", ".mjs", ".cjs", ".tsx", ".jsx", ".html", ".py")}),
+    ("JavaScript is not scanned", {"suffixes": (".yaml", ".yml", ".json", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".py")}),
+    ("JSON is not scanned", {"suffixes": (".yaml", ".yml", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".py")}),
+    ("YAML is not scanned", {"suffixes": (".json", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".py")}),
+    ("Python generators are not scanned", {"suffixes": (".yaml", ".yml", ".json", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html")}),
+    ("the whole defining package is exempt, not only its script key", {"defining": "file"}),
+    ("a file that cannot be parsed is taken as clean", {"parse_errors": "ignore"}),
+    ("YAML comments are read as calls", {"yaml_comments": "raw"}),
+    ("JSON is read as plain text", {"json_as": "text"}),
+    ("a templated action name is not looked for", {"dyn_yaml": False}),
+    ("only the action key is looked at for a template", {"dyn_keys": ("action",)}),
+    ("homeassistant.turn_on is not a generic call", {"generic": ("script.turn_on", "script.toggle", "script.turn_off", "homeassistant.toggle", "homeassistant.turn_off")}),
+    ("script.turn_on is not a generic call", {"generic": ("script.toggle", "script.turn_off", "homeassistant.turn_on", "homeassistant.toggle", "homeassistant.turn_off")}),
+    ("a script call with a computed service name is not looked for", {"dyn_ts_on": False}),
+    ("the literal confirm check is removed", {"confirm_check": False}),
+    ("the literal confirm check only knows the word true", {"confirm_re": re.compile(r"confirm\s*:\s*true\b")}),
+    ("an allow-list entry needs no confirm text", {"confirm_from_required": False}),
+    ("the allow-list is not empty (a card is allowed)", {"__allow__": {"frontend/ecco-reserve-card/src/card.ts": DEC_ALLOW_OK}}),
+    ("the allow-list allows the dashboard (and no confirm text is asked)", {"__allow__": {DEC_DASH: {"confirm_from": "x"}}, "confirm_from_required": False}),
+]
+_cm_killed = 0
+_cm_survived: list = []
+for _label, _delta in CALLER_MUTANTS:
+    _delta = dict(_delta)
+    _allow = _delta.pop("__allow__", ALLOWED_CALLERS)
+    _found = pin_problems({**RULES, **_delta}, _allow)
+    if _found:
+        _cm_killed += 1
+        print(f"  PASS  caller-pin mutant caught: {_label} ({_found[0][:90]})")
+    else:
+        _cm_survived.append(_label)
+        FAILURES.append(f"caller-pin mutant survived: {_label}")
+        print(f"  FAIL  caller-pin mutant survived: {_label}")
+check(f"{len(CALLER_MUTANTS)} mutants of the caller pin (a weaker id pattern, a missing directory or file type, an exempt file, a parse failure taken as clean, the template and generic-call rules, the literal confirm check, "
+      "an allow-list that is not empty): all caught", _cm_killed == len(CALLER_MUTANTS) and len(CALLER_MUTANTS) >= 12, f"{_cm_killed}/{len(CALLER_MUTANTS)} {_cm_survived[:3]}")
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")
