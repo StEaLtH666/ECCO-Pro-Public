@@ -143,6 +143,7 @@ import _rsv1_scope as _rsv1  # noqa: E402
 import _rtcf1_scope as _rtcf1  # noqa: E402
 import _sgt1_scope as _sgt1  # noqa: E402
 import _exc1_scope as _exc1  # noqa: E402
+import _csm1_scope as _csm1  # noqa: E402
 import _tag_inventory as _tags  # noqa: E402
 import _ttr1_scope as _ttr1  # noqa: E402
 import _wsc1_scope as _wsc1  # noqa: E402
@@ -1555,23 +1556,45 @@ SGT1 = Entry(
 # exc1 (the EXPORT COORDINATOR v0: a READ-ONLY SHADOW proposal for Export to Grid, item N3 of the architecture reconciliation; offline, nothing installed, the gates are SOFT; _exc1_scope.py): made on the export after
 # sgt1. ADDED: the package, its suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path;
 # ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; no existing package, card or dashboard is edited (the start gate and the time trust package, whose suites pin who may read them,
-# are neither edited nor mentioned). ONE existing suite is edited, home-assistant/tests/test_ecco_start_gate.py, only so that its two pins on sgt1's own state (the last five manifest stanzas, and the entry's
+# are not edited; since slice S-A2 of the shared control integration this package mentions exactly two of their entities, whole, the Export start gate and the leases consumer, under the reader lists of those
+# suites that the control state commits widened deliberately, design decision D-PIN). ONE existing suite is edited, home-assistant/tests/test_ecco_start_gate.py, only so that its two pins on sgt1's own state (the last five manifest stanzas, and the entry's
 # checkpoint and position) are read as of sgt1, with every later entry's manifest edit undone, as the older suites' pins are: every assertion is kept, only "sgt1 is the newest entry" is dropped, which no later
 # entry can satisfy. The package is template entities only (no automation, helper, script, trigger, action or service call): no register operation, no write of any kind.
 EXC1 = Entry(
     id="exc1", pr="EXC1", commit="unmerged",
     reverts=dict(_exc1.PINNED_REVERTERS),
     checkpoints={   # sha256 (LF) of the manifest after exc1
-        HA_MANIFEST: "c775aa79b786b9175628b4733362ef0d3401284e54fd431da2031e98886fdd35",
+        HA_MANIFEST: "529cd5beef5db334c5622c911fb7da74e71f05109b0e427deccbcda5402e58f5",
     },
     added_files=_exc1.ADDED_FILES,
     # _pex.fingerprint(EXC1): hashes its parent sgt1's fingerprint and every declaration above
-    fingerprint="6bd59c521ccfdb3b1a1f4d5cb18d0ff1a0650d09ae1029b3f96a1c7e4a03d849",
+    fingerprint="cdc11b77150d7e5200db9372cf6895d43a1b1e3f9272089677bcbe9760ccac85",
     note="the export coordinator v0 (nine template sensors: a proposal for an Export to Grid start from measured values, a re-target shadow and a comparison with the running lease); a read-only shadow, "
-         "nothing reads it yet, the gates are soft, it reads neither the start gate nor the time trust input (their packages pin who may read them), every missing or implausible input makes it INVALID; "
+         "only the control state read model reads it, the gates are soft, it reads the Export start gate and the leases consumer of the time trust package only as far as the two pinned reader lists (widened deliberately, D-PIN) allow, "
+         "its model carries no time of its evaluation, every missing or implausible input makes it INVALID; "
          "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
 )
-POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, TTR1, SGT1, EXC1)
+# csm1 (the CONTROL STATE read model: one display for Charge Battery and Export to Grid, slice S-A1 of the shared control integration; offline, nothing installed, the gates are SOFT; _csm1_scope.py): made on the export after
+# exc1. ADDED: the package, its suite and the test support module of that suite. CHAIN-PINNED edit: the deployment manifest (one stanza with its comment block). Measured, not declared: no delta, no op path;
+# ZERO firmware, registry data, Intelligence, ecco_core or VERSION.yaml byte; no existing package, card or dashboard is edited. TWO existing suites are edited, each only to widen a pinned list of the packages that
+# may read a fact, DELIBERATELY and exactly as the design (decision D-PIN) names it: home-assistant/tests/test_ecco_start_gate.py (the gates' readers: the export gate by the export coordinator and the control state
+# package, the charge gate by the control state package) and home-assistant/tests/test_ecco_time_trust.py (READERS and PINNED_READERS: the export coordinator and the control state package, for the leases consumer
+# only); both widenings are pinned by mutants. The package is three template sensors only (no automation, helper, script, trigger, action or service call): no register operation, no write of any kind. The entries
+# must be re-sealed in merge order when main's chain moves: 70, 72, 74, this one, then the reserve branch.
+CSM1 = Entry(
+    id="csm1", pr="CSM1", commit="unmerged",
+    reverts=dict(_csm1.PINNED_REVERTERS),
+    checkpoints={   # sha256 (LF) of the manifest after csm1
+        HA_MANIFEST: "b5887af7ed5c938f380498e03f8f03f001e9e37ae602e02fc3dbcb73d2bb0801",
+    },
+    added_files=_csm1.ADDED_FILES,
+    # _pex.fingerprint(CSM1): hashes its parent exc1's fingerprint and every declaration above
+    fingerprint="6047ca4ff3642fc033acf4b218ebbca65b221c93bd44bc984f2e0afca801b933",
+    note="the control state read model (three template sensors: a lifecycle state, why, the next action, what blocks a start and what the lease holds for Charge Battery and for Export to Grid, and who holds the "
+         "inverter settings); a display, never a gate, nothing may read it, the gates are soft, every unreadable input makes it UNKNOWN and never ready, no measurement and no moving time in an attribute; "
+         "ZERO firmware, registry data, Intelligence or ecco_core change, no register operation, no service call",
+)
+POST_EXPORT_ENTRIES: tuple[Entry, ...] = (PEX0, DTGP1, FBRP1, RTCF1, ESB1, WSC1, ACFG1, OVW1, FE1, FPS1, RSV1, DGS1, FSW1, ACS0, OVW2, FCP1, FCP2, FCC1, SMR1, HD1, ACS1, ACU1, ACS1C, ACS1X, OVW3, ISP1, R9, EPC1, EPC2, EPC3, BPD1, PTT1, OVW4, OVW5, ECF1, EPC4, TTR1, SGT1, EXC1, CSM1)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 

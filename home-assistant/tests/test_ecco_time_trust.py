@@ -184,13 +184,22 @@ OTHER_TEXT = {n: p.read_text(encoding="utf-8") for n, p in OTHER_PKGS.items()}
 # (post-export entry sgt1; neither is installed). Nothing else may mention this package: a package that is not listed and mentions it fails the check below, a listed one may mention only
 # the ids it is listed with (never a per-clock sensor, the overall sensor, an internal helper or the slot-edit consumer), and the list itself is pinned by an independent second copy:
 # widening it needs two deliberate edits, and a reviewer sees both.
+# DELIBERATE WIDENING (S-A1 of the shared control integration, design decision D-PIN, owner priority 1, a coordinator decision taken as an engineering decision): the export coordinator
+# (its re-target shadow may be ALLOWED only while the leases consumer reads on) and the control state read model (it must never show a start as ready while the leases consumer is off) are
+# added, each for the LEASES consumer ONLY. The schedules and the slot-edit consumers keep exactly their current readers (the start gate alone reads the schedules consumer, nobody reads the
+# slot-edit consumer), and the per-clock sensors, the overall sensor and the internal helpers stay unread by anyone. Both copies of the list change together, and the mutants below prove the new
+# entries are pinned: a further reader, a wider entry or a dropped entry fails.
 READERS = {
     "ecco_start_gate.yaml": frozenset({K["LEASES"], K["SCHED"]}),
     "ecco_lease_guard_free_power_time.yaml": frozenset({K["LEASES"]}),
+    "ecco_export_coordinator.yaml": frozenset({K["LEASES"]}),
+    "ecco_control_state.yaml": frozenset({K["LEASES"]}),
 }
 PINNED_READERS = {
     "ecco_start_gate.yaml": ("binary_sensor.ecco_time_trusted_for_ha_schedules", "binary_sensor.ecco_time_trusted_for_leases"),
     "ecco_lease_guard_free_power_time.yaml": ("binary_sensor.ecco_time_trusted_for_leases",),
+    "ecco_export_coordinator.yaml": ("binary_sensor.ecco_time_trusted_for_leases",),
+    "ecco_control_state.yaml": ("binary_sensor.ecco_time_trusted_for_leases",),
 }
 MENTION_RE = re.compile(r"(?<![A-Za-z0-9_.])((?:binary_)?sensor\.ecco_time_trust[a-z0-9_]*)")
 
@@ -331,8 +340,9 @@ for _p in OTHER_PKGS.values():
 check("its eleven entity ids and unique ids are defined nowhere else in the repository's packages (no repeated key inside any package, no unique_id twice)",
       own_ids == OWN and not (own_ids & repo_other))
 _rp = readers_problems(OTHER_TEXT, READERS) + readers_pin_problems(READERS)
-check("only the packages of the READERS allow-list mention this package (the start gate and the Free Power time guard of sgt1, each only the consumer ids it is listed with: never a per-clock "
-      "sensor, the overall sensor, an internal helper or the slot-edit consumer); every other package of the repository fails the check, and the allow-list is the pinned one", _rp == [], str(_rp[:3]))
+check("only the packages of the READERS allow-list mention this package (the start gate and the Free Power time guard of sgt1, the export coordinator and the control state read model for the leases "
+      "consumer only, each only the consumer ids it is listed with: never a per-clock sensor, the overall sensor, an internal helper or the slot-edit consumer); every other package of the repository "
+      "fails the check, and the allow-list is the pinned one", _rp == [], str(_rp[:3]))
 seen_u: dict = {}
 dup: list = []
 for _n, _p in sorted({**OTHER_PKGS, "ecco_time_trust.yaml": PKGS / "ecco_time_trust.yaml"}.items()):
@@ -2137,7 +2147,7 @@ check(f"{total} mutants (every threshold on both sides, every unreadable-input b
 # with, a widened or emptied allow-list, a missing allow-list entry all fail it.
 _gate_like = "# reads binary_sensor.ecco_time_trusted_for_leases and binary_sensor.ecco_time_trusted_for_ha_schedules (ecco_time_trust.yaml)\n"
 _guard_like = "# reads binary_sensor.ecco_time_trusted_for_leases (ecco_time_trust.yaml)\n"
-_readers_world = {**OTHER_TEXT, "ecco_start_gate.yaml": _gate_like, "ecco_lease_guard_free_power_time.yaml": _guard_like}
+_readers_world = {**OTHER_TEXT, "ecco_start_gate.yaml": _gate_like, "ecco_lease_guard_free_power_time.yaml": _guard_like, "ecco_export_coordinator.yaml": _guard_like, "ecco_control_state.yaml": _guard_like}
 READER_MUTANTS = [
     ("a third package reads the leases consumer", {**_readers_world, "ecco_third.yaml": "state: \"{{ is_state('binary_sensor.ecco_time_trusted_for_leases', 'on') }}\"\n"}, READERS),
     ("a third package reads the schedules consumer", {**_readers_world, "ecco_third.yaml": "state: \"{{ is_state('binary_sensor.ecco_time_trusted_for_ha_schedules', 'on') }}\"\n"}, READERS),
@@ -2154,6 +2164,18 @@ READER_MUTANTS = [
     ("the allow-list gives the Free Power time guard the schedules consumer", _readers_world, {**READERS, "ecco_lease_guard_free_power_time.yaml": frozenset({K["LEASES"], K["SCHED"]})}),
     ("the allow-list gives the start gate the slot-edit consumer", _readers_world, {**READERS, "ecco_start_gate.yaml": frozenset({K["LEASES"], K["SCHED"], K["SLOT"]})}),
     ("the allow-list drops the start gate", _readers_world, {k: v for k, v in READERS.items() if k != "ecco_start_gate.yaml"}),
+    ("the export coordinator also reads the schedules consumer", {**_readers_world, "ecco_export_coordinator.yaml": _guard_like + "# binary_sensor.ecco_time_trusted_for_ha_schedules\n"}, READERS),
+    ("the export coordinator also reads the slot-edit consumer", {**_readers_world, "ecco_export_coordinator.yaml": _guard_like + "# binary_sensor.ecco_time_trusted_for_slot_edits\n"}, READERS),
+    ("the control state package also reads the schedules consumer", {**_readers_world, "ecco_control_state.yaml": _guard_like + "# binary_sensor.ecco_time_trusted_for_ha_schedules\n"}, READERS),
+    ("the control state package reads the overall sensor", {**_readers_world, "ecco_control_state.yaml": _guard_like + "# sensor.ecco_time_trust\n"}, READERS),
+    ("the control state package reads an internal helper", {**_readers_world, "ecco_control_state.yaml": _guard_like + "# binary_sensor.ecco_time_trust_rtc_stall_sustained\n"}, READERS),
+    ("the control state package names a consumer without its domain", {**_readers_world, "ecco_control_state.yaml": _guard_like + "# ecco_time_trusted_for_ha_schedules\n"}, READERS),
+    ("the allow-list gives the export coordinator the schedules consumer", _readers_world, {**READERS, "ecco_export_coordinator.yaml": frozenset({K["LEASES"], K["SCHED"]})}),
+    ("the allow-list gives the control state package the schedules consumer", _readers_world, {**READERS, "ecco_control_state.yaml": frozenset({K["LEASES"], K["SCHED"]})}),
+    ("the allow-list gives the control state package the slot-edit consumer", _readers_world, {**READERS, "ecco_control_state.yaml": frozenset({K["LEASES"], K["SLOT"]})}),
+    ("the allow-list drops the export coordinator", _readers_world, {k: v for k, v in READERS.items() if k != "ecco_export_coordinator.yaml"}),
+    ("the allow-list drops the control state package", _readers_world, {k: v for k, v in READERS.items() if k != "ecco_control_state.yaml"}),
+    ("a package that is not listed reads the leases consumer next to the new readers", {**_readers_world, "ecco_fourth.yaml": "state: \"{{ is_state('binary_sensor.ecco_time_trusted_for_leases', 'on') }}\"\n"}, READERS),
 ]
 _reader_survivors = []
 for _label, _world, _allow in READER_MUTANTS:
@@ -2164,7 +2186,7 @@ for _label, _world, _allow in READER_MUTANTS:
         _reader_survivors.append(_label)
         FAILURES.append(f"mutant survived: {_label}")
         print(f"  FAIL  mutant survived: {_label}")
-check(f"the READERS allow-list is pinned: the two listed readers alone pass, and all {len(READER_MUTANTS)} mutants (a third reader, a reader that reads more than it is listed with, a widened, emptied or "
+check(f"the READERS allow-list is pinned: the four listed readers alone pass, and all {len(READER_MUTANTS)} mutants (a third reader, a reader that reads more than it is listed with, a widened, emptied or "
       "shortened allow-list) are caught", readers_problems(_readers_world, READERS) + readers_pin_problems(READERS) == [] and not _reader_survivors, str(_reader_survivors[:3]))
 _harmless = PKG_TEXT.replace("# WHY. ECCO acts on time in three places", "# WHY, restated. ECCO acts on time in three places")
 check("a harmless rewrite (a comment) survives the battery, and a rewrite of a rule does not",

@@ -226,6 +226,51 @@ for _p in OTHER_PKGS.values():
 GATE_OWN = {G.CHARGE_GATE, G.EXPORT_GATE, G.CEIL, "script.ecco_free_power_start_guarded"}
 GATE_READS = {G.TL, G.TS, G.TEL, G.CFG, G.POLL, G.FP_ACTIVE, G.FP_OP, G.FP_SNAP, G.DG_ACTIVE, G.DG_OP, G.DG_SNAP, G.MANUAL, G.HOLD, G.EFF, G.STOP, G.REV, G.GRID, G.REQ, G.DUR, G.ARM,
               G.START_FP, G.STATUS, G.LIMIT, G.SCHED, G.LAST}
+# THE GATE READERS LIST (S-A1 of the shared control integration, design decision D-PIN). Until now NO other package may mention the two gate entities. That is widened, deliberately and exactly
+# as the design names it, to a list of the packages that may READ them and for each the gate ids it may read: the export coordinator (the export gate only: its `actionable` flag and its
+# NOT ALLOWED proposal state) and the control state read model (both gates: its start_allowed and blocked_by). Why: the read model and the proposal must say whether a start is allowed, and
+# the only fact that says so is the gate; a copy of its rules would be a second start verdict. Every other package still fails: a package that is not listed and mentions a gate fails the check below
+# (a COMMENT naming an id counts as a read), a listed one may mention only the ids it is listed with (written whole, with their domain), and the list itself is pinned by an independent second copy:
+# widening it again needs two deliberate edits, and a reviewer sees both. S-C1 (the guarded Dump start) will add itself to this list in its own commit.
+GATE_READERS = {
+    "ecco_export_coordinator.yaml": frozenset({G.EXPORT_GATE}),
+    "ecco_control_state.yaml": frozenset({G.CHARGE_GATE, G.EXPORT_GATE}),
+}
+PINNED_GATE_READERS = {
+    "ecco_export_coordinator.yaml": ("binary_sensor.ecco_export_start_allowed",),
+    "ecco_control_state.yaml": ("binary_sensor.ecco_charge_start_allowed", "binary_sensor.ecco_export_start_allowed"),
+}
+GATE_WORDS = ("ecco_charge_start_allowed", "ecco_export_start_allowed")
+GATE_MENTION_RE = re.compile(r"(?<![A-Za-z0-9_.])((?:binary_)?sensor\.ecco_(?:charge|export)_start_allowed)")
+
+
+def gate_readers_problems(others: dict, readers: dict) -> list:
+    """What is wrong with the packages (name -> text) that mention a gate entity, judged against the READERS list `readers` (name -> the gate ids it may read)."""
+    bad = []
+    for name, text in sorted(others.items()):
+        if not any(w in text for w in GATE_WORDS):
+            continue
+        if name not in readers:
+            bad.append(f"{name} mentions a start gate entity and is not in the gate READERS list")
+            continue
+        allowed = set(readers[name])
+        extra = sorted(set(GATE_MENTION_RE.findall(text)) - allowed)
+        if extra:
+            bad.append(f"{name} reads {extra}, which the gate READERS list does not give it")
+        rest = text
+        for gid in sorted(allowed, key=len, reverse=True):
+            rest = rest.replace(gid, "")
+        if any(w in rest for w in GATE_WORDS):
+            bad.append(f"{name} mentions a start gate entity in a form the gate READERS list does not give it")
+    return bad
+
+
+def gate_readers_pin_problems(readers: dict) -> list:
+    """The READERS list must be exactly the pinned one (its second, independent copy)."""
+    got = {n: tuple(sorted(v)) for n, v in readers.items()}
+    return [] if got == PINNED_GATE_READERS else [f"the gate READERS list {sorted(got)} is not the pinned one {sorted(PINNED_GATE_READERS)}"]
+
+
 # what each guard file reads, by name (the facts of the verdict are the Free Power guards': the lease flag, the operation flag, the status text, the end time, the End button)
 VERDICT_READS = {G.FP_ACTIVE, G.FP_OP, G.STATUS, G.ENDS_AT, G.END_FP}
 GUARD_READS = {"dump": {G.HOLD, G.EFF, G.DG_ACTIVE, G.LATCHED, G.END_DUMP},
@@ -2107,7 +2152,7 @@ guard_ids = {a["id"] for gt in GUARDS_TEXT for a in yaml.safe_load(gt)["automati
 check("the entities the gate package defines are defined nowhere else in the repository, its unique ids repeat no other template unique id, the guard automations' ids repeat no other automation id and the guards define no entity",
       own_ids == GATE_OWN and not (own_ids & set().union(*[package_ids(p) for p in OTHER_PKGS.values()])) and not (guard_ids & other_auto) and guard_ids == {i for ids in GUARD_AUTOS.values() for i in ids}
       and all(package_ids(ROOT / rel) == set() for rel in GUARDS_REL)
-      and not [n for n, p in OTHER_PKGS.items() if "ecco_charge_start_allowed" in p.read_text(encoding="utf-8") or "ecco_export_start_allowed" in p.read_text(encoding="utf-8")]
+      and not gate_readers_problems({n: p.read_text(encoding="utf-8") for n, p in OTHER_PKGS.items()}, GATE_READERS) and not gate_readers_pin_problems(GATE_READERS)
       and not [u for p in OTHER_PKGS.values() for u in re.findall(r"unique_id: (ecco_(?:charge|export)_start_allowed)", p.read_text(encoding="utf-8"))], str(sorted(own_ids ^ GATE_OWN)))
 tt = package_ids(PKGS / "ecco_time_trust.yaml")
 check("the facts the gate reads exist where the headers say: the two time sensors are the time trust package's, the plan sensors and the last-result text are the plan helpers', the poll text, the flags, the CT reading, "
@@ -2697,6 +2742,40 @@ _harmless = GATE_TEXT.replace("# WHY. The same reserve", "# WHY (restated). The 
 check("the full battery holds on the packages as written, and a harmless rewrite (a comment) survives while a rewrite of a pinned header rule does not",
       battery(GATE_TEXT, GUARDS_TEXT, first_only=False) == [] and _harmless != GATE_TEXT and battery(_harmless, GUARDS_TEXT, ("static",)) == []
       and battery(GATE_TEXT.replace("THE GATE IS SOFT.", "THE GATE IS FIRM."), GUARDS_TEXT, ("static",)) != [])
+
+# ---- the gate READERS list is PINNED: mutants of the repository's packages and of the list itself, each caught. The clause is live: a third reader, a reader that reads more than it is listed with,
+# a widened, emptied or shortened list all fail it, and so does a package that names a gate id in a comment, without its domain, or for the other function than its list entry allows.
+_cs_like = "# reads binary_sensor.ecco_charge_start_allowed and binary_sensor.ecco_export_start_allowed (the control state read model)\n"
+_ec_like = "# reads binary_sensor.ecco_export_start_allowed (the export coordinator)\n"
+_gate_readers_world = {n: p.read_text(encoding="utf-8") for n, p in OTHER_PKGS.items()}
+_gate_readers_world.update({"ecco_control_state.yaml": _cs_like, "ecco_export_coordinator.yaml": _ec_like})
+GATE_READER_MUTANTS = [
+    ("a third package reads the export gate", {**_gate_readers_world, "ecco_third.yaml": "state: \"{{ is_state('binary_sensor.ecco_export_start_allowed', 'on') }}\"\n"}, GATE_READERS),
+    ("a third package reads the charge gate", {**_gate_readers_world, "ecco_third.yaml": "state: \"{{ is_state('binary_sensor.ecco_charge_start_allowed', 'on') }}\"\n"}, GATE_READERS),
+    ("a third package only names a gate in a comment", {**_gate_readers_world, "ecco_third.yaml": "# see ecco_export_start_allowed\n"}, GATE_READERS),
+    ("the guarded Dump start reads the gate before S-C1 lists it", {**_gate_readers_world, "ecco_dump_to_grid_guarded_start.yaml": "{{ is_state('binary_sensor.ecco_export_start_allowed', 'on') }}\n"}, GATE_READERS),
+    ("the export coordinator also reads the charge gate", {**_gate_readers_world, "ecco_export_coordinator.yaml": _ec_like + "# binary_sensor.ecco_charge_start_allowed\n"}, GATE_READERS),
+    ("the control state package names a gate without its domain", {**_gate_readers_world, "ecco_control_state.yaml": _cs_like + "# ecco_export_start_allowed\n"}, GATE_READERS),
+    ("the export coordinator names the export gate without its domain", {**_gate_readers_world, "ecco_export_coordinator.yaml": _ec_like + "# the ecco_export_start_allowed gate\n"}, GATE_READERS),
+    ("the clause is removed: an empty list lets no reader through", _gate_readers_world, {}),
+    ("the list gains a third package", _gate_readers_world, {**GATE_READERS, "ecco_third.yaml": frozenset({G.EXPORT_GATE})}),
+    ("the list gives the export coordinator the charge gate", _gate_readers_world, {**GATE_READERS, "ecco_export_coordinator.yaml": frozenset({G.CHARGE_GATE, G.EXPORT_GATE})}),
+    ("the list drops the control state package", _gate_readers_world, {k: v for k, v in GATE_READERS.items() if k != "ecco_control_state.yaml"}),
+    ("the list drops the export coordinator", _gate_readers_world, {k: v for k, v in GATE_READERS.items() if k != "ecco_export_coordinator.yaml"}),
+    ("the list gives the control state package only the export gate", _gate_readers_world, {**GATE_READERS, "ecco_control_state.yaml": frozenset({G.EXPORT_GATE})}),
+]
+_gate_reader_survivors = []
+for _label, _world, _allow in GATE_READER_MUTANTS:
+    _found = gate_readers_problems(_world, _allow) + gate_readers_pin_problems(_allow)
+    if _found:
+        print(f"  PASS  mutant caught: {_label} ({_found[0][:90]})")
+    else:
+        _gate_reader_survivors.append(_label)
+        FAILURES.append(f"mutant survived: {_label}")
+        print(f"  FAIL  mutant survived: {_label}")
+check(f"the gate READERS list is pinned: the two listed readers alone pass (the real packages too), and all {len(GATE_READER_MUTANTS)} mutants (a third reader, a reader that reads more than it is listed with, a widened, "
+      "emptied or shortened list) are caught",
+      gate_readers_problems(_gate_readers_world, GATE_READERS) + gate_readers_pin_problems(GATE_READERS) == [] and not _gate_reader_survivors, str(_gate_reader_survivors[:3]))
 
 if FAILURES:
     print(f"\nFAILED: {len(FAILURES)} check(s)")
