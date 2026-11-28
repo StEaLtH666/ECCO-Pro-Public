@@ -1787,7 +1787,8 @@ def churn_problems(text: str | None = None) -> list[str]:
     if rows(w) == r0 or "3500" in " ".join(w.attr(X.PROPOSAL, "reasons") or []):
         bad.append("a PV that leaves its step does not publish a new reason")
     # CS-06: the row rate under a moving house load (10 s polls, one simulated hour, a load that wanders up to 150 W a poll): the model, the proposal and the lookups write a row when a 500 W or 5 minute step is
-    # crossed: the measured worst case is 61 rows an hour (353 before the steps), a calm house 7 (40 before); the bound here is generous so that the check is about the order of magnitude
+    # crossed: typically about 60 rows an hour on this profile (353 before the steps), a calm house about 7 (40 before); this is a TYPICAL rate and the bound here is generous, so that the check is about the order of
+    # magnitude (AK-02: the rounding is not a worst-case bound, which is about one row per poll, 360 an hour at 10 s polls: see THE ROW RATE in the package)
     for profile, bound in (("moving", 120), ("calm", 25)):
         wr = new_world(text)
         wr.start_feed(10.0)
@@ -2743,6 +2744,27 @@ MUTANTS = [
 ]
 
 
+# AK-02: the figures of the row rate: the rounding lowers the TYPICAL rate and is NOT a worst-case bound (about one row per poll, 360 an hour each at 10 s polls, up to about 500 while a lease runs); the batch 2
+# abort figure follows from that bound with its arithmetic; no sentence may call 61 rows an hour a worst case or 125 an abort figure
+STALE_RATE = re.compile(r"\b61 (?:rows|an hour)|\b125\b|measured worst case|worst case (?:is|of) 61|abort figure (?:is |of )?125", re.I)
+RATE_PINS = ("NOT a worst-case bound", "about one row per poll", "360", "1800", "500", "2500")
+ABORT_PINS = ("3600 / 10 = 360", "5 x 360 = 1800", "5 x 500 = 2500", "3000")
+
+
+def rate_doc_problems(pkg: str, readme_sec: str, changelog_bullet: str, stanza: str) -> list[str]:
+    bad: list[str] = []
+    for name, txt, abort in (("the package", pkg, True), ("the README section", readme_sec, True), ("the CHANGELOG bullet", changelog_bullet, False), ("the manifest stanza", stanza, False)):
+        f = flat(re.sub(r"\n\s*#\s*", " ", txt))
+        for pin in RATE_PINS + (ABORT_PINS if abort else ()):
+            if pin not in f:
+                bad.append(f"{name} does not say {pin!r} (the row rate statement)")
+        if abort and not re.search(r"abort figure", f, re.I):
+            bad.append(f"{name} has no batch 2 abort figure")
+        for m in STALE_RATE.finditer(f):
+            bad.append(f"{name} still says {f[max(0, m.start() - 30):m.end() + 40]!r}")
+    return bad
+
+
 def mutate(text: str, old: str, new: str) -> str:
     n = text.count(old)
     if n != 1:
@@ -3028,6 +3050,20 @@ def main() -> int:
     rflat = flat(sec[1]) if len(sec) == 2 else ""
     names = ["`sensor.%s`" % e.split(".")[1] for e in X.OWN]
     missing_pins = [s for s in README_PINS if s not in rflat]
+    cl_line = next((ln for ln in CHANGELOG_TEXT.splitlines() if "Export coordinator v0" in ln), "")
+    stz = stanza.group(0) if stanza else ""
+    rd = rate_doc_problems(TEXT, sec[1] if len(sec) == 2 else "", cl_line, stz)
+    inj = " The measured worst case is 61 rows an hour."
+    rd_mut = [rate_doc_problems(TEXT + "# " + inj + "\n", sec[1] if len(sec) == 2 else "", cl_line, stz), rate_doc_problems(TEXT, (sec[1] if len(sec) == 2 else "") + inj, cl_line, stz),
+              rate_doc_problems(TEXT, sec[1] if len(sec) == 2 else "", cl_line + " The abort figure is 125 (2 x 61).", stz), rate_doc_problems(TEXT, sec[1] if len(sec) == 2 else "", cl_line, stz + "  # 61 rows an hour"),
+              rate_doc_problems(TEXT.replace("about one row per poll", "about one row per minute"), sec[1] if len(sec) == 2 else "", cl_line, stz),
+              rate_doc_problems(TEXT, (sec[1] if len(sec) == 2 else "").replace("5 x 360 = 1800", "5 x 61 = 305"), cl_line, stz),
+              rate_doc_problems(TEXT, sec[1] if len(sec) == 2 else "", cl_line.replace("NOT a worst-case bound", "a worst-case bound"), stz),
+              rate_doc_problems(TEXT, sec[1] if len(sec) == 2 else "", cl_line, stz.replace("NOT a worst-case bound", "a worst-case bound"))]
+    check("AK-02: the row rate is stated the same, and truly, in the package header and INSTALL text, the README section, the CHANGELOG bullet and the manifest stanza: the rounding lowers the typical rate and is "
+          "NOT a worst-case bound, the worst case is about one row per poll for each entity (360 an hour at 10 s polls, 1800 for the five) and up to about 500 each while a lease runs (2500), the batch 2 abort "
+          "figure and its arithmetic are in the package and the README, and no sentence calls 61 rows an hour a worst case or 125 an abort figure; the scan is live (eight injected faults are each caught)",
+          rd == [] and all(m for m in rd_mut), str(rd[:3]) + ("" if all(m for m in rd_mut) else " a mutant of the statement went unseen"))
     check("the packages README has an Export coordinator section that names the nine sensors, says it is a read-only shadow, nothing installed, that the gate is soft, which two entities of the start gate and "
           "the time trust packages it reads and why (the pinned lists widened deliberately, D-PIN), NOT ALLOWED and its codes, `actionable`, the leases consumer's 60 s, how it relates to the Intelligence advice, "
           "the battery runtime figure and the schedule, the schedule path, the window bound, the origin of a lease, END NOW, the memory (a reload starts it afresh, a restart does not), the model that publishes "
