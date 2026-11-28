@@ -375,6 +375,11 @@ GATE_READINGS = (
     ("off, the only cause is no text", ("off", {"blocked_by": [5]})),
     ("off, the only cause is none", ("off", {"blocked_by": [None]})),
     ("off, causes none of which is text", ("off", {"blocked_by": [5, None, 7.5]})),
+    # AK-03: an ON gate whose list holds causes that are no text (or a text beside them) disagrees with itself as much as an ON gate with a text cause: never open, never VALID
+    ("on, the only cause is no text", ("on", {"blocked_by": [5]})),
+    ("on, the only cause is none", ("on", {"blocked_by": [None]})),
+    ("on, causes none of which is text", ("on", {"blocked_by": [5, None]})),
+    ("on, a cause that is no text and one that is", ("on", {"blocked_by": [5, "X_CODE"]})),
     ("an unreadable state with causes", ("maybe", {"blocked_by": ["TIME_LEASES", "DUMP_ACTIVE"]})),
     ("unavailable with a cause", ("unavailable", {"blocked_by": ["DUMP_ACTIVE"]})),
     ("on, the list is a text", ("on", {"blocked_by": "TIME_LEASES"})),
@@ -431,6 +436,10 @@ def gate_rows_problems(text: str | None = None, first_only: bool = False) -> lis
     expect("the gate is off with no cause: inconsistent", one({X.EG: ("off", {"blocked_by": []})}), "NOT ALLOWED", ["GATE_INCONSISTENT"], False)
     expect("a cause longer than 40 characters is cut", one({X.EG: ("off", {"blocked_by": [GATE_LONG_CODE]})}), "NOT ALLOWED", [GATE_LONG_CODE[:40]], False)
     expect("a cause that is no text is left out", one({X.EG: ("off", {"blocked_by": ["TIME_LEASES", 5]})}), "NOT ALLOWED", ["TIME_LEASES"], False)
+    # AK-03: hand-computed (not through the reference): an ON gate with only non-text causes is inconsistent, never open, never VALID, never with an empty list of codes
+    for label, gl, codes in (("[5]", [5], ["GATE_INCONSISTENT"]), ("[None]", [None], ["GATE_INCONSISTENT"]), ("[5, None]", [5, None], ["GATE_INCONSISTENT"]), ("[5, 'X_CODE']", [5, "X_CODE"], ["X_CODE", "GATE_INCONSISTENT"]),
+                             ("[None, 'TIME_LEASES']", [None, "TIME_LEASES"], ["TIME_LEASES", "GATE_INCONSISTENT"])):
+        expect(f"the gate is on and its list is {label}: inconsistent, never open", one({X.EG: ("on", {"blocked_by": gl})}), "NOT ALLOWED", codes, False)
     closed = ("off", {"blocked_by": ["TIME_LEASES"]})
     expect("a Hold battery with the gate closed: HOLD with its own cause, never the gate's", one({X.HOLD: "held", X.EG: closed}), "HOLD", ["OVERRIDE_ACTIVE"], False, unavailable)
     expect("an INVALID proposal with the gate closed: INVALID with its own causes", one({X.SOC: "unknown", X.EG: closed}), "INVALID", ["SOC_UNREADABLE"], False, unavailable)
@@ -714,7 +723,7 @@ def random_case(rng: random.Random) -> tuple:
     elif r < 0.08:
         over[X.EG] = ("unavailable", {})
     elif r < 0.10:
-        over[X.EG] = ("on", {"blocked_by": ["TIME_LEASES"]})            # a gate that is on with a cause: inconsistent
+        over[X.EG] = ("on", {"blocked_by": rng.choice([["TIME_LEASES"], ["TIME_LEASES"], [5], [None], [5, "X_CODE"]])})            # a gate that is on with a cause (a text or not): inconsistent (AK-03)
     elif r < 0.12:
         over[X.EG] = ("off", {"blocked_by": []})                        # a gate that is off with no cause: inconsistent
     elif r < 0.14:
@@ -2295,6 +2304,78 @@ def static_problems(text: str) -> list[str]:
 
 
 # ===========================================================================================================================
+# AK-04: the texts that quote a rounded number, at a number that is no multiple of the step (a row that is the same whatever the rounding would not tell them apart)
+# ===========================================================================================================================
+def history_rows(w: X.CoordWorld) -> dict:
+    n: dict = {}
+    for _t, eid, _s in w.w.history:
+        if eid in X.OWN:
+            n[eid] = n.get(eid, 0) + 1
+    return n
+
+
+def ak04_problems(text: str | None = None, first_only: bool = False) -> list[str]:
+    """(1) A running lease the schedule started whose live export deviates from the target by 400 W (a deviation that stands), the live export wandering inside ONE 100 W step: the re-target's `changes`
+    (and every other published attribute of the re-target and the comparison) stay identical and no row is written (AK-E15: the change text quoted the unrounded live export, a row at every poll while the
+    deviation stands). (2) Exact texts, hand-computed, at a duration that is no multiple of 5 minutes and a power that is no multiple of 500 W: the window note (AK-E04: the unrounded-up duration), the
+    BELOW_MINIMUM_DURATION reason (AK-E19, AK-E04) and the UNVERIFIED notes of the proposal and of the loop (AK-E18, AK-E20)."""
+    bad: list[str] = []
+    wl = lease_world(text)
+    wl.sched_lease_on(stop=40, export=2600.0, command=3800, age_min=45)
+    wl.advance(30)
+    s0, snap0, r0 = lease_state(wl), wl.snapshot(), history_rows(wl)
+    if s0["changes"] != ["EXPORT_TARGET 2600 -> 3000.0 W"] or s0["rt"] not in ("ALLOWED", "WAIT"):
+        bad.append(f"a lease exporting 2600 W against a 3000 W target: the re-target {s0['rt']} lists {s0['changes']} (wanted EXPORT_TARGET 2600 -> 3000.0 W)")
+    for v in (2560.0, 2611.3, 2640.0, 2575.5, 2600.0, 2632.1, 2589.9, 2549.9 + 0.2):
+        wl.bulk({X.L_EXP: f"{v:.1f}"})                         # all of them round to 2600 W
+        s = lease_state(wl)
+        if s["changes"] != s0["changes"] or s["rt_attrs"] != s0["rt_attrs"] or s["cmp_attrs"] != s0["cmp_attrs"]:
+            bad.append(f"the live export wanders to {v} W inside the step of 2600 W: the re-target or the comparison publishes again ({s['changes']} {sorted(k for k in s['rt_attrs'] if s['rt_attrs'].get(k) != s0['rt_attrs'].get(k))})")
+            break
+    r1 = history_rows(wl)
+    if any(r1.get(e, 0) != r0.get(e, 0) for e in (X.RETARGET, X.COMPARE)):
+        bad.append(f"the live export wanders inside one 100 W step of a standing deviation and rows are written: {[(e.split('.')[1], r1.get(e, 0) - r0.get(e, 0)) for e in (X.RETARGET, X.COMPARE)]}")
+    wl.bulk({X.L_EXP: "2660.0"})                               # the next step (2700 W): one new row and the new text, as it should be
+    if lease_state(wl)["changes"] != ["EXPORT_TARGET 2700 -> 3000.0 W"]:
+        bad.append(f"the live export leaves its step: {lease_state(wl)['changes']}")
+    if first_only and bad:
+        return bad
+    w = new_world(text)
+
+    def notes(over: dict) -> tuple:
+        apply_case(w, over)
+        return w.state(X.PROPOSAL), list(w.attr(X.PROPOSAL, "reasons") or []), list(w.attr(X.PROPOSAL, "notes") or []), w.state(X.P_DUR)
+    # the window note: 10 points x 52 kWh/100 x 0.90 = 4.68 kWh at 3000 W is 93.6 minutes (published as 90), the window leaves 80: the note says 90 minutes (not 95) and 80
+    st, _r, nt, dur = notes({X.SOC: "51.0", X.CAP: "52.0", X.LOAD: "0.0", X.WIN: "80.0"})
+    want = "NOTE DURATION_LIMITED_BY_WINDOW: the energy would last 90 minutes, longer than the schedule window (80.0 min): the duration is limited to it"
+    if (st, dur) != ("VALID", "80") or want not in nt:
+        bad.append(f"the window note at an energy of 93.6 minutes: {st} {dur} {nt}")
+    # BELOW_MINIMUM_DURATION: 2 points x 33.3 kWh/100 x 0.90 = 0.5994 kWh; the house load 700 W makes the expected power 3700 W, published rounded up to 4000 W: 8.991 minutes, whole minutes 8, published
+    # as 5 (rounded down to a multiple of 5); the energy lasts 8.991 minutes: 5 (not 10, which rounding it up would say)
+    st, rs, _n, _d = notes({X.SOC: "43.0", X.CAP: "33.3", X.LOAD: "700.0"})
+    want = "BELOW_MINIMUM_DURATION: the proposed duration is 5 minutes (the energy above the floor lasts 5 minutes at the expected power), less than the 10 minutes worth a start"
+    if st != "INVALID" or want not in rs:
+        bad.append(f"the BELOW_MINIMUM_DURATION reason at 8.991 minutes and 3700 W: {st} {rs}")
+    # UNVERIFIED: 33 points x 0.30 x 0.90 = 8.91 kWh; the proposal stays at the proven 3000 W for 178.2 minutes (published as 175); the loop would run at 4656 W, published as 5000 W, for 106.9 minutes
+    # (published as 105); neither 178 nor 106 may be said
+    st, rs, nt, dur = notes({X.PCEIL: "8000.0", X.PROV: "3000.0", X.LOAD: "1656.0", X.SOC: "59.0", X.STOP_S: "25.0", X.RESERVE: "25"})
+    want = ("UNVERIFIED ABOVE_PROVEN_LEVEL: holding 3000.0 W at the meter needs 5000 W from the battery, above the supervised-proven level (3000.0 W), and the dongle Power Ceiling (8000.0 W) lets its loop go further: "
+            "the proposal is limited to 3000 W for 175 min and nobody has proven more; the dongle loop itself would run at about 5000 W for about 105 min (loop_battery_power_w, loop_duration_min: what the loop would "
+            "do, not a proposal)")
+    if st != "UNVERIFIED" or dur != "175" or want not in nt or w.attr(X.PROPOSAL, "loop_duration_min") != 105 or w.attr(X.PROPOSAL, "loop_battery_power_w") != 5000:
+        bad.append(f"the UNVERIFIED notes at 178.2 and 106.9 minutes: {st} {dur} {nt} {w.attr(X.PROPOSAL, 'loop_duration_min')}")
+    # POWER_LIMITED_BY_CEILING: the same world with the Power Ceiling at the proven level: VALID at 3000 W, the note quotes the requirement rounded up (4656 W said as 5000 W)
+    st, _r, nt, dur = notes({X.PCEIL: "3000.0", X.PROV: "3000.0", X.LOAD: "1656.0", X.SOC: "59.0", X.STOP_S: "25.0", X.RESERVE: "25"})
+    want = ("NOTE POWER_LIMITED_BY_CEILING: holding 3000.0 W at the meter needs 5000 W from the battery, above the Power Ceiling (3000.0 W): the proposal is limited to the ceiling and the export will fall short "
+            "of the target")
+    if (st, dur) != ("VALID", "175") or want not in nt:
+        bad.append(f"the POWER_LIMITED_BY_CEILING note at a requirement of 4656 W: {st} {dur} {nt}")
+    if w.errors:
+        bad.append(f"template errors {w.errors[:2]}")
+    return bad
+
+
+# ===========================================================================================================================
 # the battery run on a package text: static, boundary rows, anchors, a short sweep, the lease
 # ===========================================================================================================================
 def battery(text: str, deep: bool = False) -> list[str]:
@@ -2309,6 +2390,9 @@ def battery(text: str, deep: bool = False) -> list[str]:
         if bad:
             return bad
         bad += gate_rows_problems(text, first_only=True)
+        if bad:
+            return bad
+        bad += ak04_problems(text, first_only=True)
         if bad:
             return bad
         bad += sweep_problems(120 if not deep else 400, 20261126, text, first_only=True)[0]
@@ -2638,6 +2722,24 @@ MUTANTS = [
      "{%- set wait_until = ([w_age, w_rec, w_mem] | max) if rt == 'WAIT' else none -%}"),
     ("the lack of time trust blocks END NOW", "('END NOW' if end_now else", "('END NOW' if (end_now and time_ok) else"),
     ("the lack of time trust blocks a re-target with no deviation", "('NO CHANGE' if not dev else ('WAIT' if", "('NO CHANGE' if (not dev and time_ok) else ('WAIT' if"),
+    # AK-03: an ON gate whose list holds no text cause (or a text beside others that are none) is inconsistent too
+    ("AK-03: an ON gate with only non-text causes is consistent (the text codes are counted)", "((egs == 'on' and (egl | length) > 0) or", "((egs == 'on' and (gn.c | length) > 0) or"),
+    ("AK-03: an ON gate counts its causes that are no number", "((egs == 'on' and (egl | length) > 0) or", "((egs == 'on' and (egl | select('string') | list | length) > 0) or"),
+    ("AK-03: an ON gate counts its causes that are not none", "((egs == 'on' and (egl | length) > 0) or", "((egs == 'on' and (egl | reject('none') | list | length) > 0) or"),
+    ("AK-03: an ON gate is open when it has no text cause", "{%- set g_open = g_read and egs == 'on' and (egl | length) == 0 -%}", "{%- set g_open = g_read and egs == 'on' and (gn.c | length) == 0 -%}"),
+    ("AK-03: an ON gate with a list of one cause is consistent", "((egs == 'on' and (egl | length) > 0) or", "((egs == 'on' and (egl | length) > 1) or"),
+    # AK-04: the re-target's change text and the notes quote the rounded numbers
+    ("AK-04: the EXPORT_TARGET change quotes the live export unrounded", "'EXPORT_TARGET ' ~ l_exp_i ~", "'EXPORT_TARGET ' ~ l_exp ~"),
+    ("AK-04: the EXPORT_TARGET change quotes the live export rounded to the nearest 10 W", "'EXPORT_TARGET ' ~ l_exp_i ~", "'EXPORT_TARGET ' ~ ((l_exp / 10) | round(0)) * 10 ~"),
+    ("AK-04: the window note quotes the duration rounded up", "{%- set dur_raw_i = ((((dur_raw / 5) | round(0, 'floor')) * 5) | int)", "{%- set dur_raw_i = ((((dur_raw / 5) | round(0, 'ceil')) * 5) | int)"),
+    ("AK-04: the window note quotes the unrounded duration", "('DURATION_LIMITED_BY_WINDOW', num and dur_raw > dlim, 'the energy would last ' ~ dur_raw_i ~", "('DURATION_LIMITED_BY_WINDOW', num and dur_raw > dlim, 'the energy would last ' ~ (dur_raw | float(0) | round(0, 'floor')) ~"),
+    ("AK-04: the BELOW_MINIMUM_DURATION text quotes the unrounded duration", "'the proposed duration is ' ~ dur_i ~", "'the proposed duration is ' ~ dur ~"),
+    ("AK-04: the BELOW_MINIMUM_DURATION text quotes the unrounded energy duration", "' minutes (the energy above the floor lasts ' ~ dur_raw_i ~", "' minutes (the energy above the floor lasts ' ~ (dur_raw | float(0) | round(0, 'floor')) ~"),
+    ("AK-04: the UNVERIFIED note quotes the unrounded proposal duration", "' W for ' ~ dur_i ~ ' min and nobody", "' W for ' ~ dur ~ ' min and nobody"),
+    ("AK-04: the UNVERIFIED note quotes the unrounded loop duration", "' W for about ' ~ ldur_i ~ ' min (loop", "' W for about ' ~ ldur ~ ' min (loop"),
+    ("AK-04: the UNVERIFIED note quotes the unrounded requirement", "needs ' ~ raw_p_i ~ ' W from the battery, above the supervised-proven level", "needs ' ~ (raw_p | round(0)) ~ ' W from the battery, above the supervised-proven level"),
+    ("AK-04: the POWER_LIMITED_BY_CEILING note quotes the unrounded requirement", "needs ' ~ raw_p_i ~ ' W from the battery, above the Power Ceiling", "needs ' ~ (raw_p | float(0) | round(0)) ~ ' W from the battery, above the Power Ceiling"),
+    ("AK-04: the UNVERIFIED note quotes the unrounded loop power", "would run at about ' ~ lp_i ~ ' W", "would run at about ' ~ (lp | round(0)) ~ ' W"),
 ]
 
 
@@ -2734,6 +2836,10 @@ def main() -> int:
           "(VALID, HOLD, INVALID, UNVERIFIED): the template equals the reference on every one (state, the gate's codes in order, actionable, every number); hand-computed anchors: NOT ALLOWED names the gate's codes in its first "
           "reason and keeps the numbers, GATE_SETTLING below 60 s and VALID with actionable at 60 s, GATE_UNREADABLE, GATE_INCONSISTENT in both directions, a code cut at 40 characters, a HOLD or an INVALID proposal keeps its own "
           "causes, an UNVERIFIED one is never actionable", gr == [], str(gr[:3]))
+    ak4 = ak04_problems()
+    check("[1b] AK-04: a running lease the schedule started that exports 400 W below the target, the live export wandering inside one 100 W step: the re-target's change text, its attributes and the comparison "
+          "stay identical and no row is written, and the next step publishes the new text; exact texts at a duration that is no multiple of 5 minutes and a power that is no multiple of 500 W: the window note "
+          "(93.6 minutes said as 90), the BELOW_MINIMUM_DURATION reason (8.991 minutes at 3700 W said as 5) and the UNVERIFIED notes of the proposal and of the loop (178.2 said as 175, 106.9 as 105)", ak4 == [], str(ak4[:3]))
     grt = gate_realtime_problems()
     check("[1b] in real time: the gate turned on is NOT ALLOWED with GATE_SETTLING for 59 s and VALID with actionable at 60 s; an attribute that changes alone does not renew its age (last_changed, not last_updated); a gate that "
           "flaps starts the 60 s afresh; 10 s and 50 s after a restart (every entity young) it is settling and 80 s after it is VALID; the leases consumer turned off while a change is allowed is WAIT with TIME_NOT_TRUSTED "
