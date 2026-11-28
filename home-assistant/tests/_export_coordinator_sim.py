@@ -89,6 +89,8 @@ MAX_TELEMETRY_AGE_S = 90
 DONGLE_STOP_SOC_MIN, DONGLE_STOP_SOC_MAX = 10, 90
 DISCHARGE_EFFICIENCY = 0.90
 SOC_MARGIN_POINTS = 1
+POWER_STEP_W = 500            # CS-06: the published powers are rounded UP to a multiple of this (never above the clamp), the published durations DOWN to a multiple of DURATION_STEP_MIN
+DURATION_STEP_MIN = 5
 MIN_COMMAND_W = 500
 MIN_TARGET_W = 500
 MIN_DURATION_MIN = 10
@@ -419,14 +421,14 @@ def gate_reading(raw: dict, gate_ages: tuple | None = None) -> dict:
     egl = list(bl) if isinstance(bl, (list, tuple, set, frozenset)) else None
     eg_age, tl_age = gate_ages if gate_ages is not None else (600.0, 600.0)
     g_read = egs in ("on", "off") and egl is not None
-    g_incons = g_read and ((egs == "on") != (len(egl) == 0))
+    g_incons = g_read and ((egs == "on" and len(egl) > 0) or (egs == "off" and len([c for c in egl if isinstance(c, str)]) == 0))
     g_open = g_read and egs == "on" and len(egl) == 0
     if not g_read:
         codes = ["GATE_UNREADABLE"]
     else:
         codes = [c[:40] for c in egl if isinstance(c, str)] + (["GATE_INCONSISTENT"] if g_incons else []) + (["GATE_SETTLING"] if (g_open and not (eg_age is not None and eg_age >= GATE_SETTLE_S)) else [])
     tls = split(raw[TL])[0] if raw.get(TL) is not None else "unknown"
-    return {"codes": codes, "time_ok": tls == "on" and tl_age is not None and tl_age >= GATE_SETTLE_S, "tl": tls}
+    return {"open": g_open and eg_age is not None and eg_age >= GATE_SETTLE_S, "codes": codes, "time_ok": tls == "on" and tl_age is not None and tl_age >= GATE_SETTLE_S, "tl": tls}
 
 
 def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | None = None, held_by: str = "unknown", now_ts: float | None = None, zone: ZoneInfo | None = None,
@@ -500,9 +502,11 @@ def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | N
     hi = min(pceil, prov) if (pceil is not None and prov is not None) else None
     raw_p = (net + load - pv) if (net is not None and load is not None and pv is not None) else None
     p = min(max(raw_p, 0), hi) if (raw_p is not None and hi is not None) else None
-    p_eff = max(p, MIN_COMMAND_W) if p is not None else None
+    p_q = min(math.ceil(p / POWER_STEP_W) * POWER_STEP_W, hi) if p is not None else None        # CS-06: the power the proposal is worked out at: rounded UP to a step, never above the clamp
+    p_eff = max(p_q, MIN_COMMAND_W) if p_q is not None else None
     lp = min(max(raw_p, 0), pceil) if (raw_p is not None and pceil is not None) else None       # what the dongle's own loop would command: no proven level
-    lp_eff = max(lp, MIN_COMMAND_W) if lp is not None else None
+    lp_q = (p_q if lp == p else min(math.ceil(lp / POWER_STEP_W) * POWER_STEP_W, pceil)) if lp is not None else None     # while the loop would hold what the proposal holds (below the proven level) the two figures are one
+    lp_eff = max(lp_q, MIN_COMMAND_W) if lp_q is not None else None
     dlim = (min(win, wcap) if wcap is not None else win) if win is not None else None
     dur_raw = (energy * 1000 / p_eff * 60) if (energy is not None and p_eff is not None) else None
     dur = math.floor(min(dur_raw, dlim)) if (dur_raw is not None and dlim is not None) else None
@@ -574,11 +578,13 @@ def reference(raw: dict, *, poll_skew_s: float | None, capacity_attrs: tuple | N
         if running and l_stop_v is not None and l_stop_v > max(stop_s, reserve, DONGLE_STOP_SOC_MIN):
             notes.append("FLOOR_FROM_RUNNING_LEASE")
     return {
-        "state": state, "verdict": verdict, "actionable": verdict == "VALID" and not gate["codes"], "time_ok": gate["time_ok"], "gate_codes": gate["codes"],
+        "state": state, "verdict": verdict, "actionable": verdict == "VALID" and gate["open"] and not gate["codes"], "time_ok": gate["time_ok"], "gate_codes": gate["codes"],
         "blocked_by": gate["codes"] if state == "NOT ALLOWED" else codes, "notes": notes,
-        "floor": floor if numeric else None, "energy": energy if numeric else None, "power": p if numeric else None, "net": net if numeric else None,
-        "duration": dur if numeric else None, "raw_power": raw_p if numeric else None, "dur_raw": dur_raw if numeric else None,
-        "loop_power": lp if numeric else None, "loop_duration": ldur if numeric else None,
+        "floor": floor if numeric else None, "energy": energy if numeric else None, "power": math.floor(p_q) if numeric else None, "net": net if numeric else None,
+        "duration": (dur // DURATION_STEP_MIN * DURATION_STEP_MIN) if (numeric and dur is not None) else None, "duration_exact": dur if numeric else None,
+        "raw_power": (math.ceil(raw_p / POWER_STEP_W) * POWER_STEP_W) if numeric else None, "raw_power_exact": raw_p if numeric else None, "dur_raw": dur_raw if numeric else None,
+        "loop_power": math.floor(lp_q) if numeric else None, "loop_duration": ldur if numeric else None,
+        "loop_duration_pub": (ldur // DURATION_STEP_MIN * DURATION_STEP_MIN) if (numeric and ldur is not None) else None,
         "limited_by": ("PROVEN_LEVEL" if state == "UNVERIFIED" else ("POWER_CEILING" if (numeric and raw_p > pceil) else "")) if numeric else "",
         "window_end": w_end, "window_cap": wcap, "run_end": run_end if (running and origin) else None, "run_origin": origin, "run_end_ts": l_end_ts,
         "parsed": {"soc": soc, "load": load, "pv": pv, "grid": grid, "cap": cap, "reserve": reserve, "stop_s": stop_s, "tgt": tgt, "win": win, "pceil": pceil,

@@ -39,8 +39,13 @@
 #   sensor.ecco_export_proposal_duration        min : the proposed duration (bounded by the schedule's own window)
 #   sensor.ecco_export_retarget                 while a lease runs: NOT RUNNING | UNKNOWN | NO CHANGE | WAIT | ALLOWED | END NOW (would a change be allowed now), with what it would change and why
 #   sensor.ecco_export_shadow_comparison        while a lease runs: IN LINE | DIFFERS | UNKNOWN, the proposal against the lease's latched Stop SOC, target export and end time
+# THE ROW RATE (CS-06, measured offline with 10 s polls and a house load that wanders up to 150 W a poll: 358 rows an hour for the model before this change, 61 after; a house that changes load in one poll in ten, 40 before and 7 after;
+# the proposal, its power and the shadow comparison follow the model, the duration a little less): the published powers move in steps of POWER_STEP_W and the durations in steps of DURATION_STEP_MIN, so a row is written when a step is
+# crossed. THE RECORDER EXCLUSION OF THE MODEL AND OF THE LOOKUPS REMAINS MANDATORY (see INSTALL): until Core has been restarted with it, the measured row rate above applies. The lease-time live figures of the shadow comparison
+# (the export and the battery power the dongle reports) are measurements and move with the lease; they exist only while a lease the schedule started runs.
 # Every numeric proposal sensor is UNAVAILABLE (never 0) unless the proposal itself is VALID or UNVERIFIED (its state is then VALID, UNVERIFIED or, while the start gate does not allow a start, NOT ALLOWED: the numbers describe the proposal, they are not a permission).
-# A consumer tests is_state('sensor.ecco_export_proposal', 'VALID') and never "not INVALID".
+# A consumer tests is_state('sensor.ecco_export_proposal', 'VALID') and never "not INVALID". `actionable` (and a VALID proposal) is NOT a promise that the guarded Start runs these numbers: the guarded Start runs the numbers STAGED on the
+# dongle, these are for the schedule path (the control state read model says so: PROPOSAL_FOR_SCHEDULE_PATH, and Export never reads ASSISTED).
 # No attribute carries a time that moves with the clock (the proposal's end is now plus its duration): the proposal, the re-target and the comparison publish a new state only when a number or a text changes. THE MODEL NO LONGER
 # CARRIES THE TIME OF ITS EVALUATION EITHER (decision D-C04a, route a: the lab measured 393 rows an hour from that one attribute): with unchanged inputs it publishes nothing at all, so a quiet system writes no row; it still
 # publishes when a measured number it holds changes, and a lookup judges a model it cannot read (not a dict) as unreadable, never its age.
@@ -66,7 +71,7 @@
 #       (input_number.ecco_battery_model_capacity; when the battery runtime package has MEASURED a smaller capacity, the smaller is used). Never negative. No energy above the floor is INVALID.
 #   (3) NET EXPORT = the configured export target (input_number.ecco_dump_to_grid_schedule_power), never above the Max Grid Export less the dongle's START headroom, max(100 W, 3 %), rounded
 #       DOWN to the 100 W step. An export limit is a safety CEILING for the target, never the target. POWER = the expected battery AC power that holds that net export at the meter =
-#       clamp(net export + measured house load - measured PV, 0, min(power ceiling, supervised-proven level)). Measured PV only: no forecast entity is read anywhere in this file. A load, a PV
+#       clamp(net export + measured house load - measured PV, 0, min(power ceiling, supervised-proven level)), PUBLISHED rounded UP to POWER_STEP_W (never above the clamp). Measured PV only: no forecast entity is read anywhere in this file. A load, a PV
 #       or a grid reading that is stale, unreadable or out of range makes the proposal INVALID, never a guess and never 0 (the grid CT is only required to be alive and plausible, as the dongle's
 #       own START requires it, and is not used in a number). Above the proven level (input_number.ecco_dump_supervised_proven_w) a power is never proposed: it is clamped to it, and the state is
 #       UNVERIFIED when the dongle's ceiling would let the loop go higher (the 8000 W setpoint behaviour is an unresolved control-authority question). Never above the dongle's Dump to Grid Power Ceiling
@@ -75,9 +80,9 @@
 #       house load by more than the net export target plus INFEASIBLE_LOW_DEADBAND_W (TARGET_INFEASIBLE_LOW: the dongle shows TARGET INFEASIBLE LOW and never commands battery charging), or when that surplus plus
 #       MIN_COMMAND_W (the least its loop commands) is above the Max Grid Export less the START headroom (PV_SURPLUS_EXPORT_GUARD: its export guard, which trips on CT samples above the limit plus max(100 W, 3 %),
 #       would end the lease), the proposal is INVALID with that cause.
-#   (4) DURATION = ENERGY / the power the dongle would command (never below MIN_COMMAND_W, which is also what keeps the division defined), bounded by the schedule's own window (see THE AUTHORISED WINDOW: the
+#   (4) DURATION = ENERGY / the power the dongle would command, taken at the rounded-up published power (never below MIN_COMMAND_W, which is also what keeps the division defined), bounded by the schedule's own window (see THE AUTHORISED WINDOW: the
 #       window length and, inside the window, floor((window end - now + WINDOW_END_ROUNDING_S) / 60) minutes; while a lease runs, the same count to the end of the window it runs in (to the smaller of that and its own
-#       latched end for a lease the schedule started), never below 0) and rounded DOWN to the minute; shorter than MIN_DURATION_MIN is INVALID (BELOW_MINIMUM_DURATION: not worth a start, and in the last minutes of the
+#       latched end for a lease the schedule started), never below 0) and rounded DOWN to the minute and published rounded DOWN to DURATION_STEP_MIN; shorter than MIN_DURATION_MIN is INVALID (BELOW_MINIMUM_DURATION: not worth a start, and in the last minutes of the
 #       window, or after it while a lease still runs, no start fits). An unreadable schedule start is INVALID (SCHEDULE_START_UNREADABLE): the window cannot be bounded.
 #   (5) STATE: HOLD while sensor.ecco_plan_export_hold reads held (a Hold battery, Skip tonight or Prepare for power cut: no numbers at all); INVALID while any blocking cause stands (the reserve,
 #       the Stop SOC, the limits, the telemetry, the request, its window, the PV surplus or the energy cannot support a proposal); UNVERIFIED when holding the configured export would need more battery power than the
@@ -120,6 +125,12 @@
 #   MIN_COMMAND_W = 500             the dongle never commands a battery ceiling below 500 W (ecco_dump_controller_min_ceiling_w); also the divisor floor
 #   EXPORT_HEADROOM                 max(100 W, 3 % of the Max Grid Export): the dongle's START refuses a target closer than this to the limit
 #   MIN_TARGET_W = 500              the dongle's Export Power range starts at 500 W
+#   POWER_STEP_W = 500              CS-06: the published battery powers (the proposal's power, the loop's power and the raw requirement) are rounded UP to a multiple of this, never above their clamp (the proven level for the
+#                                   proposal, the Power Ceiling for the loop), and the duration is worked out at the rounded-up power, so it is never longer than the exact one. A number is published again when a step is crossed,
+#                                   not at every poll of a moving house load. The safety decisions (the floor, the Stop SOC, the reserve, the limits, the clamps, UNVERIFIED, TARGET_INFEASIBLE_LOW, PV_SURPLUS_EXPORT_GUARD) are
+#                                   taken on the unrounded readings; only what is published, and the duration that follows the published power, is rounded
+#   DURATION_STEP_MIN = 5           CS-06: the published durations are rounded DOWN to a multiple of this (MIN_DURATION_MIN, 10, is one: no VALID proposal reads less); BELOW_MINIMUM_DURATION is judged on the whole minutes of
+#                                   the duration at the rounded-up power
 #   MIN_DURATION_MIN = 10           about thirteen 45 s settle periods of the dongle's loop: a shorter lease is not worth the start and the restore
 #   INFEASIBLE_LOW_DEADBAND_W = 150    the dongle loop's own deadband: a PV surplus above the target plus this is its TARGET INFEASIBLE LOW (dump_feasibility_required_w)
 #   WINDOW_END_ROUNDING_S = 20      the schedule's own rounding of the time left in its window: floor((window end - now + 20 s) / 60 s); also the 20 s of a running lease's bound, min(window end, its own end) + 20 s
@@ -158,7 +169,7 @@
 #   - The poll text is the dongle's LOCAL time with no offset and is read as local time in Home Assistant's own zone, as in the gate and in R9: if the zones differ the text is hours away and
 #     the proposal is INVALID (TELEMETRY_STALE), never VALID. The lease's end text is read the same way and refused when it lies in a skipped or a repeated hour.
 #   - The model carries a few kB of attributes and, since D-C04a route a, no time of its evaluation: with unchanged inputs it publishes nothing. It still publishes whenever a measured number it holds changes (the
-#     expected power and the duration follow the house load and the PV), so on a house with a moving load it writes a row for each such change; excluding it from the recorder is optional. The other eight sensors
+#     expected power and the duration follow the house load and the PV), so on a house with a moving load it writes a row each time a published step (POWER_STEP_W, DURATION_STEP_MIN) is crossed, which the recorder exclusion of the model and of the lookups, MANDATORY, keeps out of the database. The other eight sensors
 #     publish only when a number or a text changes. A model that cannot be read (not a dict) makes every lookup withhold everything (MODEL_UNREADABLE); the age of the model is no longer judged, because it is no longer published.
 #   - Recalled from Home Assistant core, NOT verified on a real Home Assistant (the offline model of them is in the suite): that a template entity can read its own previous state through `this`
 #     (the re-target is held at WAIT, never ALLOWED, while the memory is not RETARGET_MIN_GAP_S old), that `this` is a state object with no attributes, never none, before the entity has published and after a
@@ -172,8 +183,8 @@
 # which the Export schedule's press-time recheck reads and fails closed on: a hold or a reserve that is momentarily unknown ends a waiting run as BLOCKED and disarms the schedule for that night
 # (ecco_dump_to_grid_schedule.yaml). Then one file copy to /config/packages/ecco_export_coordinator.yaml, a configuration check, then reload the template entities (Developer tools, YAML, Template entities, or the
 # template.reload service): no restart, no helper to create, no other file. It needs ecco_plan_helpers.yaml, ecco_dump_limits.yaml, ecco_dump_to_grid_schedule.yaml, ecco_canonical_telemetry.yaml and
-# ecco_battery_runtime.yaml (without them the proposal reads INVALID and says which input is missing). It changes no existing entity. Exclude sensor.ecco_export_coordinator_model from the recorder if its rows matter (optional now: it no longer changes
-# at every render; the exclusion takes effect only after a Core restart, lab D6): recorder: exclude: entities:. Remove: delete the file and reload the template entities (the same cautions). Nothing here is meant to be exposed to a voice assistant.
+# ecco_battery_runtime.yaml (without them the proposal reads INVALID and says which input is missing). It changes no existing entity. Exclude sensor.ecco_export_coordinator_model and the lookups that follow it (sensor.ecco_export_proposal, sensor.ecco_export_proposal_power, sensor.ecco_export_proposal_duration, sensor.ecco_export_shadow_comparison) from the recorder (MANDATORY: with a moving house load
+# they publish a row at every step crossed, 61 an hour for the model in the measured worst case; the exclusion takes effect only at the next Core restart, lab D6, so until then the measured row rate applies and the owner's no-needless-restarts rule decides when): recorder: exclude: entities:. Remove: delete the file and reload the template entities (the same cautions). Nothing here is meant to be exposed to a voice assistant.
 
 template:
   - sensor:
@@ -236,10 +247,10 @@ template:
             {%- set tl_age = (now_ts - as_timestamp(tl_obj.last_changed, none)) if (tl_obj is not none and tl_obj.last_changed is defined) else none -%}
             {%- set time_ok = tls == 'on' and tl_age is not none and tl_age >= 60 -%}
             {%- set g_read = egs in ['on', 'off'] and egl is not none -%}
-            {%- set g_incons = g_read and ((egs == 'on') != ((egl | length) == 0)) -%}
-            {%- set g_open = g_read and egs == 'on' and (egl | length) == 0 -%}
             {%- set gn = namespace(c=[]) -%}
             {%- for c in (egl if egl is not none else []) if c is string -%}{%- set gn.c = gn.c + [c[:40]] -%}{%- endfor -%}
+            {%- set g_incons = g_read and ((egs == 'on' and (egl | length) > 0) or (egs == 'off' and (gn.c | length) == 0)) -%}
+            {%- set g_open = g_read and egs == 'on' and (egl | length) == 0 -%}
             {%- set gcodes = ['GATE_UNREADABLE'] if not g_read else (gn.c + (['GATE_INCONSISTENT'] if g_incons else []) + (['GATE_SETTLING'] if (g_open and not (eg_age is not none and eg_age >= 60)) else [])) -%}
             {%- set lease = states('binary_sensor.ecco_clock_dongle_dump_to_grid_active') -%}
             {%- set lease_on = lease == 'on' -%}
@@ -268,20 +279,24 @@ template:
             {%- set hi = ([pceil, prov] | min) if (pceil is not none and prov is not none) else none -%}
             {%- set raw_p = (net + load - pv) if (net is not none and load is not none and pv is not none) else none -%}
             {%- set p = ([[raw_p, 0] | max, hi] | min) if (raw_p is not none and hi is not none) else none -%}
-            {%- set p_eff = ([p, 500] | max) if p is not none else none -%}
+            {%- set p_q = ([(((p / 500) | round(0, 'ceil')) * 500), hi] | min) if p is not none else none -%}
+            {%- set p_eff = ([p_q, 500] | max) if p_q is not none else none -%}
             {%- set lp = ([[raw_p, 0] | max, pceil] | min) if (raw_p is not none and pceil is not none) else none -%}
-            {%- set lp_eff = ([lp, 500] | max) if lp is not none else none -%}
+            {%- set lp_q = (p_q if lp == p else ([(((lp / 500) | round(0, 'ceil')) * 500), pceil] | min)) if lp is not none else none -%}
+            {%- set lp_eff = ([lp_q, 500] | max) if lp_q is not none else none -%}
             {%- set dlim = (([win, wcap] | min) if wcap is not none else win) if win is not none else none -%}
             {%- set dur_raw = (energy * 1000 / p_eff * 60) if (energy is not none and p_eff is not none) else none -%}
             {%- set dur = (([dur_raw, dlim] | min) | round(0, 'floor')) if (dur_raw is not none and dlim is not none) else none -%}
             {%- set ldur_raw = (energy * 1000 / lp_eff * 60) if (energy is not none and lp_eff is not none) else none -%}
             {%- set ldur = (([ldur_raw, dlim] | min) | round(0, 'floor')) if (ldur_raw is not none and dlim is not none) else none -%}
-            {%- set raw_p_i = (raw_p | round(0)) if raw_p is not none else none -%}
-            {%- set p_i = (p | round(0, 'floor')) if p is not none else none -%}
-            {%- set lp_i = (lp | round(0, 'floor')) if lp is not none else none -%}
-            {%- set dur_raw_i = (dur_raw | round(0, 'floor')) if dur_raw is not none else none -%}
+            {%- set raw_p_i = ((((raw_p / 500) | round(0, 'ceil')) * 500) | int) if raw_p is not none else none -%}
+            {%- set p_i = (p_q | round(0, 'floor')) if p_q is not none else none -%}
+            {%- set lp_i = (lp_q | round(0, 'floor')) if lp_q is not none else none -%}
+            {%- set dur_raw_i = ((((dur_raw / 5) | round(0, 'floor')) * 5) | int) if dur_raw is not none else none -%}
+            {%- set dur_i = ((((dur / 5) | round(0, 'floor')) * 5) | int) if dur is not none else none -%}
+            {%- set ldur_i = ((((ldur / 5) | round(0, 'floor')) * 5) | int) if ldur is not none else none -%}
             {%- set surplus = (pv - load) if (pv is not none and load is not none) else none -%}
-            {%- set surplus_i = (surplus | round(0)) if surplus is not none else none -%}
+            {%- set surplus_i = ((((surplus / 500) | round(0, 'ceil')) * 500) | int) if surplus is not none else none -%}
             {%- set nstart_i = (nstart | round(0)) if nstart is not none else none -%}
             {%- set ns = namespace(c=[], b=[], n=[]) -%}
             {%- for code, hit, text in [
@@ -308,10 +323,10 @@ template:
             ('LIMITS_NOT_VALID', lim != 'VALID', 'sensor.ecco_dump_limits_state reads ' ~ (lim | string)[:40] ~ ' (it must read VALID): the dongle would refuse the start'),
             ('FLOOR_ABOVE_DONGLE_MAX', floor is not none and floor > 90, 'the floor (' ~ floor ~ ' %: the larger of the schedule Stop SOC, the effective reserve, 10 and the Stop SOC a running lease latched) leaves no room under the 90 % Stop SOC limit of the dongle'),
             ('TARGET_BELOW_MINIMUM', net is not none and net < 500, 'the net export target (' ~ net ~ ' W: the configured target kept below the Max Grid Export less the START headroom) is below the dongle minimum of 500 W'),
-            ('TARGET_INFEASIBLE_LOW', raw_p is not none and raw_p < -150, 'the measured PV (' ~ pv ~ ' W) exceeds the house load (' ~ load ~ ' W) by ' ~ surplus_i ~ ' W, more than the net export target (' ~ net ~ ' W) plus the 150 W deadband of the dongle loop: the target is already exceeded without the battery (the dongle would show TARGET INFEASIBLE LOW, and it never commands battery charging)'),
+            ('TARGET_INFEASIBLE_LOW', raw_p is not none and raw_p < -150, 'the measured PV exceeds the house load by about ' ~ surplus_i ~ ' W (rounded up to a multiple of 500 W), more than the net export target (' ~ net ~ ' W) plus the 150 W deadband of the dongle loop: the target is already exceeded without the battery (the dongle would show TARGET INFEASIBLE LOW, and it never commands battery charging)'),
             ('PV_SURPLUS_EXPORT_GUARD', surplus is not none and nstart is not none and (surplus + 500) > nstart, 'the measured PV surplus (' ~ surplus_i ~ ' W) plus the 500 W the dongle loop never goes below is above the Max Grid Export less the START headroom (' ~ nstart_i ~ ' W): the export guard of the dongle would end the lease'),
             ('NO_ENERGY_ABOVE_FLOOR', energy is not none and energy <= 0, 'the SOC (' ~ soc ~ ' %) leaves no energy above the floor (' ~ floor ~ ' %) and the 1 point margin'),
-            ('BELOW_MINIMUM_DURATION', dur is not none and energy > 0 and dur < 10, 'the proposed duration is ' ~ dur ~ ' minutes (the energy above the floor lasts ' ~ dur_raw_i ~ ' minutes at the expected power' ~ (', the window the running lease is authorised for leaves ' ~ wcap ~ ' minutes' if (lease_on and wcap is not none) else (', the authorised schedule window leaves ' ~ wcap ~ ' minutes' if wcap is not none else '')) ~ '), less than the 10 minutes worth a start')
+            ('BELOW_MINIMUM_DURATION', dur is not none and energy > 0 and dur < 10, 'the proposed duration is ' ~ dur_i ~ ' minutes (the energy above the floor lasts ' ~ dur_raw_i ~ ' minutes at the expected power' ~ (', the window the running lease is authorised for leaves ' ~ wcap ~ ' minutes' if (lease_on and wcap is not none) else (', the authorised schedule window leaves ' ~ wcap ~ ' minutes' if wcap is not none else '')) ~ '), less than the 10 minutes worth a start')
             ] if hit -%}
             {%- set ns.c = ns.c + [code] -%}
             {%- set ns.b = ns.b + [code ~ ': ' ~ text] -%}
@@ -319,7 +334,7 @@ template:
             {%- set verdict = 'HOLD' if 'OVERRIDE_ACTIVE' in ns.c else ('INVALID' if (ns.c | length) > 0 else ('UNVERIFIED' if (raw_p > prov and pceil > prov) else 'VALID')) -%}
             {%- set num = verdict in ['VALID', 'UNVERIFIED'] -%}
             {%- set pub = 'NOT ALLOWED' if (verdict == 'VALID' and (gcodes | length) > 0) else verdict -%}
-            {%- set actionable = verdict == 'VALID' and (gcodes | length) == 0 -%}
+            {%- set actionable = verdict == 'VALID' and g_open and eg_age is not none and eg_age >= 60 and (gcodes | length) == 0 -%}
             {%- for code, hit, text in [
             ('TARGET_LIMITED_BY_EXPORT_LIMIT', num and tgt > net, 'the configured target (' ~ tgt ~ ' W) is above the Max Grid Export less the START headroom, so the proposal holds ' ~ net ~ ' W'),
             ('LOW_BATTERY_POWER', num and raw_p < 500, 'holding ' ~ net ~ ' W at the meter needs only ' ~ raw_p_i ~ ' W from the battery (PV and the load nearly cover it): the dongle never commands less than 500 W, so the duration is worked out at 500 W'),
@@ -331,7 +346,7 @@ template:
             {%- set ns.n = ns.n + ['NOTE ' ~ code ~ ': ' ~ text] -%}
             {%- endfor -%}
             {%- if verdict == 'UNVERIFIED' -%}
-            {%- set ns.n = ns.n + ['UNVERIFIED ABOVE_PROVEN_LEVEL: holding ' ~ net ~ ' W at the meter needs ' ~ raw_p_i ~ ' W from the battery, above the supervised-proven level (' ~ prov ~ ' W), and the dongle Power Ceiling (' ~ pceil ~ ' W) lets its loop go further: the proposal is limited to ' ~ p_i ~ ' W for ' ~ dur ~ ' min and nobody has proven more; the dongle loop itself would run at about ' ~ lp_i ~ ' W for about ' ~ ldur ~ ' min (loop_battery_power_w, loop_duration_min: what the loop would do, not a proposal)'] -%}
+            {%- set ns.n = ns.n + ['UNVERIFIED ABOVE_PROVEN_LEVEL: holding ' ~ net ~ ' W at the meter needs ' ~ raw_p_i ~ ' W from the battery, above the supervised-proven level (' ~ prov ~ ' W), and the dongle Power Ceiling (' ~ pceil ~ ' W) lets its loop go further: the proposal is limited to ' ~ p_i ~ ' W for ' ~ dur_i ~ ' min and nobody has proven more; the dongle loop itself would run at about ' ~ lp_i ~ ' W for about ' ~ ldur_i ~ ' min (loop_battery_power_w, loop_duration_min: what the loop would do, not a proposal)'] -%}
             {%- endif -%}
             {%- set p_end = (now_ts + dur * 60) if num else none -%}
             {%- set lp_end = (now_ts + ldur * 60) if num else none -%}
@@ -340,8 +355,8 @@ template:
             {%- set cmp_ok = num and origin -%}
             {%- set d_stop = (floor - l_stop) if (cmp_ok and l_stop is not none) else none -%}
             {%- set d_exp = (net - l_exp) if (cmp_ok and l_exp is not none) else none -%}
-            {%- set d_bat = (p - l_cmd) if (cmp_ok and l_cmd is not none) else none -%}
-            {%- set d_loop = (lp - l_cmd) if (cmp_ok and l_cmd is not none) else none -%}
+            {%- set d_bat = (p_i - l_cmd) if (cmp_ok and l_cmd is not none) else none -%}
+            {%- set d_loop = (lp_i - l_cmd) if (cmp_ok and l_cmd is not none) else none -%}
             {%- set d_end = ((lp_end - l_end_ts) / 60) if (cmp_ok and lp_end is not none and l_end_ts is not none) else none -%}
             {%- set dev_stop = d_stop is not none and d_stop >= 1 -%}
             {%- set dev_exp = d_exp is not none and (d_exp | abs) >= 200 -%}
@@ -394,12 +409,12 @@ template:
                   'notes': ns.n,
                   'floor_pct': (floor | round(0)) if num else none,
                   'energy_kwh': (energy | round(3)) if num else none,
-                  'battery_power_w': (p | round(0, 'floor')) if num else none,
+                  'battery_power_w': p_i if num else none,
                   'net_export_w': (net | round(0, 'floor')) if num else none,
-                  'duration_min': (dur | round(0)) if num else none,
-                  'raw_battery_power_w': (raw_p | round(0)) if num else none,
-                  'loop_power_w': (lp | round(0, 'floor')) if num else none,
-                  'loop_duration_min': (ldur | round(0)) if num else none,
+                  'duration_min': dur_i if num else none,
+                  'raw_battery_power_w': raw_p_i if num else none,
+                  'loop_power_w': lp_i if num else none,
+                  'loop_duration_min': ldur_i if num else none,
                   'limited_by': ('PROVEN_LEVEL' if verdict == 'UNVERIFIED' else ('POWER_CEILING' if (num and raw_p > pceil) else '')),
                   'window_end_ts': (w_end | round(0)) if w_end is not none else none,
                   'lease_origin': (('SCHEDULE' if origin else 'OTHER') if lease_on else ''),
@@ -410,8 +425,8 @@ template:
                   'export_w_proposed': (net | round(0, 'floor')) if num else none,
                   'export_w_lease': l_exp,
                   'export_w_difference': d_exp,
-                  'battery_w_proposed': (p | round(0, 'floor')) if num else none,
-                  'battery_w_loop': (lp | round(0, 'floor')) if num else none,
+                  'battery_w_proposed': p_i if num else none,
+                  'battery_w_loop': lp_i if num else none,
                   'battery_w_commanded': l_cmd,
                   'battery_w_difference': d_bat,
                   'battery_w_loop_difference': d_loop,

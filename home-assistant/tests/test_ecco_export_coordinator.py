@@ -127,8 +127,9 @@ CODE_OF = {X.SOC: "SOC_UNREADABLE", X.LOAD: "HOUSE_LOAD_UNREADABLE", X.PV: "PV_U
 RANGE_OF = {X.SOC: (0, 100), X.LOAD: (0, 30000), X.PV: (0, 30000), X.GRID: (-30000, 30000), X.CAP: (1, 1000), X.STOP_S: (0, 100), X.TGT: (1, 30000),
             X.WIN: (1, 240), X.PCEIL: (500, 30000), X.PROV: (500, 30000), X.MX: (0, 30000)}
 CONSTANT_PINS = (("MAX_TELEMETRY_AGE_S = 90", "<= 90"), ("DONGLE_STOP_SOC_MIN = 10", "reserve, 10, (l_stop"), ("DONGLE_STOP_SOC_MAX = 90", "floor > 90"),
-                 ("DISCHARGE_EFFICIENCY = 0.90", "* cap * 0.90"), ("SOC_MARGIN_POINTS = 1", "soc - floor - 1"), ("MIN_COMMAND_W = 500", "[p, 500] | max"),
-                 ("MIN_COMMAND_W = 500", "[lp, 500] | max"), ("MIN_COMMAND_W = 500", "(surplus + 500) > nstart"),
+                 ("DISCHARGE_EFFICIENCY = 0.90", "* cap * 0.90"), ("SOC_MARGIN_POINTS = 1", "soc - floor - 1"), ("MIN_COMMAND_W = 500", "[p_q, 500] | max"),
+                 ("MIN_COMMAND_W = 500", "[lp_q, 500] | max"), ("POWER_STEP_W = 500", "(p / 500) | round(0, 'ceil')"), ("POWER_STEP_W = 500", "(lp / 500) | round(0, 'ceil')"),
+                 ("POWER_STEP_W = 500", "(raw_p / 500) | round(0, 'ceil')"), ("DURATION_STEP_MIN = 5", "(dur / 5) | round(0, 'floor')"), ("DURATION_STEP_MIN = 5", "(ldur / 5) | round(0, 'floor')"), ("MIN_COMMAND_W = 500", "(surplus + 500) > nstart"),
                  ("EXPORT_HEADROOM", "[100, 0.03 * mx]"), ("MIN_TARGET_W = 500", "net < 500"), ("MIN_DURATION_MIN = 10", "dur < 10"),
                  ("INFEASIBLE_LOW_DEADBAND_W = 150", "raw_p < -150"), ("WINDOW_END_ROUNDING_S = 20", "(w_end - now_ts + 20) / 60"), ("WINDOW_END_ROUNDING_S = 20", "(run_end - now_ts + 20) / 60"),
                  ("RETARGET_MIN_AGE_S = 1800", "age < 1800"), ("RETARGET_MIN_GAP_S = 1800", "(now_ts - prev_entry) < 1800"), ("RETARGET_MIN_GAP_S = 1800", "mem_age < 1800 or not time_ok)"),
@@ -149,7 +150,7 @@ HEADER_PINS = ("NOT INSTALLED, NOT LIVE-PROVEN", "READ-ONLY SHADOW", "no automat
                "BOUNDED BY THE SCHEDULE'S OWN WINDOW", "floor((window end - now + 20 s) / 60 s)", "loop_battery_power_w", "loop_duration_min", "not a proposal", "TARGET_INFEASIBLE_LOW",
                "PV_SURPLUS_EXPORT_GUARD", "SCHEDULE_START_UNREADABLE", "END NOW", "the lease guard rule", "MEMORY_YOUNG", "a skipped local time", "a repeated one",
                "Install ONLY with NO Dump to Grid or Free Power lease running", "OUTSIDE any armed scheduled Export or charge run", "window end plus 10 minutes",
-               "re-creates EVERY template entity", "Exclude sensor.ecco_export_coordinator_model from the recorder", "is NOT established", "NOT a bound at every power",
+               "re-creates EVERY template entity", "Exclude sensor.ecco_export_coordinator_model and the lookups", "MANDATORY", "THE ROW RATE", "358 rows an hour", "POWER_STEP_W", "DURATION_STEP_MIN", "is NOT established", "NOT a bound at every power",
                "An UNKNOWN re-target lists no changes", "No attribute carries a time that moves with the clock", "except as the latched value of a RUNNING lease", "LEASE_STOP_SOC_UNREADABLE",
                "FLOOR_FROM_RUNNING_LEASE", "WHILE A LEASE RUNS the same bound holds at EVERY render", "a running lease gets no time past the end of the window it runs in",
                "min(window end, the lease's own latched end) + 20 s", "editing the schedule's duration or start helper while it runs cannot move it later", "can only KEEP the end or SHORTEN it, never move it later",
@@ -192,9 +193,19 @@ def close(a, b) -> bool:
     return a == b or abs(a - b) <= 1e-9 * max(1.0, abs(b))
 
 
+MODEL_KEYS = ("state", "verdict", "actionable", "reasons", "blocked_by", "notes", "floor_pct", "energy_kwh", "battery_power_w", "net_export_w", "duration_min", "raw_battery_power_w", "loop_power_w",
+              "loop_duration_min", "limited_by", "window_end_ts", "lease_origin", "cmp_state", "stop_soc_proposed", "stop_soc_lease", "stop_soc_difference", "export_w_proposed", "export_w_lease",
+              "export_w_difference", "battery_w_proposed", "battery_w_loop", "battery_w_commanded", "battery_w_difference", "battery_w_loop_difference", "end_lease_ts", "end_difference_min",
+              "rt_state", "rt_reasons", "rt_changes", "rt_entry", "rt_wait_until_ts", "lease_age_min", "mem_since_ts")
+
+
 def compare(w: X.CoordWorld, ref: dict) -> list[str]:
     """Everything the template publishes against the reference; the list of differences."""
     bad: list[str] = []
+    if tuple(w.model()) != MODEL_KEYS:          # TEST-08 (E20): the model's key set and order are exactly these (an extra key, even a boolean, is a change of the interface)
+        bad.append(f"the model's keys differ: {sorted(set(w.model()) ^ set(MODEL_KEYS))}")
+    if any(isinstance(w.model()[k], bool) for k in w.model() if k not in ("actionable",)):
+        bad.append(f"a boolean in the model beyond `actionable`: {[k for k in w.model() if isinstance(w.model()[k], bool)]}")
     st = w.state(X.PROPOSAL)
     if st != ref["state"]:
         bad.append(f"state {st} != {ref['state']}")
@@ -206,7 +217,7 @@ def compare(w: X.CoordWorld, ref: dict) -> list[str]:
     notes = [n.split(":")[0].replace("NOTE ", "") for n in (w.attr(X.PROPOSAL, "notes") or []) if n.startswith("NOTE ")]
     if notes != ref["notes"]:
         bad.append(f"notes {notes} != {ref['notes']}")
-    exp = {X.P_FLOOR: ref["floor"], X.P_ENERGY: None if ref["energy"] is None else round(ref["energy"], 3), X.P_POWER: None if ref["power"] is None else math.floor(ref["power"]),
+    exp = {X.P_FLOOR: ref["floor"], X.P_ENERGY: None if ref["energy"] is None else round(ref["energy"], 3), X.P_POWER: ref["power"],
            X.P_NET: None if ref["net"] is None else math.floor(ref["net"]), X.P_DUR: ref["duration"]}
     for eid, e in exp.items():
         s = w.state(eid)
@@ -221,9 +232,9 @@ def compare(w: X.CoordWorld, ref: dict) -> list[str]:
             if not ok:
                 bad.append(f"{eid} reads {s} != {e}")
     m = w.model()
-    for key, e in (("floor_pct", ref["floor"]), ("battery_power_w", None if ref["power"] is None else math.floor(ref["power"])), ("duration_min", ref["duration"]),
-                   ("raw_battery_power_w", None if ref["raw_power"] is None else round(ref["raw_power"])),
-                   ("loop_power_w", None if ref["loop_power"] is None else math.floor(ref["loop_power"])), ("loop_duration_min", ref["loop_duration"]),
+    for key, e in (("floor_pct", ref["floor"]), ("battery_power_w", ref["power"]), ("duration_min", ref["duration"]),
+                   ("raw_battery_power_w", ref["raw_power"]),
+                   ("loop_power_w", ref["loop_power"]), ("loop_duration_min", ref["loop_duration_pub"]),
                    ("window_end_ts", None if ref["window_end"] is None else round(ref["window_end"]))):
         if (m.get(key) is None) != (e is None) or (e is not None and not close(float(m.get(key)), float(e))):
             bad.append(f"model {key} {m.get(key)} != {e}")
@@ -326,6 +337,13 @@ def rows() -> list[tuple]:
                 "1970-01-01 00:00:00"):
         add(f"poll text {txt!r}", poll_text=txt)
     add("poll missing", poll_age=None)
+    # CS-06: a proven level that is not a multiple of the 500 W step (the proposal is clamped to it, the loop's figure is the proposal's below it, never above the proven level)
+    for prov, pceil in (("6250.0", "8000.0"), ("6250.0", "6250.0"), ("2750.5", "8000.0"), ("2750.5", "2750.5"), ("3000.0", "8000.0")):
+        for load in (700.0, 1700.0, 2400.0, 2900.0, 3100.0, 3250.0, 3300.0, 3750.0, 5200.0):
+            add(f"proven {prov}, ceiling {pceil}, load {load:g}", {X.PROV: prov, X.PCEIL: pceil, X.LOAD: str(load)})
+    # the power at the edges of its step: PV that leaves the requirement just under, on and just over a multiple of 500 W, and below zero
+    for pv in (0.0, 299.0, 300.0, 301.0, 800.0, 1300.0, 2799.0, 2800.0, 2801.0, 3299.0, 3300.0, 3301.0, 3799.0, 3800.0, 3801.0, 3849.0, 3850.0, 3851.0, 3949.0, 3951.0, 4000.0):
+        add(f"pv {pv:g} W (the requirement {3800 - pv:g} W)", {X.PV: str(pv)})
     return out
 
 
@@ -354,6 +372,11 @@ GATE_READINGS = (
     ("closed, a cause that is no text", ("off", {"blocked_by": ["TIME_LEASES", 5, None]})),
     ("on with a cause", ("on", {"blocked_by": ["TIME_LEASES"]})),
     ("off with no cause", ("off", {"blocked_by": []})),
+    ("off, the only cause is no text", ("off", {"blocked_by": [5]})),
+    ("off, the only cause is none", ("off", {"blocked_by": [None]})),
+    ("off, causes none of which is text", ("off", {"blocked_by": [5, None, 7.5]})),
+    ("an unreadable state with causes", ("maybe", {"blocked_by": ["TIME_LEASES", "DUMP_ACTIVE"]})),
+    ("unavailable with a cause", ("unavailable", {"blocked_by": ["DUMP_ACTIVE"]})),
     ("on, the list is a text", ("on", {"blocked_by": "TIME_LEASES"})),
     ("on, the list is a mapping", ("on", {"blocked_by": {"TIME_LEASES": 1}})),
     ("on, the list is a number", ("on", {"blocked_by": 3})),
@@ -384,7 +407,7 @@ def gate_rows_problems(text: str | None = None, first_only: bool = False) -> lis
         w1 = new_world(text)
         apply_case(w1, over or {}, gate_ages=ages)
         return w1
-    healthy_numbers = ("40", "10.53", "3800", "3000", "166")
+    healthy_numbers = ("40", "10.53", "4000", "3000", "155")
     unavailable = ("unavailable",) * 5
 
     def expect(label: str, w1: X.CoordWorld, state: str, codes: list, actionable: bool, nums: "tuple | None" = healthy_numbers) -> None:
@@ -544,24 +567,24 @@ def anchors(text: str | None = None) -> list[str]:
             if got[k] != v:
                 bad.append(f"{label}: {k} {got[k]} != {v}")
         return w
-    # 39 points x 0.30 kWh x 0.90 = 10.53 kWh; 10.53 kWh / 3800 W = 166.26 min
-    expect("the healthy evening", {}, "VALID", floor="40", energy="10.53", power="3800", net="3000", duration="166")
-    expect("PV carries part of it", {X.PV: "1000.0"}, "VALID", power="2800", duration="225")
-    expect("PV nearly covers the target: a little battery power, the divisor floor 500 W, the window", {X.PV: "3700.0"}, "VALID", power="100", duration="240")
+    # 39 points x 0.30 kWh x 0.90 = 10.53 kWh; 3800 W is published as 4000 W (rounded UP to a multiple of 500 W) and 10.53 kWh / 4000 W = 157.95 min, 157 whole minutes, published as 155 (rounded DOWN to 5 minutes)
+    expect("the healthy evening", {}, "VALID", floor="40", energy="10.53", power="4000", net="3000", duration="155")
+    expect("PV carries part of it", {X.PV: "1000.0"}, "VALID", power="3000", duration="210")
+    expect("PV nearly covers the target: a little battery power (100 W, published as the 500 W step), the divisor floor 500 W, the window", {X.PV: "3700.0"}, "VALID", power="500", duration="240")
     expect("a reserve that rises sets the floor", {X.RESERVE: "62.4"}, "VALID", floor="63")
     expect("a higher Stop SOC request wins", {X.STOP_S: "50.0"}, "VALID", floor="50")
     expect("the dongle minimum is the floor", {X.STOP_S: "5.0", X.RESERVE: "3"}, "VALID", floor="10")
-    expect("the dongle's staged Stop SOC, a leftover of a manual run, is not a member of the floor", {X.STOP_D: "80.0"}, "VALID", floor="40", energy="10.53", duration="166")
+    expect("the dongle's staged Stop SOC, a leftover of a manual run, is not a member of the floor", {X.STOP_D: "80.0"}, "VALID", floor="40", energy="10.53", duration="155")
     expect("nor a leftover below it", {X.STOP_D: "10.0", X.STOP_S: "45.0"}, "VALID", floor="45")
     # the Stop SOC a RUNNING lease latched is a member (raise-only): 29 points x 0.30 x 0.90 = 7.83 kWh at 3800 W is 123 minutes
-    w = expect("a running lease latched 50 %: the floor is not below it (the schedule says 25, the reserve 40)", {X.LEASE: "on", X.L_STOP: "50.0"}, "VALID", floor="50", energy="7.83", duration="123")
+    w = expect("a running lease latched 50 %: the floor is not below it (the schedule says 25, the reserve 40)", {X.LEASE: "on", X.L_STOP: "50.0"}, "VALID", floor="50", energy="7.83", duration="115")
     if not any(n.startswith("NOTE FLOOR_FROM_RUNNING_LEASE") and "(50.0 %)" in n for n in (w.attr(X.PROPOSAL, "notes") or [])):
         bad.append(f"a floor that is the running lease's latched Stop SOC says so: {w.attr(X.PROPOSAL, 'notes')}")
     for latched in ("30.0", "40.0"):
-        w = expect(f"a running lease latched {latched} %, not above the reserve: the floor is the reserve", {X.LEASE: "on", X.L_STOP: latched}, "VALID", floor="40", duration="166")
+        w = expect(f"a running lease latched {latched} %, not above the reserve: the floor is the reserve", {X.LEASE: "on", X.L_STOP: latched}, "VALID", floor="40", duration="155")
         if any(n.startswith("NOTE FLOOR_FROM_RUNNING_LEASE") for n in (w.attr(X.PROPOSAL, "notes") or [])):
             bad.append(f"a latched Stop SOC at or below the others is not the floor: {w.attr(X.PROPOSAL, 'notes')}")
-    expect("a stale latched value of a lease that is not running is not a member", {X.LEASE: "off", X.L_STOP: "80.0"}, "VALID", floor="40", duration="166")
+    expect("a stale latched value of a lease that is not running is not a member", {X.LEASE: "off", X.L_STOP: "80.0"}, "VALID", floor="40", duration="155")
     expect("nor when the lease flag cannot be read (the re-target says so)", {X.LEASE: "unavailable", X.L_STOP: "80.0"}, "VALID", floor="40")
     for v in ("unknown", "unavailable", "-5", "abc", "101"):
         w = expect(f"a running lease whose latched Stop SOC reads {v!r}: the floor cannot be shown to respect it", {X.LEASE: "on", X.L_STOP: v}, "INVALID")
@@ -571,18 +594,18 @@ def anchors(text: str | None = None) -> list[str]:
     expect("the export limit is a ceiling for the target", {X.TGT: "3500.0"}, "VALID", net="3400")
     expect("the power ceiling clamps (the proven level equals it: not UNVERIFIED)", {X.LOAD: "3001.0", X.PCEIL: "6000.0", X.PROV: "6000.0"}, "VALID", power="6000")
     w = expect("above the proven level with a higher ceiling is UNVERIFIED and clamped to the proven level", {X.LOAD: "3001.0", X.PCEIL: "8000.0", X.PROV: "6000.0"}, "UNVERIFIED", power="6000")
-    if w.attr(X.PROPOSAL, "loop_battery_power_w") != 6001 or w.attr(X.PROPOSAL, "loop_duration_min") != 105:
-        bad.append(f"UNVERIFIED: the loop would run at 6001 W for 105 minutes: {w.attr(X.PROPOSAL, 'loop_battery_power_w')} {w.attr(X.PROPOSAL, 'loop_duration_min')}")
+    if w.attr(X.PROPOSAL, "loop_battery_power_w") != 6500 or w.attr(X.PROPOSAL, "loop_duration_min") != 95:
+        bad.append(f"UNVERIFIED: the loop would run at 6500 W (6001 rounded up) for 95 minutes: {w.attr(X.PROPOSAL, 'loop_battery_power_w')} {w.attr(X.PROPOSAL, 'loop_duration_min')}")
     expect("a ceiling below the proven level clamps and stays VALID", {X.LOAD: "3001.0", X.PCEIL: "5000.0", X.PROV: "6000.0"}, "VALID", power="5000")
     # the recorded live limits (Power Ceiling 8000 W, proven level 3000 W), the evening load 1656 W, SOC 60 %, floor 25 %: 34 points x 0.30 x 0.90 = 9.18 kWh
     live = {X.PCEIL: "8000.0", X.PROV: "3000.0", X.LOAD: "1656.0", X.SOC: "60.0", X.STOP_S: "25.0", X.RESERVE: "25"}
-    w = expect("the live-like limits: the proposal stays at the proven level, 9.18 kWh at 3000 W is 183 minutes", live, "UNVERIFIED", floor="25", energy="9.18", power="3000", duration="183")
-    if (w.attr(X.PROPOSAL, "loop_battery_power_w"), w.attr(X.PROPOSAL, "loop_duration_min"), w.attr(X.PROPOSAL, "raw_battery_power_w"), w.attr(X.PROPOSAL, "limited_by")) != (4656, 118, 4656, "PROVEN_LEVEL"):
-        bad.append(f"the live-like limits: the loop would run at 4656 W for 118 minutes, not the clamp: {w.attr(X.PROPOSAL, 'loop_battery_power_w')} {w.attr(X.PROPOSAL, 'loop_duration_min')}")
-    if not any(n.startswith("UNVERIFIED ABOVE_PROVEN_LEVEL") and "4656" in n and "118" in n and "3000" in n and "183" in n for n in (w.attr(X.PROPOSAL, "notes") or [])):
+    w = expect("the live-like limits: the proposal stays at the proven level, 9.18 kWh at 3000 W is 183 minutes, published as 180", live, "UNVERIFIED", floor="25", energy="9.18", power="3000", duration="180")
+    if (w.attr(X.PROPOSAL, "loop_battery_power_w"), w.attr(X.PROPOSAL, "loop_duration_min"), w.attr(X.PROPOSAL, "raw_battery_power_w"), w.attr(X.PROPOSAL, "limited_by")) != (5000, 110, 5000, "PROVEN_LEVEL"):
+        bad.append(f"the live-like limits: the loop would run at 5000 W (4656 rounded up) for 110 minutes, not the clamp: {w.attr(X.PROPOSAL, 'loop_battery_power_w')} {w.attr(X.PROPOSAL, 'loop_duration_min')}")
+    if not any(n.startswith("UNVERIFIED ABOVE_PROVEN_LEVEL") and "5000" in n and "110" in n and "3000" in n and "180" in n for n in (w.attr(X.PROPOSAL, "notes") or [])):
         bad.append(f"the live-like limits: the note names the clamp and the loop: {w.attr(X.PROPOSAL, 'notes')}")
-    w = expect("with the ceiling at the proven level the proposal is VALID and the loop figures equal it", {**live, X.PCEIL: "3000.0"}, "VALID", floor="25", power="3000", duration="183")
-    if (w.attr(X.PROPOSAL, "loop_battery_power_w"), w.attr(X.PROPOSAL, "loop_duration_min")) != (3000, 183):
+    w = expect("with the ceiling at the proven level the proposal is VALID and the loop figures equal it", {**live, X.PCEIL: "3000.0"}, "VALID", floor="25", power="3000", duration="180")
+    if (w.attr(X.PROPOSAL, "loop_battery_power_w"), w.attr(X.PROPOSAL, "loop_duration_min")) != (3000, 180):
         bad.append(f"ceiling = proven: the loop figures equal the proposal's: {w.attr(X.PROPOSAL, 'loop_battery_power_w')} {w.attr(X.PROPOSAL, 'loop_duration_min')}")
     expect("the schedule window bounds the duration", {X.WIN: "100.0"}, "VALID", duration="100")
     w = expect("the energy lasts exactly as long as the window (4.5 kWh at 3000 W is 90.0 minutes): the window is not what limits it", {X.SOC: "51.0", X.CAP: "50.0", X.LOAD: "0.0", X.WIN: "90.0"}, "VALID",
@@ -597,7 +620,7 @@ def anchors(text: str | None = None) -> list[str]:
     expect("a reserve above the dongle's Stop SOC range", {X.RESERVE: "91"}, "INVALID", floor="unavailable")
     expect("the unconfigured export limit", {X.MX: "0.0"}, "INVALID", net="unavailable")
     # a PV surplus the target cannot hold (Max Grid Export 3600 W: START ceiling 3492 W; target 3000 W: net 3000 W)
-    expect("a PV surplus of 2992 W plus the 500 W of the loop is exactly the export ceiling: allowed", {X.PV: "3792.0"}, "VALID", power="8", duration="240")
+    expect("a PV surplus of 2992 W plus the 500 W of the loop is exactly the export ceiling: allowed", {X.PV: "3792.0"}, "VALID", power="500", duration="240")
     w = expect("a PV surplus of 2993 W plus 500 W is above the export ceiling: the export guard would end the lease", {X.PV: "3793.0"}, "INVALID", power="unavailable")
     if w.attr(X.PROPOSAL, "blocked_by") != ["PV_SURPLUS_EXPORT_GUARD"]:
         bad.append(f"the export guard cause: {w.attr(X.PROPOSAL, 'blocked_by')}")
@@ -607,30 +630,30 @@ def anchors(text: str | None = None) -> list[str]:
     if w.attr(X.PROPOSAL, "blocked_by") != ["TARGET_INFEASIBLE_LOW"]:
         bad.append(f"the infeasible low cause: {w.attr(X.PROPOSAL, 'blocked_by')}")
     # the window: 100 minutes into a 240 minute window (the schedule allows 140 minutes more: 17:00 + 140 = 19:20 = the window end)
-    w = expect("inside the window the duration is the time left (140 minutes, not the 166 the energy lasts)", {X.SCH_START: started_ago(100 * 60)}, "VALID", duration="140")
+    w = expect("inside the window the duration is the time left (140 minutes, not the 155 the energy lasts)", {X.SCH_START: started_ago(100 * 60)}, "VALID", duration="140")
     if w.attr(X.PROPOSAL, "window_end_ts") != round(T0 + 140 * 60) or not any(n.startswith("NOTE DURATION_LIMITED_BY_WINDOW") for n in (w.attr(X.PROPOSAL, "notes") or [])):
         bad.append(f"inside the window: the window end and the note: {w.attr(X.PROPOSAL, 'window_end_ts')} {w.attr(X.PROPOSAL, 'notes')}")
     expect("the schedule's own +20 s: 140 minutes and 19 s left is 140 minutes, 140 minutes and 40 s is 141 (never later than the window end plus 20 s)", {X.SCH_START: started_ago(14400 - 8419)}, "VALID", duration="140")
-    expect("one second more", {X.SCH_START: started_ago(14400 - 8440)}, "VALID", duration="141")
-    w = expect("12 minutes left: a start that fits", {X.SCH_START: started_ago(14400 - 720)}, "VALID", duration="12")
+    expect("one second more", {X.SCH_START: started_ago(14400 - 8440)}, "VALID", duration="140")
+    w = expect("12 minutes left: a start that fits", {X.SCH_START: started_ago(14400 - 720)}, "VALID", duration="10")
     w = expect("5 minutes left: no start fits (below the 10 minutes worth a start)", {X.SCH_START: started_ago(14400 - 300)}, "INVALID")
     if w.attr(X.PROPOSAL, "blocked_by") != ["BELOW_MINIMUM_DURATION"] or not any("window leaves 5 minutes" in r for r in (w.attr(X.PROPOSAL, "reasons") or [])):
         bad.append(f"5 minutes left: the cause names the window: {w.attr(X.PROPOSAL, 'blocked_by')} {w.attr(X.PROPOSAL, 'reasons')}")
-    expect("before the window a start at its own time may run the whole energy", {X.SCH_START: started_ago(-600)}, "VALID", duration="166")
-    expect("after the window the next one will", {X.SCH_START: started_ago(14401)}, "VALID", duration="166")
+    expect("before the window a start at its own time may run the whole energy", {X.SCH_START: started_ago(-600)}, "VALID", duration="155")
+    expect("after the window the next one will", {X.SCH_START: started_ago(14401)}, "VALID", duration="155")
     # a lease that RUNS: the same bound at every render, and after the window end it gets no time (the next window is for the next start, not for a run still going)
-    expect("a lease running before its window opens: the whole length, as for a start at the window's own time", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(-600)}, "VALID", duration="166")
+    expect("a lease running before its window opens: the whole length, as for a start at the window's own time", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(-600)}, "VALID", duration="155")
     expect("a lease running inside the window: the time left (140 minutes), as for a start", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(100 * 60)}, "VALID", duration="140")
     for after, label in ((14400, "at the window end"), (14419, "19 s after the window end (the schedule's own 20 s still count 0 minutes)"), (14421, "21 s after the window end"), (14401, "1 s after the window end"),
                          (14400 + 3600, "an hour after the window end"), (14400 + 86400, "a day after the window end")):
-        w = expect(f"a lease still running {label}: it gets no time (not the next window's 166 minutes): INVALID", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(after)}, "INVALID",
+        w = expect(f"a lease still running {label}: it gets no time (not the next window's 155 minutes): INVALID", {X.LEASE: "on", X.L_STOP: "30.0", X.SCH_START: started_ago(after)}, "INVALID",
                    floor="unavailable", energy="unavailable", power="unavailable", net="unavailable", duration="unavailable")
         if w.attr(X.PROPOSAL, "blocked_by") != ["BELOW_MINIMUM_DURATION"] or not any("the proposed duration is 0 minutes" in r and "the window the running lease is authorised for leaves 0 minutes" in r
                                                                                      for r in (w.attr(X.PROPOSAL, "reasons") or [])):
             bad.append(f"a lease still running {label}: the cause names the window it runs in and 0 minutes: {w.attr(X.PROPOSAL, 'blocked_by')} {w.attr(X.PROPOSAL, 'reasons')}")
-    expect("a lease that does not run (the flag off) after the window end: the next window's proposal", {X.LEASE: "off", X.SCH_START: started_ago(14401)}, "VALID", duration="166")
+    expect("a lease that does not run (the flag off) after the window end: the next window's proposal", {X.LEASE: "off", X.SCH_START: started_ago(14401)}, "VALID", duration="155")
     expect("a lease flag that cannot be read after the window end is not a running lease: the next window's proposal (the re-target says it cannot tell)", {X.LEASE: "unavailable", X.SCH_START: started_ago(14401)}, "VALID",
-           duration="166")
+           duration="155")
     w = expect("an unreadable window start", {X.SCH_START: "unknown"}, "INVALID")
     if w.attr(X.PROPOSAL, "blocked_by") != ["SCHEDULE_START_UNREADABLE"]:
         bad.append(f"the unreadable window start: {w.attr(X.PROPOSAL, 'blocked_by')}")
@@ -788,13 +811,14 @@ def property_problems(w: X.CoordWorld, over: dict, capm: "tuple | None" = None, 
         if capm is not None and capm[1] == "measured" and X.num(capm[0], 1, 1000) is not None:
             cap = min(cap, Fraction(str(capm[0])))
         load, pv = Fraction(raw[X.LOAD].strip()), Fraction(raw[X.PV].strip())
-        p_exact = max(min(max(Fraction(net) + load - pv, 0), Fraction(min(val(X.PCEIL), val(X.PROV)))), 500)
+        raw_exact = max(Fraction(net) + load - pv, 0)
+        p_exact = max(min(Fraction(math.ceil(raw_exact / 500) * 500), Fraction(min(val(X.PCEIL), val(X.PROV)))), 500)      # CS-06: the power is rounded UP to 500 W (never above the clamp)
         e_exact = max(Fraction(raw[X.SOC].strip()) - Fraction(floor) - 1, 0) / 100 * cap * Fraction(90, 100)
         d_exact = min(e_exact * 1000 / p_exact * 60, Fraction(val(X.WIN)))
         if ws is not None and ws <= w.now_ts() < ws + val(X.WIN) * 60:
             d_exact = min(d_exact, Fraction(math.floor((ws + val(X.WIN) * 60 - w.now_ts() + 20) / 60)))
-        if dur > d_exact + Fraction(1, 10 ** 9) or dur < d_exact - 1 - Fraction(1, 10 ** 9):
-            bad.append(f"the duration {dur} is not the exact {float(d_exact):.9f} minutes rounded down")
+        if dur > d_exact + Fraction(1, 10 ** 9) or dur < d_exact - 1 - 4 - Fraction(1, 10 ** 9) or dur % 5 != 0:
+            bad.append(f"the duration {dur} is not the exact {float(d_exact):.9f} minutes rounded down to a multiple of 5")
     else:
         if any(v != "unavailable" for v in nums.values()):
             bad.append(f"{st} but a numeric sensor reads {nums}")
@@ -1089,9 +1113,9 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
     ca = lease_state(w8)["cmp_attrs"]
     # the window end is 11695 s ahead (240 minutes less 45 minutes less the 5 s the window began before the lease); the energy lasts 123 minutes: 123 - 194.9 = -71.9
     expect("the comparison shows both sides and the signed differences", ca.get("stop_soc_proposed") == 50 and ca.get("stop_soc_lease") == 49.0 and ca.get("stop_soc_difference") == 1.0
-           and ca.get("export_w_proposed") == 3000 and ca.get("export_w_lease") == 2800.0 and ca.get("export_w_difference") == 200.0 and ca.get("battery_w_proposed") == 3800
-           and ca.get("battery_w_loop") == 3800 and ca.get("battery_w_commanded") == 3500.0 and ca.get("battery_w_difference") == 300.0 and ca.get("battery_w_loop_difference") == 300.0
-           and ca.get("end_difference_min") == -72 and ca.get("end_lease_ts") == w8.now_ts() + 11695, str(ca))
+           and ca.get("export_w_proposed") == 3000 and ca.get("export_w_lease") == 2800.0 and ca.get("export_w_difference") == 200.0 and ca.get("battery_w_proposed") == 4000
+           and ca.get("battery_w_loop") == 4000 and ca.get("battery_w_commanded") == 3500.0 and ca.get("battery_w_difference") == 500.0 and ca.get("battery_w_loop_difference") == 500.0
+           and ca.get("end_difference_min") == -78 and ca.get("end_lease_ts") == w8.now_ts() + 11695, str(ca))
     # the comparison and the re-target of an UNVERIFIED proposal: the live-like limits. The re-target is UNKNOWN with no change listed (it was a list that said END + 127 minutes); the comparison shows the
     # loop: 4656 W expected against the 4600 W commanded, and the END difference is the loop's (118 minutes: 77 minutes short of the lease's end at the window end), not the clamp's (183 minutes: 12 short).
     # The lease latched an export target 300 W below the proposal's, which is what makes the comparison DIFFER
@@ -1101,9 +1125,9 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
     s9 = lease_state(w9)
     ca = s9["cmp_attrs"]
     expect("an UNVERIFIED proposal: the re-target is UNKNOWN with no change listed", s9["rt"] == "UNKNOWN" and s9["proposal"] == "UNVERIFIED" and reasons_have(s9, "PROPOSAL_NOT_VALID") and s9["changes"] == [], f"{s9['rt']} {s9['changes']}")
-    expect("an UNVERIFIED proposal: the comparison shows how the live loop compares (the loop's power and END, and the clamp)", s9["cmp"] == "DIFFERS" and ca.get("battery_w_proposed") == 3000 and ca.get("battery_w_loop") == 4656
-           and ca.get("battery_w_commanded") == 4600.0 and ca.get("battery_w_difference") == -1600.0 and ca.get("battery_w_loop_difference") == 56.0 and ca.get("export_w_difference") == 300.0
-           and ca.get("end_difference_min") == -77, str(ca))
+    expect("an UNVERIFIED proposal: the comparison shows how the live loop compares (the loop's power and END, and the clamp)", s9["cmp"] == "DIFFERS" and ca.get("battery_w_proposed") == 3000 and ca.get("battery_w_loop") == 5000
+           and ca.get("battery_w_commanded") == 4600.0 and ca.get("battery_w_difference") == -1600.0 and ca.get("battery_w_loop_difference") == 400.0 and ca.get("export_w_difference") == 300.0
+           and ca.get("end_difference_min") == -85, str(ca))
     # ---- F1: the schedule's own window bounds the proposal and the re-target ---------------------------------------------------------------------------------------
     p1 = {X.STOP_S: "25.0", X.RESERVE: "25", X.SOC: "93.0"}               # plenty of energy: 67 points x 0.30 x 0.90 = 18.09 kWh = 285 minutes at 3800 W
     for label, win, age, want_dur in (("a full-window lease 35 minutes in", 240, 35, 205), ("the same lease 90 minutes in", 240, 90, 150), ("a 120 minute window, 31 minutes in", 120, 31, 89),
@@ -1116,7 +1140,7 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
         win_end = w.attr(X.PROPOSAL, "window_end_ts")
         dur = w.attr(X.PROPOSAL, "loop_duration_min")
         expect(f"{label}: IN LINE, never a later END; the duration is the time left in the window", s["rt"] == "NO CHANGE" and s["cmp"] == "IN LINE" and s["changes"] == [] and s["origin"] == "SCHEDULE"
-               and w.state(X.P_DUR) == str(want_dur) and dur == want_dur and w.now_ts() + want_dur * 60 <= win_end + 20 and not w.errors,
+               and w.state(X.P_DUR) == str(want_dur // 5 * 5) and dur == want_dur // 5 * 5 and w.now_ts() + want_dur * 60 <= win_end + 20 and not w.errors,
                f"{s['rt']} {s['cmp']} {s['changes']} {w.state(X.P_DUR)} {dur} {s['origin']}")
         w.advance(1800)                                              # half an hour later it is still in line, still never ALLOWED to a later END
         w.set_memory_age(7200)
@@ -1128,7 +1152,7 @@ def lease_problems(text: str | None = None, first_only: bool = False) -> list[st
     w.sched_lease_on(stop=25, export=3000, command=3800, age_min=5, start_gap_s=85 * 60)
     s = lease_state(w)
     expect("a late start (85 minutes into the window, 5 minutes ago): the lease ends at the window end, IN LINE, no END beyond it", s["rt"] == "NO CHANGE" and s["cmp"] == "IN LINE" and s["origin"] == "SCHEDULE"
-           and s["changes"] == [] and w.state(X.P_DUR) == str(math.floor((240 * 60 - 90 * 60 - 5 + 20) / 60 + 0)), f"{s['rt']} {s['cmp']} {s['origin']} {w.state(X.P_DUR)}")
+           and s["changes"] == [] and w.state(X.P_DUR) == str(math.floor((240 * 60 - 90 * 60 - 5 + 20) / 60 + 0) // 5 * 5), f"{s['rt']} {s['cmp']} {s['origin']} {w.state(X.P_DUR)}")
     # a lease the schedule did not start: a 60 minute manual lease 31 minutes in (the schedule helpers say 240 minutes: the lease is not judged against them)
     w = lease_world(text, over=p1)
     w.lease_on(stop=25, export=3000, command=3800, ends_in_min=29, age_min=31)
@@ -1331,7 +1355,7 @@ def tail_problems(text: str | None = None, first_only: bool = False) -> list[str
                     expect(f"{lbl}: the lease still runs and gets no time", s["proposal"] == "INVALID" and w.attr(X.PROPOSAL, "blocked_by") == ["BELOW_MINIMUM_DURATION"] and s["rt"] == "UNKNOWN"
                            and s["changes"] == [] and s["origin"] == "SCHEDULE" and s["cmp"] == "UNKNOWN", f"{s['proposal']} {w.attr(X.PROPOSAL, 'blocked_by')} {s['rt']} {s['changes']} {s['origin']} {s['cmp']}")
                 else:
-                    expect(f"{lbl}: the lease is over, the next window's proposal is back", s["rt"] == "NOT RUNNING" and s["proposal"] == "VALID" and w.state(X.P_DUR) == str(min(285, win_min)),
+                    expect(f"{lbl}: the lease is over, the next window's proposal is back", s["rt"] == "NOT RUNNING" and s["proposal"] == "VALID" and w.state(X.P_DUR) == str(min(271, win_min) // 5 * 5),
                            f"{s['rt']} {s['proposal']} {w.state(X.P_DUR)}")
             if bad and first_only:
                 return bad
@@ -1360,7 +1384,7 @@ def tail_problems(text: str | None = None, first_only: bool = False) -> list[str
                    and "the proposed duration is 0 minutes" in reasons, reasons[:200])
         if w.state(X.LEASE) == "on" and rel < -660:
             expect(f"{lbl}: inside the window the end is the window's: the duration is the time left (the lease's later end counts for nothing)", s["proposal"] == "VALID"
-                   and w.state(X.P_DUR) == str(math.floor((w_end - w.now_ts() + 20) / 60)) and s["rt"] == "NO CHANGE", f"{s['proposal']} {w.state(X.P_DUR)} {s['rt']}")
+                   and w.state(X.P_DUR) == str(math.floor((w_end - w.now_ts() + 20) / 60) // 5 * 5) and s["rt"] == "NO CHANGE", f"{s['proposal']} {w.state(X.P_DUR)} {s['rt']}")
         w.advance(10)
     expect("a lease ending 100 s after the window end: valid inside the window, INVALID to its end, then the next window's proposal", ("VALID", "NO CHANGE") in seen and ("INVALID", "UNKNOWN") in seen and ("VALID", "NOT RUNNING") in seen, str(sorted(seen)))
     if bad and first_only:
@@ -1370,8 +1394,8 @@ def tail_problems(text: str | None = None, first_only: bool = False) -> list[str
     edits = (("the duration raised to 240", lambda w, ws: w.bulk({X.WIN: "240.0"}), "SCHEDULE", "VALID", "20"),
              ("the duration raised to 61", lambda w, ws: w.bulk({X.WIN: "61.0"}), "SCHEDULE", "VALID", "20"),
              ("the duration lowered to 45 (the window now ends 295 s from now: the lease no longer fits it)", lambda w, ws: w.bulk({X.WIN: "45.0"}), "OTHER", "INVALID", "unavailable"),
-             ("the start moved 1 minute earlier (the window ends a minute before the lease: the smaller bound)", lambda w, ws: w.schedule_window(ws - 60), "SCHEDULE", "VALID", "19"),
-             ("the start moved 3 minutes earlier (the lease no longer fits the window)", lambda w, ws: w.schedule_window(ws - 180), "OTHER", "VALID", "17"),
+             ("the start moved 1 minute earlier (the window ends a minute before the lease: the smaller bound)", lambda w, ws: w.schedule_window(ws - 60), "SCHEDULE", "VALID", "15"),
+             ("the start moved 3 minutes earlier (the lease no longer fits the window)", lambda w, ws: w.schedule_window(ws - 180), "OTHER", "VALID", "15"),
              ("the start moved half an hour earlier (the window is over, the lease runs on)", lambda w, ws: w.schedule_window(ws - 1800), "OTHER", "INVALID", "unavailable"),
              ("the start moved 1 minute later", lambda w, ws: w.schedule_window(ws + 60), "SCHEDULE", "VALID", "20"),
              ("the start moved half an hour later (the lease began before this window)", lambda w, ws: w.schedule_window(ws + 1800), "OTHER", "VALID", "50"),
@@ -1732,6 +1756,38 @@ def churn_problems(text: str | None = None) -> list[str]:
     for e in X.OWN:
         if e != X.MODEL and (snap[e][0] != new[e][0] or not keys(snap[e][1], new[e][1]) <= allowed):
             bad.append(f"a lease: {e} published again with {sorted(keys(snap[e][1], new[e][1]) - allowed)}")
+    # CS-06: a PV surplus the target cannot hold is INVALID with a reason that names the surplus rounded UP to a step: a PV that wanders inside the step publishes nothing again
+    w = lease_world(text, over={X.PV: "4000.0"})
+    w.advance(30)
+    snap, r0, model0 = w.snapshot(), rows(w), dict(w.model())
+    if snap[X.PROPOSAL][0] != "INVALID" or "TARGET_INFEASIBLE_LOW" not in w.attr(X.PROPOSAL, "blocked_by"):
+        bad.append(f"a PV surplus the target cannot hold is not INVALID: {snap[X.PROPOSAL][0]} {w.attr(X.PROPOSAL, 'blocked_by')}")
+    for pv in (4010.0, 4050.0, 4100.0, 4200.0, 4000.0):
+        w.bulk({X.PV: str(pv)})                                     # the surplus is 3200 to 3400 W: one step (3500 W)
+    if rows(w) != r0 or w.snapshot() != snap or w.model() != model0:
+        bad.append(f"a PV that wanders inside a 500 W step of the surplus publishes again: {[e for e in X.OWN if rows(w).get(e) != r0.get(e)]} {sorted(keys(model0, w.model()))}")
+    w.bulk({X.PV: "4400.0"})                                       # 3600 W: the next step
+    if rows(w) == r0 or "3500" in " ".join(w.attr(X.PROPOSAL, "reasons") or []):
+        bad.append("a PV that leaves its step does not publish a new reason")
+    # CS-06: the row rate under a moving house load (10 s polls, one simulated hour, a load that wanders up to 150 W a poll): the model, the proposal and the lookups write a row when a 500 W or 5 minute step is
+    # crossed: the measured worst case is 61 rows an hour (353 before the steps), a calm house 7 (40 before); the bound here is generous so that the check is about the order of magnitude
+    for profile, bound in (("moving", 120), ("calm", 25)):
+        wr = new_world(text)
+        wr.start_feed(10.0)
+        wr.advance(30)
+        rng = random.Random(20261127)
+        load = 800.0
+        wr.bulk({X.LOAD: f"{load:.1f}"})
+        r_before = rows(wr)
+        for _i in range(360):
+            wr.advance(10)
+            if profile == "moving" or rng.random() < 0.10:
+                load = min(max(load + rng.uniform(-150, 150), 200.0), 2800.0)
+            wr.bulk({X.LOAD: f"{load:.1f}", X.GRID: f"{load:.1f}"})
+        r_after = rows(wr)
+        worst = max((r_after.get(e, 0) - r_before.get(e, 0)) for e in X.OWN)
+        if worst > bound:
+            bad.append(f"{profile} house load: {worst} rows an hour for one entity (bound {bound}): {[(e.split('.')[1], r_after.get(e, 0) - r_before.get(e, 0)) for e in X.OWN]}")
     if w.errors:
         bad.append(f"template errors {w.errors[:2]}")
     return bad
@@ -2324,12 +2380,11 @@ MUTANTS = [
     ("the load is subtracted", "(net + load - pv)", "(net - load - pv)"),
     ("the PV is added", "(net + load - pv)", "(net + load + pv)"),
     ("the PV is ignored", "(net + load - pv)", "(net + load)"),
-    ("the power has no lower clamp", "[[raw_p, 0] | max, hi] | min", "[raw_p, hi] | min"),
     ("the power has no upper clamp", "[[raw_p, 0] | max, hi] | min", "[raw_p, 0] | max"),
     ("the power ignores the proven level", "([pceil, prov] | min)", "pceil"),
     ("the power ignores the ceiling", "([pceil, prov] | min)", "prov"),
-    ("the divisor floor is dropped", "([p, 500] | max)", "p"),
-    ("the divisor floor is 100 W", "([p, 500] | max)", "([p, 100] | max)"),
+    ("the divisor floor is dropped", "([p_q, 500] | max)", "p_q"),
+    ("the divisor floor is 100 W", "([p_q, 500] | max)", "([p_q, 100] | max)"),
     ("the duration is rounded to the nearest", "([dur_raw, dlim] | min) | round(0, 'floor')", "([dur_raw, dlim] | min) | round(0)"),
     ("the duration ignores the schedule window and the time left in it", "([dur_raw, dlim] | min)", "dur_raw"),
     ("the minimum duration is 5", "dur is not none and energy > 0 and dur < 10", "dur is not none and energy > 0 and dur < 5"),
@@ -2426,14 +2481,13 @@ MUTANTS = [
     ("the script's last run is read from another attribute", "state_attr('script.ecco_dump_to_grid_start_scheduled', 'last_triggered')", "state_attr('script.ecco_dump_to_grid_start_scheduled', 'current')"),
     # F2: the loop figures, the changes of an UNKNOWN re-target
     ("the loop power is clamped to the proven level", "[[raw_p, 0] | max, pceil] | min", "[[raw_p, 0] | max, hi] | min"),
-    ("the loop power has no ceiling", "[[raw_p, 0] | max, pceil] | min", "[raw_p, 0] | max"),
     ("the loop duration is worked out at the clamped power", "(energy * 1000 / lp_eff * 60)", "(energy * 1000 / p_eff * 60)"),
     ("the loop duration is not bounded by the window", "(([ldur_raw, dlim] | min) | round(0, 'floor'))", "(ldur_raw | round(0, 'floor'))"),
-    ("the loop power has no divisor floor", "([lp, 500] | max)", "lp"),
-    ("the loop figures are published for any state", "'loop_power_w': (lp | round(0, 'floor')) if num else none,", "'loop_power_w': (lp | round(0, 'floor')) if lp is not none else none,"),
+    ("the loop power has no divisor floor", "([lp_q, 500] | max)", "lp_q"),
+    ("the loop figures are published for any state", "'loop_power_w': lp_i if num else none,", "'loop_power_w': lp_i if lp is not none else none,"),
     ("the loop power lookup reads the clamped power", "{{ m.get('loop_power_w') if ok else none }}", "{{ m.get('battery_power_w') if ok else none }}"),
     ("the END difference is the clamp's, not the loop's", "((lp_end - l_end_ts) / 60)", "((p_end - l_end_ts) / 60)"),
-    ("the loop difference is the clamp's", "{%- set d_loop = (lp - l_cmd)", "{%- set d_loop = (p - l_cmd)"),
+    ("the loop difference is the clamp's", "{%- set d_loop = (lp_i - l_cmd)", "{%- set d_loop = (p_i - l_cmd)"),
     ("an UNKNOWN re-target lists its changes", "{%- if rt in ['WAIT', 'ALLOWED', 'END NOW'] -%}", "{%- if true -%}"),
     ("a WAIT re-target lists no changes", "{%- if rt in ['WAIT', 'ALLOWED', 'END NOW'] -%}", "{%- if rt in ['ALLOWED', 'END NOW'] -%}"),
     ("END NOW lists no changes", "{%- if rt in ['WAIT', 'ALLOWED', 'END NOW'] -%}", "{%- if rt in ['WAIT', 'ALLOWED'] -%}"),
@@ -2512,9 +2566,9 @@ MUTANTS = [
      "{%- set pub = 'NOT ALLOWED' if (verdict in ['VALID', 'UNVERIFIED'] and (gcodes | length) > 0) else verdict -%}"),
     ("NOT ALLOWED replaces any proposal", "{%- set pub = 'NOT ALLOWED' if (verdict == 'VALID' and (gcodes | length) > 0) else verdict -%}", "{%- set pub = 'NOT ALLOWED' if (gcodes | length) > 0 else verdict -%}"),
     ("the published state is the proposal's own verdict", "'state': pub,", "'state': verdict,"),
-    ("actionable ignores the gate", "{%- set actionable = verdict == 'VALID' and (gcodes | length) == 0 -%}", "{%- set actionable = verdict == 'VALID' -%}"),
-    ("actionable is true for an UNVERIFIED proposal", "{%- set actionable = verdict == 'VALID' and (gcodes | length) == 0 -%}", "{%- set actionable = verdict in ['VALID', 'UNVERIFIED'] and (gcodes | length) == 0 -%}"),
-    ("actionable is true while the gate settles", "{%- set actionable = verdict == 'VALID' and (gcodes | length) == 0 -%}", "{%- set actionable = verdict == 'VALID' and g_read and not g_incons and egs == 'on' -%}"),
+    ("actionable ignores the gate", "{%- set actionable = verdict == 'VALID' and g_open and eg_age is not none and eg_age >= 60 and (gcodes | length) == 0 -%}", "{%- set actionable = verdict == 'VALID' -%}"),
+    ("actionable is true for an UNVERIFIED proposal", "{%- set actionable = verdict == 'VALID' and g_open and eg_age is not none and eg_age >= 60 and (gcodes | length) == 0 -%}", "{%- set actionable = verdict in ['VALID', 'UNVERIFIED'] and g_open and eg_age is not none and eg_age >= 60 and (gcodes | length) == 0 -%}"),
+    ("actionable is true while the gate settles", "{%- set actionable = verdict == 'VALID' and g_open and eg_age is not none and eg_age >= 60 and (gcodes | length) == 0 -%}", "{%- set actionable = verdict == 'VALID' and g_read and not g_incons and egs == 'on' -%}"),
     ("actionable is never true", "'actionable': actionable,", "'actionable': false,"),
     ("the gate's codes are not published", "'blocked_by': gcodes if pub == 'NOT ALLOWED' else ns.c,", "'blocked_by': ns.c,"),
     ("the gate's codes replace the proposal's own causes", "'blocked_by': gcodes if pub == 'NOT ALLOWED' else ns.c,", "'blocked_by': gcodes if (gcodes | length) > 0 else ns.c,"),
@@ -2529,8 +2583,22 @@ MUTANTS = [
      "as_timestamp(eg_obj.last_updated, none)) if (eg_obj is not none and eg_obj.last_updated is defined)"),
     ("an unreadable gate is not named", "['GATE_UNREADABLE'] if not g_read else", "[] if not g_read else"),
     ("an inconsistent gate is not named", "(['GATE_INCONSISTENT'] if g_incons else [])", "[]"),
-    ("a gate on with a cause is not inconsistent", "{%- set g_incons = g_read and ((egs == 'on') != ((egl | length) == 0)) -%}", "{%- set g_incons = g_read and (egs == 'off' and (egl | length) == 0) -%}"),
-    ("a gate off with no cause is not inconsistent", "{%- set g_incons = g_read and ((egs == 'on') != ((egl | length) == 0)) -%}", "{%- set g_incons = g_read and (egs == 'on' and (egl | length) > 0) -%}"),
+    ("a gate on with a cause is not inconsistent", "{%- set g_incons = g_read and ((egs == 'on' and (egl | length) > 0) or (egs == 'off' and (gn.c | length) == 0)) -%}", "{%- set g_incons = g_read and (egs == 'off' and (gn.c | length) == 0) -%}"),
+    ("a gate off with no cause is not inconsistent", "{%- set g_incons = g_read and ((egs == 'on' and (egl | length) > 0) or (egs == 'off' and (gn.c | length) == 0)) -%}", "{%- set g_incons = g_read and (egs == 'on' and (egl | length) > 0) -%}"),
+    ("CS-04: a gate off whose causes are none of them text is not inconsistent", "{%- set g_incons = g_read and ((egs == 'on' and (egl | length) > 0) or (egs == 'off' and (gn.c | length) == 0)) -%}", "{%- set g_incons = g_read and ((egs == 'on' and (egl | length) > 0) or (egs == 'off' and (egl | length) == 0)) -%}"),
+    ("TEST-08 (E18): an unreadable gate also lists the codes of its list", "['GATE_UNREADABLE'] if not g_read else", "((['GATE_UNREADABLE'] + gn.c) if not g_read else"),
+    ("TEST-08 (E20): the model carries an extra boolean", "'actionable': actionable,", "'actionable': actionable, 'gate_open': g_open,"),
+    ("CS-06: the published power is not rounded up", "{%- set p_i = (p_q | round(0, 'floor')) if p_q is not none else none -%}", "{%- set p_i = (p | round(0, 'floor')) if p is not none else none -%}"),
+    ("CS-06: the power is rounded to the nearest step, not up", "{%- set p_q = ([(((p / 500) | round(0, 'ceil')) * 500), hi] | min)", "{%- set p_q = ([(((p / 500) | round(0, 'common')) * 500), hi] | min)"),
+    ("CS-06: the rounded power may pass the proven level", "{%- set p_q = ([(((p / 500) | round(0, 'ceil')) * 500), hi] | min)", "{%- set p_q = ([(((p / 500) | round(0, 'ceil')) * 500), 1e9] | min)"),
+    ("CS-06: the loop power may pass the Power Ceiling", "([(((lp / 500) | round(0, 'ceil')) * 500), pceil] | min)", "([(((lp / 500) | round(0, 'ceil')) * 500), 1e9] | min)"),
+    ("CS-06: the loop power is not the proposal power below the proven level", "(p_q if lp == p else", "(p_q if false else"),
+    ("CS-06: the duration is worked out at the unrounded power", "{%- set p_eff = ([p_q, 500] | max) if p_q is not none else none -%}", "{%- set p_eff = ([p, 500] | max) if p is not none else none -%}"),
+    ("CS-06: the duration is rounded to the nearest 5 minutes", "{%- set dur_i = ((((dur / 5) | round(0, 'floor')) * 5) | int)", "{%- set dur_i = ((((dur / 5) | round(0, 'common')) * 5) | int)"),
+    ("CS-06: the duration is rounded up to 5 minutes", "{%- set dur_i = ((((dur / 5) | round(0, 'floor')) * 5) | int)", "{%- set dur_i = ((((dur / 5) | round(0, 'ceil')) * 5) | int)"),
+    ("CS-06: the loop duration is rounded up to 5 minutes", "{%- set ldur_i = ((((ldur / 5) | round(0, 'floor')) * 5) | int)", "{%- set ldur_i = ((((ldur / 5) | round(0, 'ceil')) * 5) | int)"),
+    ("CS-06: the raw requirement is rounded down", "{%- set raw_p_i = ((((raw_p / 500) | round(0, 'ceil')) * 500) | int)", "{%- set raw_p_i = ((((raw_p / 500) | round(0, 'floor')) * 500) | int)"),
+    ("CS-06: the PV surplus text carries the live surplus", "{%- set surplus_i = ((((surplus / 500) | round(0, 'ceil')) * 500) | int)", "{%- set surplus_i = (surplus | round(0))"),
     ("an open gate needs no empty list", "{%- set g_open = g_read and egs == 'on' and (egl | length) == 0 -%}", "{%- set g_open = g_read and egs == 'on' -%}"),
     ("an unknown gate state is read", "{%- set g_read = egs in ['on', 'off'] and egl is not none -%}", "{%- set g_read = egs in ['on', 'off', 'unknown'] and egl is not none -%}"),
     ("a gate whose list cannot be read is read", "{%- set g_read = egs in ['on', 'off'] and egl is not none -%}", "{%- set g_read = egs in ['on', 'off'] -%}"),
@@ -2599,7 +2667,7 @@ def main() -> int:
     check("the header pins are live: a header that loses a rule, a constant or the soft-gate statement is refused",
           bool(static_problems(TEXT.replace("READ-ONLY SHADOW", "READ-ONLY NOTE", 1))) and bool(static_problems(TEXT.replace("ONLY THE CONTROL STATE READ MODEL", "ANYTHING MAY READ", 1)))
           and bool(static_problems(TEXT.replace("THE START GATE AND THE TIME TRUST INPUT ARE READ HERE, ONLY AS FAR AS THE PINS ALLOW", "THE GATE IS READ", 1)))
-          and bool(static_problems(TEXT.replace("GATE_SETTLE_S = 60", "GATE_SETTLE_S = 30"))) and bool(static_problems(TEXT.replace("eg_age >= 60", "eg_age >= 30", 1)))
+          and bool(static_problems(TEXT.replace("GATE_SETTLE_S = 60", "GATE_SETTLE_S = 30"))) and bool(static_problems(TEXT.replace("eg_age >= 60", "eg_age >= 30")))
           and bool(static_problems(TEXT.replace("DISCHARGE_EFFICIENCY = 0.90", "DISCHARGE_EFFICIENCY = 0.95", 1))) and bool(static_problems(TEXT.replace("* cap * 0.90", "* cap * 0.93", 1)))
           and bool(static_problems(TEXT.replace("Install ONLY with NO Dump to Grid or Free Power lease running", "Install any time", 1)))
           and bool(static_problems(TEXT.replace("is NOT read", "is read", 1))))
@@ -2646,8 +2714,8 @@ def main() -> int:
     open_ = (w.state(X.PROPOSAL), w.state(X.P_DUR))
     w.advance(6 * 60)
     late = (w.state(X.PROPOSAL), w.attr(X.PROPOSAL, "blocked_by"), w.state(X.P_DUR))
-    check("the window closes with the clock alone: 15 minutes left it proposes at most 14 minutes (the schedule's own count), 6 minutes later no start fits and the proposal is INVALID",
-          open_ == ("VALID", "14") and late[0] == "INVALID" and late[1] == ["BELOW_MINIMUM_DURATION"], f"{open_} {late}")
+    check("the window closes with the clock alone: 15 minutes left it proposes at most 14 minutes (the schedule's own count; published as 10, rounded down to 5), 6 minutes later no start fits and the proposal is INVALID",
+          open_ == ("VALID", "10") and late[0] == "INVALID" and late[1] == ["BELOW_MINIMUM_DURATION"], f"{open_} {late}")
     gr = gate_rows_problems()
     check(f"[1b] the Export start gate: {len(GATE_READINGS)} readings (open, closed by one, three or a very long cause, a cause that is no text, on with a cause, off with none, a list that is a text, a mapping, a number, "
           f"missing or none, unavailable, unknown, empty, neither on nor off, the entity missing) x {len(GATE_AGE_PAIRS)} ages (0, 1, 59, 59.9, 60, 61 and 600 s; the consumer's age too) x {len(GATE_PROPOSALS)} proposals "
@@ -2659,7 +2727,7 @@ def main() -> int:
           "flaps starts the 60 s afresh; 10 s and 50 s after a restart (every entity young) it is settling and 80 s after it is VALID; the leases consumer turned off while a change is allowed is WAIT with TIME_NOT_TRUSTED "
           "only (no time to wait for, the would-change stamp kept), turned on again it adds RECENT_CHANGE until 30 minutes after the first would-change, and 60 s of trust leave only that gap", grt == [], str(grt[:3]))
     am = anchors()
-    check("hand-computed anchors: the healthy evening is floor 40 %, 10.53 kWh (0.90), 3800 W, net 3000 W, 166 min; PV, the reserve rounding up, the Stop SOC requests, the dongle minimum, the dongle's "
+    check("hand-computed anchors: the healthy evening is floor 40 %, 10.53 kWh (0.90), 4000 W (3800 rounded up to 500), net 3000 W, 155 min (157 rounded down to 5); PV, the reserve rounding up, the Stop SOC requests, the dongle minimum, the dongle's "
           "staged Stop SOC left at 80 (not a member), the export limit as a ceiling, the clamps, UNVERIFIED with the loop figures, the live-like limits (3000 W for 183 minutes against the loop's 4656 W "
           "for 118), the window and the time left in it at the schedule's own rounding, a PV surplus the target cannot hold, no energy, a hold, the 10 minute minimum on both sides", am == [], str(am[:3]))
 
@@ -2695,7 +2763,7 @@ def main() -> int:
     check("an implausible PV reading is INVALID, never a huge credit that justifies an export", wm.state(X.PROPOSAL) == "INVALID" and "PV_UNREADABLE" in wm.attr(X.PROPOSAL, "blocked_by"))
     apply_case(wm, {X.PV: "3700.0"})
     check("PV that nearly covers the target gives a small power, a duration worked out at the dongle's 500 W floor (no division by zero), and says so in a note",
-          wm.state(X.P_POWER) == "100" and wm.state(X.PROPOSAL) == "VALID" and any(n.startswith("NOTE LOW_BATTERY_POWER") for n in wm.attr(X.PROPOSAL, "notes")), str(wm.attr(X.PROPOSAL, "notes")))
+          wm.state(X.P_POWER) == "500" and wm.state(X.PROPOSAL) == "VALID" and any(n.startswith("NOTE LOW_BATTERY_POWER") for n in wm.attr(X.PROPOSAL, "notes")), str(wm.attr(X.PROPOSAL, "notes")))
     apply_case(wm, {X.PV: "5000.0"})
     check("PV that exceeds the whole target (and the load) is no proposal: the dongle would show TARGET INFEASIBLE LOW and its export guard would end the lease; it was VALID with a power of 0",
           wm.state(X.PROPOSAL) == "INVALID" and "TARGET_INFEASIBLE_LOW" in wm.attr(X.PROPOSAL, "blocked_by") and "PV_SURPLUS_EXPORT_GUARD" in wm.attr(X.PROPOSAL, "blocked_by")
@@ -2703,15 +2771,15 @@ def main() -> int:
     apply_case(wm, {X.LOAD: "3001.0", X.PCEIL: "8000.0", X.PROV: "6000.0"})
     check("above the proven level the power is clamped to it and the state is UNVERIFIED, with the reason; the numbers are still published (clamped), the raw requirement is shown, and the loop's own figures "
           "(its power at the ceiling and the duration at it) are published separately",
-          wm.state(X.PROPOSAL) == "UNVERIFIED" and wm.state(X.P_POWER) == "6000" and wm.attr(X.PROPOSAL, "raw_battery_power_w") == 6001 and wm.attr(X.PROPOSAL, "limited_by") == "PROVEN_LEVEL"
-          and wm.attr(X.PROPOSAL, "loop_battery_power_w") == 6001 and any(n.startswith("UNVERIFIED ABOVE_PROVEN_LEVEL") for n in wm.attr(X.PROPOSAL, "notes")), f"{wm.state(X.PROPOSAL)} {wm.state(X.P_POWER)} {wm.attr(X.PROPOSAL, 'notes')}")
+          wm.state(X.PROPOSAL) == "UNVERIFIED" and wm.state(X.P_POWER) == "6000" and wm.attr(X.PROPOSAL, "raw_battery_power_w") == 6500 and wm.attr(X.PROPOSAL, "limited_by") == "PROVEN_LEVEL"
+          and wm.attr(X.PROPOSAL, "loop_battery_power_w") == 6500 and any(n.startswith("UNVERIFIED ABOVE_PROVEN_LEVEL") for n in wm.attr(X.PROPOSAL, "notes")), f"{wm.state(X.PROPOSAL)} {wm.state(X.P_POWER)} {wm.attr(X.PROPOSAL, 'notes')}")
     sink = []
     for soc in range(41, 101):
         apply_case(wm, {X.SOC: str(float(soc))})
         if wm.state(X.PROPOSAL) == "VALID":
-            ex = max(soc - 40 - 1, 0) / 100 * 30.0 * 0.90 * 1000 / 3800 * 60
-            sink.append(float(wm.state(X.P_DUR)) == min(int(ex), 240))
-    check("the duration is the exact minutes rounded DOWN, bounded by the schedule window, over every SOC from 41 to 100", sink and all(sink), f"{len(sink)} cases")
+            ex = max(soc - 40 - 1, 0) / 100 * 30.0 * 0.90 * 1000 / 4000 * 60
+            sink.append(float(wm.state(X.P_DUR)) == min(int(ex), 240) // 5 * 5)
+    check("the duration is the exact minutes (at the power rounded up to 500 W) rounded DOWN to 5 minutes, bounded by the schedule window, over every SOC from 41 to 100", sink and all(sink), f"{len(sink)} cases")
     apply_case(wm, {X.MX: "3600.0", X.TGT: "9000.0"})
     check("an export limit is a ceiling for the target, never the target: a target above the limit less the START headroom is held at 3400 W and says so; the limit itself is never proposed",
           wm.state(X.P_NET) == "3400" and any(n.startswith("NOTE TARGET_LIMITED_BY_EXPORT_LIMIT") for n in wm.attr(X.PROPOSAL, "notes")))
