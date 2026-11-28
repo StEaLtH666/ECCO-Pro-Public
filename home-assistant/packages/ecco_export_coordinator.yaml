@@ -192,9 +192,9 @@
 # template.reload service): no restart, no helper to create, no other file. It needs ecco_plan_helpers.yaml, ecco_dump_limits.yaml, ecco_dump_to_grid_schedule.yaml, ecco_canonical_telemetry.yaml and
 # ecco_battery_runtime.yaml (without them the proposal reads INVALID and says which input is missing). It changes no existing entity. Exclude sensor.ecco_export_coordinator_model and the lookups that follow it (sensor.ecco_export_proposal, sensor.ecco_export_proposal_power, sensor.ecco_export_proposal_duration, sensor.ecco_export_retarget, sensor.ecco_export_shadow_comparison) from the recorder (MANDATORY: they publish a row at
 # every step crossed; the rounding lowers the typical rate (see THE ROW RATE: 177 to 186 an hour for each of the five at a step boundary without a lease, about 448 to 458 for the model with one) but is NOT a worst-case bound, which is about one row per update
-# of an input (360 an hour per entity at 10 s polls, and several updates per poll multiply that; measured worst so far 526 to 545 an hour for the model with a lease); the exclusion takes effect only at the next Core restart, lab D6, so until then
+# of an input (360 an hour per entity at 10 s polls, and several updates per poll multiply that; measured so far up to 886 an hour for the model with a lease (526 to 545 with one render per poll or a step-boundary house)); the exclusion takes effect only at the next Core restart, lab D6, so until then
 # these rates apply and the owner's no-needless-restarts rule decides when): recorder: exclude: entities:. BATCH 2: no arithmetic abort figure comes from this file, because no bound does: the typical figures above are what to expect, and an hour above the
-# worst measured so far (526 to 545 for the model with a lease) is a reason to stop and look, not a defect by itself (one row per update of an input is possible). Remove: delete the file and reload the template entities (the same cautions).
+# worst measured so far (886 for the model with a lease) is a reason to stop and look, not a defect by itself (one row per update of an input is possible). Remove: delete the file and reload the template entities (the same cautions).
 # Nothing here is meant to be exposed to a voice assistant.
 
 template:

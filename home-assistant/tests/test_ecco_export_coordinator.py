@@ -2745,11 +2745,13 @@ MUTANTS = [
 
 
 # AK-02 and AM-01: the figures of the row rate: the rounding lowers the TYPICAL rate and is NOT a worst-case bound; the worst case is about one row per UPDATE of an input (360 an hour each at 10 s polls, several updates per poll
-# multiply it) and the measured worst so far is 526 to 545 an hour for the model with a lease; no arithmetic abort figure is given (a lease worst case of about 500 and the figures 500 and 2500 were exceeded by the review's own probes);
-# no sentence may call 61 rows an hour (or 358 before and 61 after) a worst case, 125 an abort figure, 486 or 500 a lease bound, or 2500 or 5 x 500 an abort figure
-STALE_RATE = re.compile(r"\b61 (?:rows|an hour|after)|\b125\b|measured worst case|worst case (?:is|of) 61|abort figure (?:is |of )?125|\b2500\b|5 x 500|\b486\b|about 500 (?:an hour|each)|up to about 500|measured worst, ", re.I)
-RATE_PINS = ("NOT a worst-case bound", "about one row per update", "360", "177 to 186", "448 to 458", "526 to 545")
-ABORT_PINS = ("no arithmetic abort figure",)
+# multiply it) and the figure measured so far is up to 886 an hour for the model with a lease (526 to 545 with one render per poll or a step-boundary house); no arithmetic abort figure is given (a lease worst case of about 500 and the
+# figures 500 and 2500 were exceeded by the review's own probes); no sentence may call 61 rows an hour (or 358 before and 61 after) a worst case, 125 an abort figure, 486 or 500 a lease bound, or 2500 or 5 x 500 an abort figure;
+# R-01: the stop-and-look level of batch 2 is the worst measured so far, 886 for the model with a lease, and no sentence may call 526 to 545 the worst measured so far (the old wording; the package header and the README rounding paragraph report the 886)
+STALE_RATE = re.compile(r"\b61 (?:rows|an hour|after)|\b125\b|measured worst case|worst case (?:is|of) 61|abort figure (?:is |of )?125|\b2500\b|5 x 500|\b486\b|about 500 (?:an hour|each)|up to about 500|measured worst, "
+                        r"|worst so far,? 526|worst measured so far \(526", re.I)
+RATE_PINS = ("NOT a worst-case bound", "about one row per update", "360", "177 to 186", "448 to 458", "526 to 545", "up to 886 an hour for the model with a lease")
+ABORT_PINS = ("no arithmetic abort figure", "worst measured so far (886 for the model with a lease)")
 
 
 def rate_doc_problems(pkg: str, readme_sec: str, changelog_bullet: str, stanza: str) -> list[str]:
@@ -3066,11 +3068,18 @@ def main() -> int:
               rate_doc_problems(TEXT + "# the batch 2 abort figure 5 x 500 = 2500 an hour\n", rsec, cl_line, stz), rate_doc_problems(TEXT, rsec + " and up to about 500 each while a lease runs", cl_line, stz),
               rate_doc_problems(TEXT, rsec, cl_line + " (the measured worst, 486, rounded up)", stz), rate_doc_problems(TEXT, rsec + " 358 rows an hour before, 61 after", cl_line, stz),
               rate_doc_problems(TEXT, rsec, cl_line, stz.replace("526 to 545", "500")), rate_doc_problems(TEXT, rsec.replace("177 to 186", "190"), cl_line, stz),
-              rate_doc_problems(TEXT.replace("448 to 458", "417 to 442"), rsec, cl_line, stz), rate_doc_problems(TEXT, rsec, cl_line, stz + " (2500 for the five)")]
+              rate_doc_problems(TEXT.replace("448 to 458", "417 to 442"), rsec, cl_line, stz), rate_doc_problems(TEXT, rsec, cl_line, stz + " (2500 for the five)"),
+              # R-01: 526 to 545 is not the worst measured so far (886 is): the old wording must not come back, and the 886 must stay in every document and in the stop-and-look sentence
+              rate_doc_problems(TEXT, rsec, cl_line + " (measured worst so far 526 to 545 an hour for the model with a lease)", stz),
+              rate_doc_problems(TEXT + "# an hour above the worst measured so far (526 to 545 for the model with a lease)\n", rsec, cl_line, stz),
+              rate_doc_problems(TEXT, rsec.replace("worst measured so far (886 for the model with a lease)", "worst measured so far (526 to 545 for the model with a lease)"), cl_line, stz),
+              rate_doc_problems(TEXT, rsec, cl_line, stz.replace("up to 886", "up to 500")), rate_doc_problems(TEXT, rsec, cl_line.replace("up to 886", "up to 500"), stz),
+              rate_doc_problems(TEXT.replace("worst measured so far (886 for the model with a lease)", "worst measured so far (500 for the model with a lease)"), rsec, cl_line, stz)]
     check("AK-02 and AM-01: the row rate is stated the same, and truly, in the package header and INSTALL text, the README section, the CHANGELOG bullet and the manifest stanza: the rounding lowers the typical rate "
           "(177 to 186 an hour for each of the five at a step boundary without a lease, about 448 to 458 for the model with one) and is NOT a worst-case bound, the worst case is about one row per update of an input "
-          "(360 an hour per entity at 10 s polls, several updates per poll multiply that; measured worst so far 526 to 545 for the model with a lease), the package and the README say that no arithmetic abort figure is given, "
-          "and no sentence calls 61 rows an hour (or 358 before and 61 after) a worst case, 125 an abort figure, 486 or about 500 a lease bound, or 2500 an abort figure; the scan is live (sixteen injected faults are each caught)",
+          "(360 an hour per entity at 10 s polls, several updates per poll multiply that; measured so far up to 886 an hour for the model with a lease, 526 to 545 with one render per poll or a step-boundary house), the package and the README say that no arithmetic abort figure is given "
+          "and that an hour above the worst measured so far (886 for the model with a lease) is a reason to stop and look, "
+          "and no sentence calls 61 rows an hour (or 358 before and 61 after) a worst case, 125 an abort figure, 486 or about 500 a lease bound, or 2500 an abort figure, or 526 to 545 the worst measured so far; the scan is live (twenty-two injected faults are each caught)",
           rd == [] and all(m for m in rd_mut), str(rd[:3]) + ("" if all(m for m in rd_mut) else " a mutant of the statement went unseen"))
     check("the packages README has an Export coordinator section that names the nine sensors, says it is a read-only shadow, nothing installed, that the gate is soft, which two entities of the start gate and "
           "the time trust packages it reads and why (the pinned lists widened deliberately, D-PIN), NOT ALLOWED and its codes, `actionable`, the leases consumer's 60 s, how it relates to the Intelligence advice, "
